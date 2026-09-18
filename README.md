@@ -98,19 +98,3 @@ flutter build apk --release
 ├── settings.gradle.kts # Android 项目设置
 └── pubspec.yaml        # Flutter 项目配置
 ```
-
----
-
-## 支持
-
-如果 Privi 对你有所帮助，欢迎支持开发：
-
-**[Buy Me a Coffee](https://buymeacoffee.com/kcng0)**
-
-## 社区
-
-- **[Linux do](https://linux.do)**
-
-## 许可证
-
-[MIT](./LICENSE) — Copyright (c) 2026 [kcng0](https://github.com/kcng0)
