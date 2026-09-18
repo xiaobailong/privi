@@ -25,6 +25,9 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+REM ---- 确保根路径 build 目录存在 ----
+if not exist "build" mkdir "build"
+
 if /i "%~1"=="codegen" goto :codegen
 if /i "%~1"=="clean"   goto :clean
 if /i "%~1"=="fast"    goto :fast

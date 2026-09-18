@@ -200,7 +200,28 @@ privi-1.0.25+31.apk
 | 5 | 编译：`flutter build apk --release` |
 | 6 | 将 APK 复制到项目根目录 |
 
-构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-release.apk`。
+构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-<版本号>.apk`（如 `privi-1.0.25+31.apk`）。
+
+#### 清理构建产物（clean.bat）
+
+项目根目录提供了 `clean.bat` 一键清理脚本，彻底清除所有构建输出、缓存和临时文件：
+
+```bash
+# 清理所有构建产物
+clean.bat
+```
+
+清理流程：
+
+| 步骤 | 操作 |
+|------|------|
+| 1 | Flutter clean |
+| 2 | 删除 `.dart_tool` 目录 |
+| 3 | 删除 `build` 目录 |
+| 4 | 删除 `.gradle` 缓存 |
+| 5 | 删除根路径下的 `privi-*.apk` / `*.aab` 文件 |
+
+首次配置：打开 `clean.bat`，确保顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径与 `build.bat` 一致。
 
 #### Release 签名
 
