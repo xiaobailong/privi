@@ -190,24 +190,13 @@ class _PrivateHeartAppState extends ConsumerState<PrivateHeartApp> {
       }
     });
 
-    final localeCode = ref.watch(settingsControllerProvider).localeCode;
-    final localeOverride = localeFromCode(localeCode);
-
     return MaterialApp(
       navigatorKey: _navKey,
-      onGenerateTitle: (ctx) => AppLocalizations.of(ctx).appName,
+      onGenerateTitle: (ctx) => AppLocalizations.current.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.dark,
-      locale: localeOverride,
-      localeResolutionCallback: (device, supported) {
-        // Manual override wins; otherwise map device language.
-        if (localeOverride != null) return localeOverride;
-        return resolveAppLocale(device);
-      },
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
       builder: (context, child) => _RootGate(
         child: child ?? const SizedBox.shrink(),
       ),

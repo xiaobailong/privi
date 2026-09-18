@@ -6,17 +6,11 @@ class AppBuildInfo {
   AppBuildInfo({
     required String version,
     required String buildNumber,
-    this.patchNumber,
   })  : version = _requireValue(version, 'version'),
-        buildNumber = _requireValue(buildNumber, 'buildNumber') {
-    if (patchNumber != null && patchNumber! < 1) {
-      throw ArgumentError.value(patchNumber, 'patchNumber', 'must be positive');
-    }
-  }
+        buildNumber = _requireValue(buildNumber, 'buildNumber');
 
   final String version;
   final String buildNumber;
-  final int? patchNumber;
 
   String get versionAndBuild => '$version ($buildNumber)';
 

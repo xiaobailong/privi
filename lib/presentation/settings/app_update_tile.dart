@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers.dart';
-import '../../application/update/app_restart_service.dart';
 import '../../application/update/app_update_service.dart';
 import '../../core/l10n.dart';
 
@@ -43,12 +42,8 @@ class _AppUpdateTileState extends ConsumerState<AppUpdateTile> {
       switch (result.status) {
         case AppUpdateStatus.upToDate:
           _showMessage(context.l10n.upToDate);
-        case AppUpdateStatus.hotUpdateAvailable:
-          await _confirmAndDownload(service);
         case AppUpdateStatus.appReleaseAvailable:
           await _confirmAndOpenRelease(result);
-        case AppUpdateStatus.restartRequired:
-          await _restartApp();
         case AppUpdateStatus.unavailable:
           _showMessage(context.l10n.updatesUnavailable);
       }
@@ -87,58 +82,6 @@ class _AppUpdateTileState extends ConsumerState<AppUpdateTile> {
     } catch (error, stackTrace) {
       debugPrint('open release url failed: $error\n$stackTrace');
       if (mounted) _showMessage(context.l10n.couldNotOpenBrowser);
-    }
-  }
-
-  Future<void> _confirmAndDownload(AppUpdateService service) async {
-    final restart = ref.read(appRestartServiceProvider);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(context.l10n.updateAvailableTitle),
-        content: Text(
-          restart.automaticRestartSupported
-              ? context.l10n.updateDownloadPrompt
-              : context.l10n.updateDownloadRelaunchPrompt,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text(context.l10n.later),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(context.l10n.updateAction),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    try {
-      await service.downloadUpdate();
-    } catch (error, stackTrace) {
-      debugPrint('update download failed: $error\n$stackTrace');
-      if (mounted) _showMessage(context.l10n.updateDownloadFailed);
-      return;
-    }
-
-    await _restartApp();
-  }
-
-  Future<void> _restartApp() async {
-    final restart = ref.read(appRestartServiceProvider);
-    if (!restart.automaticRestartSupported) {
-      _showMessage(context.l10n.updateRelaunchRequired);
-      return;
-    }
-    try {
-      await restart.restart();
-    } on RestartRequiredException {
-      if (mounted) _showMessage(context.l10n.updateRelaunchRequired);
-    } catch (error, stackTrace) {
-      debugPrint('app restart failed: $error\n$stackTrace');
-      if (mounted) _showMessage(context.l10n.updateRestartFailed);
     }
   }
 

@@ -1,2369 +1,864 @@
-import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:intl/intl.dart' as intl;
 
-import 'app_localizations_en.dart';
-import 'app_localizations_zh.dart';
 
-// ignore_for_file: type=lint
+/// Chinese strings for Privi.
+class AppLocalizations {
+  const AppLocalizations._();
 
-/// Callers can lookup localized strings with an instance of AppLocalizations
-/// returned by `AppLocalizations.of(context)`.
-///
-/// Applications need to include `AppLocalizations.delegate()` in their app's
-/// `localizationDelegates` list, and the locales they support in the app's
-/// `supportedLocales` list. For example:
-///
-/// ```dart
-/// import 'l10n/app_localizations.dart';
-///
-/// return MaterialApp(
-///   localizationsDelegates: AppLocalizations.localizationsDelegates,
-///   supportedLocales: AppLocalizations.supportedLocales,
-///   home: MyApplicationHome(),
-/// );
-/// ```
-///
-/// ## Update pubspec.yaml
-///
-/// Please make sure to update your pubspec.yaml to include the following
-/// packages:
-///
-/// ```yaml
-/// dependencies:
-///   # Internationalization support.
-///   flutter_localizations:
-///     sdk: flutter
-///   intl: any # Use the pinned version from flutter_localizations
-///
-///   # Rest of dependencies
-/// ```
-///
-/// ## iOS Applications
-///
-/// iOS applications define key application metadata, including supported
-/// locales, in an Info.plist file that is built into the application bundle.
-/// To configure the locales supported by your app, you’ll need to edit this
-/// file.
-///
-/// First, open your project’s ios/Runner.xcworkspace Xcode workspace file.
-/// Then, in the Project Navigator, open the Info.plist file under the Runner
-/// project’s Runner folder.
-///
-/// Next, select the Information Property List item, select Add Item from the
-/// Editor menu, then select Localizations from the pop-up menu.
-///
-/// Select and expand the newly-created Localizations item then, for each
-/// locale your application supports, add a new item and select the locale
-/// you wish to add from the pop-up menu in the Value field. This list should
-/// be consistent with the languages listed in the AppLocalizations.supportedLocales
-/// property.
-abstract class AppLocalizations {
-  AppLocalizations(String locale)
-      : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+  static const AppLocalizations current = AppLocalizations._();
 
-  final String localeName;
+  String get appName => 'Privi';
 
-  static AppLocalizations of(BuildContext context) {
-    return Localizations.of<AppLocalizations>(context, AppLocalizations)!;
+  String get visible => '可见';
+
+  String get invisible => '私密';
+
+  String get settings => '设置';
+
+  String get more => '更多';
+
+  String get cancel => '取消';
+
+  String get save => '保存';
+
+  String get create => '创建';
+
+  String get continueAction => '继续';
+
+  String get enable => '启用';
+
+  String get notNow => '暂不';
+
+  String get close => '关闭';
+
+  String get retry => '重试';
+
+  String get done => '完成';
+
+  String get next => '下一步';
+
+  String get clear => '清除';
+
+  String get select => '选择';
+
+  String get selectAll => '全选';
+
+  String get search => '搜索';
+
+  String get searchNameHint => '搜索名称…';
+
+  String get closeSearch => '关闭搜索';
+
+  String get sort => '排序';
+
+  String get multiSort => '多重排序';
+
+  String get style => '样式';
+
+  String get layoutStyle => '布局样式';
+
+  String columnsCount(int count) {
+    return '$count 列';
   }
 
-  static const LocalizationsDelegate<AppLocalizations> delegate =
-      _AppLocalizationsDelegate();
+  String get multiSelectItems => '多选项目';
 
-  /// A list of this localizations delegate along with the default localizations
-  /// delegates.
-  ///
-  /// Returns a list of localizations delegates containing this delegate along with
-  /// GlobalMaterialLocalizations.delegate, GlobalCupertinoLocalizations.delegate,
-  /// and GlobalWidgetsLocalizations.delegate.
-  ///
-  /// Additional delegates can be added by appending to this list in
-  /// MaterialApp. This list does not have to be used at all if a custom list
-  /// of delegates is preferred or required.
-  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
-      <LocalizationsDelegate<dynamic>>[
-    delegate,
-    GlobalMaterialLocalizations.delegate,
-    GlobalCupertinoLocalizations.delegate,
-    GlobalWidgetsLocalizations.delegate,
-  ];
+  String get photosOnly => '仅照片';
 
-  /// A list of this localizations delegate's supported locales.
-  static const List<Locale> supportedLocales = <Locale>[
-    Locale('en'),
-    Locale('zh'),
-    Locale('zh', 'CN'),
-    Locale('zh', 'HK')
-  ];
+  String get videosOnly => '仅视频';
 
-  /// No description provided for @appName.
-  ///
-  /// In en, this message translates to:
-  /// **'Privi'**
-  String get appName;
+  String get photosOnlyTapVideos => '仅照片 · 点按切换视频';
 
-  /// No description provided for @visible.
-  ///
-  /// In en, this message translates to:
-  /// **'Visible'**
-  String get visible;
+  String get videosOnlyTapPhotos => '仅视频 · 点按切换照片';
 
-  /// No description provided for @invisible.
-  ///
-  /// In en, this message translates to:
-  /// **'Invisible'**
-  String get invisible;
+  String get newAlbum => '新建相册';
 
-  /// No description provided for @settings.
-  ///
-  /// In en, this message translates to:
-  /// **'Settings'**
-  String get settings;
+  String get newVaultAlbum => '新建私密相册';
 
-  /// No description provided for @more.
-  ///
-  /// In en, this message translates to:
-  /// **'More'**
-  String get more;
+  String get albumNameHint => '相册名称';
 
-  /// No description provided for @cancel.
-  ///
-  /// In en, this message translates to:
-  /// **'Cancel'**
-  String get cancel;
+  String get rename => '重命名';
 
-  /// No description provided for @save.
-  ///
-  /// In en, this message translates to:
-  /// **'Save'**
-  String get save;
+  String get renameAlbum => '重命名相册';
 
-  /// No description provided for @create.
-  ///
-  /// In en, this message translates to:
-  /// **'Create'**
-  String get create;
+  String get deleteAlbum => '删除相册';
 
-  /// No description provided for @continueAction.
-  ///
-  /// In en, this message translates to:
-  /// **'Continue'**
-  String get continueAction;
+  String get deleteAlbumSubtitle => '媒体仍保留在“全部媒体”中';
 
-  /// No description provided for @enable.
-  ///
-  /// In en, this message translates to:
-  /// **'Enable'**
-  String get enable;
+  String get shuffle => '随机播放';
 
-  /// No description provided for @notNow.
-  ///
-  /// In en, this message translates to:
-  /// **'Not now'**
-  String get notNow;
+  String get restore => '还原';
 
-  /// No description provided for @close.
-  ///
-  /// In en, this message translates to:
-  /// **'Close'**
-  String get close;
+  String get restoreAlbumTitle => '还原相册？';
 
-  /// No description provided for @retry.
-  ///
-  /// In en, this message translates to:
-  /// **'Retry'**
-  String get retry;
-
-  /// No description provided for @done.
-  ///
-  /// In en, this message translates to:
-  /// **'Done'**
-  String get done;
-
-  /// No description provided for @next.
-  ///
-  /// In en, this message translates to:
-  /// **'Next'**
-  String get next;
-
-  /// No description provided for @clear.
-  ///
-  /// In en, this message translates to:
-  /// **'Clear'**
-  String get clear;
-
-  /// No description provided for @select.
-  ///
-  /// In en, this message translates to:
-  /// **'Select'**
-  String get select;
-
-  /// No description provided for @selectAll.
-  ///
-  /// In en, this message translates to:
-  /// **'Select all'**
-  String get selectAll;
-
-  /// No description provided for @search.
-  ///
-  /// In en, this message translates to:
-  /// **'Search'**
-  String get search;
-
-  /// No description provided for @searchNameHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Search name…'**
-  String get searchNameHint;
-
-  /// No description provided for @closeSearch.
-  ///
-  /// In en, this message translates to:
-  /// **'Close search'**
-  String get closeSearch;
-
-  /// No description provided for @sort.
-  ///
-  /// In en, this message translates to:
-  /// **'Sort'**
-  String get sort;
-
-  /// No description provided for @multiSort.
-  ///
-  /// In en, this message translates to:
-  /// **'Multi-sort'**
-  String get multiSort;
-
-  /// No description provided for @style.
-  ///
-  /// In en, this message translates to:
-  /// **'Style'**
-  String get style;
-
-  /// No description provided for @layoutStyle.
-  ///
-  /// In en, this message translates to:
-  /// **'Layout style'**
-  String get layoutStyle;
-
-  /// No description provided for @columnsCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} columns'**
-  String columnsCount(int count);
-
-  /// No description provided for @multiSelectItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Multi-select items'**
-  String get multiSelectItems;
-
-  /// No description provided for @photosOnly.
-  ///
-  /// In en, this message translates to:
-  /// **'Photos only'**
-  String get photosOnly;
-
-  /// No description provided for @videosOnly.
-  ///
-  /// In en, this message translates to:
-  /// **'Videos only'**
-  String get videosOnly;
-
-  /// No description provided for @photosOnlyTapVideos.
-  ///
-  /// In en, this message translates to:
-  /// **'Photos only · tap for videos'**
-  String get photosOnlyTapVideos;
-
-  /// No description provided for @videosOnlyTapPhotos.
-  ///
-  /// In en, this message translates to:
-  /// **'Videos only · tap for photos'**
-  String get videosOnlyTapPhotos;
-
-  /// No description provided for @newAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'New album'**
-  String get newAlbum;
-
-  /// No description provided for @newVaultAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'New vault album'**
-  String get newVaultAlbum;
-
-  /// No description provided for @albumNameHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Album name'**
-  String get albumNameHint;
-
-  /// No description provided for @rename.
-  ///
-  /// In en, this message translates to:
-  /// **'Rename'**
-  String get rename;
-
-  /// No description provided for @renameAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Rename album'**
-  String get renameAlbum;
-
-  /// No description provided for @deleteAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Delete album'**
-  String get deleteAlbum;
-
-  /// No description provided for @deleteAlbumSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Media stays in All Media'**
-  String get deleteAlbumSubtitle;
-
-  /// No description provided for @shuffle.
-  ///
-  /// In en, this message translates to:
-  /// **'Shuffle'**
-  String get shuffle;
-
-  /// No description provided for @restore.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore'**
-  String get restore;
-
-  /// No description provided for @restoreAlbumTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore album?'**
-  String get restoreAlbumTitle;
-
-  /// No description provided for @restoreAlbumBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhide {count} item(s) from “{name}” back to the system gallery.'**
-  String restoreAlbumBody(int count, String name);
-
-  /// No description provided for @unhideAllInAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhide all items in this album'**
-  String get unhideAllInAlbum;
-
-  /// No description provided for @pinToTop.
-  ///
-  /// In en, this message translates to:
-  /// **'Pin to top'**
-  String get pinToTop;
-
-  /// No description provided for @unpin.
-  ///
-  /// In en, this message translates to:
-  /// **'Unpin'**
-  String get unpin;
-
-  /// No description provided for @pinnedToTop.
-  ///
-  /// In en, this message translates to:
-  /// **'Pinned to top'**
-  String get pinnedToTop;
-
-  /// No description provided for @unpinned.
-  ///
-  /// In en, this message translates to:
-  /// **'Unpinned'**
-  String get unpinned;
-
-  /// No description provided for @noMediaToPlay.
-  ///
-  /// In en, this message translates to:
-  /// **'No media to play'**
-  String get noMediaToPlay;
-
-  /// No description provided for @nothingToRestore.
-  ///
-  /// In en, this message translates to:
-  /// **'Nothing to restore'**
-  String get nothingToRestore;
-
-  /// No description provided for @restoredItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Restored {count} item(s)'**
-  String restoredItems(int count);
-
-  /// No description provided for @itemsCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} items'**
-  String itemsCount(int count);
-
-  /// No description provided for @errorWithDetails.
-  ///
-  /// In en, this message translates to:
-  /// **'Error: {error}'**
-  String errorWithDetails(String error);
-
-  /// No description provided for @hide.
-  ///
-  /// In en, this message translates to:
-  /// **'Hide'**
-  String get hide;
-
-  /// No description provided for @hiding.
-  ///
-  /// In en, this message translates to:
-  /// **'Hiding…'**
-  String get hiding;
-
-  /// No description provided for @resolvingMedia.
-  ///
-  /// In en, this message translates to:
-  /// **'Preparing media…'**
-  String get resolvingMedia;
-
-  /// No description provided for @unhiding.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhiding…'**
-  String get unhiding;
-
-  /// No description provided for @hidingParallel.
-  ///
-  /// In en, this message translates to:
-  /// **'Hiding (×{workers})…'**
-  String hidingParallel(int workers);
-
-  /// No description provided for @hideFolderTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Hide folder?'**
-  String get hideFolderTitle;
-
-  /// No description provided for @hideFolderBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Hide media in “{name}” from the system gallery ({count} item(s)).'**
-  String hideFolderBody(String name, int count);
-
-  /// No description provided for @moveFolderToVault.
-  ///
-  /// In en, this message translates to:
-  /// **'Move this folder into the vault'**
-  String get moveFolderToVault;
-
-  /// No description provided for @permissionNeeded.
-  ///
-  /// In en, this message translates to:
-  /// **'Permission needed'**
-  String get permissionNeeded;
-
-  /// No description provided for @permissionNeededBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Privi needs permission to hide photos and videos from your gallery. Open Settings to allow it, then try again.'**
-  String get permissionNeededBody;
-
-  /// No description provided for @openSettings.
-  ///
-  /// In en, this message translates to:
-  /// **'Open settings'**
-  String get openSettings;
-
-  /// No description provided for @openSystemSettings.
-  ///
-  /// In en, this message translates to:
-  /// **'Open system settings'**
-  String get openSystemSettings;
-
-  /// No description provided for @grantPermission.
-  ///
-  /// In en, this message translates to:
-  /// **'Grant permission'**
-  String get grantPermission;
-
-  /// No description provided for @allowGalleryAccess.
-  ///
-  /// In en, this message translates to:
-  /// **'Allow gallery access'**
-  String get allowGalleryAccess;
-
-  /// No description provided for @allowGalleryAccessBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Visible lists your photo or video folders. Grant permission to browse and hide them.'**
-  String get allowGalleryAccessBody;
-
-  /// No description provided for @limitedPhotosAccess.
-  ///
-  /// In en, this message translates to:
-  /// **'Only selected Photos are available'**
-  String get limitedPhotosAccess;
-
-  /// No description provided for @mediaNotAvailableOffline.
-  ///
-  /// In en, this message translates to:
-  /// **'Original media is not available offline'**
-  String get mediaNotAvailableOffline;
-
-  /// No description provided for @sourceStillPresent.
-  ///
-  /// In en, this message translates to:
-  /// **'Private copy saved; source remains in Photos'**
-  String get sourceStillPresent;
-
-  /// No description provided for @privateCopyVerificationFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Private copy could not be verified'**
-  String get privateCopyVerificationFailed;
-
-  /// No description provided for @operationUnavailableOnPlatform.
-  ///
-  /// In en, this message translates to:
-  /// **'This action is unavailable on this platform'**
-  String get operationUnavailableOnPlatform;
-
-  /// No description provided for @noPhotoFolders.
-  ///
-  /// In en, this message translates to:
-  /// **'No photo folders found'**
-  String get noPhotoFolders;
-
-  /// No description provided for @noVideoFolders.
-  ///
-  /// In en, this message translates to:
-  /// **'No video folders found'**
-  String get noVideoFolders;
-
-  /// No description provided for @couldNotLoadGallery.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not load gallery: {error}'**
-  String couldNotLoadGallery(String error);
-
-  /// No description provided for @noMediaToHide.
-  ///
-  /// In en, this message translates to:
-  /// **'No media to hide'**
-  String get noMediaToHide;
-
-  /// No description provided for @couldNotOpenFilesToHide.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not open files to hide'**
-  String get couldNotOpenFilesToHide;
-
-  /// No description provided for @couldNotOpenPathsToRename.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not open file paths to rename.'**
-  String get couldNotOpenPathsToRename;
-
-  /// No description provided for @couldNotHideMedia.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not hide media. Please try again.'**
-  String get couldNotHideMedia;
-
-  /// No description provided for @nothingHidden.
-  ///
-  /// In en, this message translates to:
-  /// **'Nothing hidden'**
-  String get nothingHidden;
-
-  /// No description provided for @hiddenToAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Hidden → Invisible / {name}'**
-  String hiddenToAlbum(String name);
-
-  /// No description provided for @hiddenCountToAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Hidden {count} → Invisible / {name}'**
-  String hiddenCountToAlbum(int count, String name);
-
-  /// No description provided for @hiddenSharedItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Hidden {count} shared items'**
-  String hiddenSharedItems(int count);
-
-  /// No description provided for @unlockToHideShared.
-  ///
-  /// In en, this message translates to:
-  /// **'Unlock to hide shared media'**
-  String get unlockToHideShared;
-
-  /// No description provided for @unhide.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhide'**
-  String get unhide;
-
-  /// No description provided for @unhiddenItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhidden {count} item(s)'**
-  String unhiddenItems(int count);
-
-  /// No description provided for @share.
-  ///
-  /// In en, this message translates to:
-  /// **'Share'**
-  String get share;
-
-  /// No description provided for @delete.
-  ///
-  /// In en, this message translates to:
-  /// **'Delete'**
-  String get delete;
-
-  /// No description provided for @deleteFromDeviceTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Delete from device?'**
-  String get deleteFromDeviceTitle;
-
-  /// No description provided for @deleteFromDeviceBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Permanently delete {count} item(s) from the system gallery. This cannot be undone.'**
-  String deleteFromDeviceBody(int count);
-
-  /// No description provided for @deleteFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Delete failed: {error}'**
-  String deleteFailed(String error);
-
-  /// No description provided for @noItemsDeleted.
-  ///
-  /// In en, this message translates to:
-  /// **'No items deleted'**
-  String get noItemsDeleted;
-
-  /// No description provided for @deletedItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Deleted {count} item(s)'**
-  String deletedItems(int count);
-
-  /// No description provided for @selectedCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} selected'**
-  String selectedCount(int count);
-
-  /// No description provided for @noMatches.
-  ///
-  /// In en, this message translates to:
-  /// **'No matches'**
-  String get noMatches;
-
-  /// No description provided for @noPhotosInFolder.
-  ///
-  /// In en, this message translates to:
-  /// **'No photos in this folder'**
-  String get noPhotosInFolder;
-
-  /// No description provided for @noVideosInFolder.
-  ///
-  /// In en, this message translates to:
-  /// **'No videos in this folder'**
-  String get noVideosInFolder;
-
-  /// No description provided for @playPlaylist.
-  ///
-  /// In en, this message translates to:
-  /// **'Play playlist'**
-  String get playPlaylist;
-
-  /// No description provided for @playPlaylistShuffleOn.
-  ///
-  /// In en, this message translates to:
-  /// **'Start with shuffle on?'**
-  String get playPlaylistShuffleOn;
-
-  /// No description provided for @playPlaylistShuffleOff.
-  ///
-  /// In en, this message translates to:
-  /// **'Start with shuffle off? You can toggle in the player.'**
-  String get playPlaylistShuffleOff;
-
-  /// No description provided for @inOrder.
-  ///
-  /// In en, this message translates to:
-  /// **'In order'**
-  String get inOrder;
-
-  /// No description provided for @noExternalPlayer.
-  ///
-  /// In en, this message translates to:
-  /// **'No external player found — opening in-app'**
-  String get noExternalPlayer;
-
-  /// No description provided for @openedExternalPlayer.
-  ///
-  /// In en, this message translates to:
-  /// **'Opened externally'**
-  String get openedExternalPlayer;
-
-  /// No description provided for @rate.
-  ///
-  /// In en, this message translates to:
-  /// **'Rate'**
-  String get rate;
-
-  /// No description provided for @details.
-  ///
-  /// In en, this message translates to:
-  /// **'Details'**
-  String get details;
-
-  /// No description provided for @moveToAlbum.
-  ///
-  /// In en, this message translates to:
-  /// **'Move to album'**
-  String get moveToAlbum;
-
-  /// No description provided for @moveToRecycleBin.
-  ///
-  /// In en, this message translates to:
-  /// **'Move to Recycle Bin'**
-  String get moveToRecycleBin;
-
-  /// No description provided for @deleteForever.
-  ///
-  /// In en, this message translates to:
-  /// **'Delete forever'**
-  String get deleteForever;
-
-  /// No description provided for @setAsCover.
-  ///
-  /// In en, this message translates to:
-  /// **'Set as cover'**
-  String get setAsCover;
-
-  /// No description provided for @coverUpdated.
-  ///
-  /// In en, this message translates to:
-  /// **'Cover updated'**
-  String get coverUpdated;
-
-  /// No description provided for @unhideRestoreOriginal.
-  ///
-  /// In en, this message translates to:
-  /// **'Unhide (restore original name)'**
-  String get unhideRestoreOriginal;
-
-  /// No description provided for @restoredCount.
-  ///
-  /// In en, this message translates to:
-  /// **'Restored {count}'**
-  String restoredCount(int count);
-
-  /// No description provided for @movedToRecycleBinCount.
-  ///
-  /// In en, this message translates to:
-  /// **'Moved {count} to Recycle Bin'**
-  String movedToRecycleBinCount(int count);
-
-  /// No description provided for @deletedForeverCount.
-  ///
-  /// In en, this message translates to:
-  /// **'Deleted {count} forever'**
-  String deletedForeverCount(int count);
-
-  /// No description provided for @movedToAlbumCount.
-  ///
-  /// In en, this message translates to:
-  /// **'Moved {count} to album'**
-  String movedToAlbumCount(int count);
-
-  /// No description provided for @createUserAlbumFirst.
-  ///
-  /// In en, this message translates to:
-  /// **'Create a user album first'**
-  String get createUserAlbumFirst;
-
-  /// No description provided for @createAnotherAlbumFirst.
-  ///
-  /// In en, this message translates to:
-  /// **'Create another album first'**
-  String get createAnotherAlbumFirst;
-
-  /// No description provided for @noMediaYet.
-  ///
-  /// In en, this message translates to:
-  /// **'No media yet'**
-  String get noMediaYet;
-
-  /// No description provided for @noFavoritesYet.
-  ///
-  /// In en, this message translates to:
-  /// **'No favorites yet'**
-  String get noFavoritesYet;
-
-  /// No description provided for @recycleBinEmpty.
-  ///
-  /// In en, this message translates to:
-  /// **'Recycle Bin is empty'**
-  String get recycleBinEmpty;
-
-  /// No description provided for @noFavoritesHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Long-press media and Rate with hearts.'**
-  String get noFavoritesHint;
-
-  /// No description provided for @recycleEmptyHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Soft-deleted items appear here.'**
-  String get recycleEmptyHint;
-
-  /// No description provided for @noMediaHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Hide media from the Visible tab.'**
-  String get noMediaHint;
-
-  /// No description provided for @favorites.
-  ///
-  /// In en, this message translates to:
-  /// **'Favorites'**
-  String get favorites;
-
-  /// No description provided for @allMedia.
-  ///
-  /// In en, this message translates to:
-  /// **'All Media'**
-  String get allMedia;
-
-  /// No description provided for @recycleBin.
-  ///
-  /// In en, this message translates to:
-  /// **'Recycle Bin'**
-  String get recycleBin;
-
-  /// No description provided for @hearts.
-  ///
-  /// In en, this message translates to:
-  /// **'Hearts'**
-  String get hearts;
-
-  /// No description provided for @unrated.
-  ///
-  /// In en, this message translates to:
-  /// **'Unrated'**
-  String get unrated;
-
-  /// No description provided for @all.
-  ///
-  /// In en, this message translates to:
-  /// **'All'**
-  String get all;
-
-  /// No description provided for @emptyRecycleBin.
-  ///
-  /// In en, this message translates to:
-  /// **'Empty Recycle Bin'**
-  String get emptyRecycleBin;
-
-  /// No description provided for @emptyRecycleBinTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Empty Recycle Bin?'**
-  String get emptyRecycleBinTitle;
-
-  /// No description provided for @emptyRecycleBinBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Permanently delete all soft-deleted items.'**
-  String get emptyRecycleBinBody;
-
-  /// No description provided for @purgedItems.
-  ///
-  /// In en, this message translates to:
-  /// **'Purged {count} items'**
-  String purgedItems(int count);
-
-  /// No description provided for @sortNewestFirst.
-  ///
-  /// In en, this message translates to:
-  /// **'Newest first'**
-  String get sortNewestFirst;
-
-  /// No description provided for @sortOldestFirst.
-  ///
-  /// In en, this message translates to:
-  /// **'Oldest first'**
-  String get sortOldestFirst;
-
-  /// No description provided for @sortNameAsc.
-  ///
-  /// In en, this message translates to:
-  /// **'Name A–Z'**
-  String get sortNameAsc;
-
-  /// No description provided for @sortNameDesc.
-  ///
-  /// In en, this message translates to:
-  /// **'Name Z–A'**
-  String get sortNameDesc;
-
-  /// No description provided for @sortHighestRating.
-  ///
-  /// In en, this message translates to:
-  /// **'Highest rating'**
-  String get sortHighestRating;
-
-  /// No description provided for @sortLowestRating.
-  ///
-  /// In en, this message translates to:
-  /// **'Lowest rating'**
-  String get sortLowestRating;
-
-  /// No description provided for @albumSortNewest.
-  ///
-  /// In en, this message translates to:
-  /// **'Newest albums'**
-  String get albumSortNewest;
-
-  /// No description provided for @albumSortOldest.
-  ///
-  /// In en, this message translates to:
-  /// **'Oldest albums'**
-  String get albumSortOldest;
-
-  /// No description provided for @albumSortCustom.
-  ///
-  /// In en, this message translates to:
-  /// **'Custom order'**
-  String get albumSortCustom;
-
-  /// No description provided for @arrangeOrder.
-  ///
-  /// In en, this message translates to:
-  /// **'Arrange order'**
-  String get arrangeOrder;
-
-  /// No description provided for @listView.
-  ///
-  /// In en, this message translates to:
-  /// **'List'**
-  String get listView;
-
-  /// No description provided for @mosaicView.
-  ///
-  /// In en, this message translates to:
-  /// **'Mosaic'**
-  String get mosaicView;
-
-  /// No description provided for @unsavedChanges.
-  ///
-  /// In en, this message translates to:
-  /// **'Unsaved changes'**
-  String get unsavedChanges;
-
-  /// No description provided for @discardChanges.
-  ///
-  /// In en, this message translates to:
-  /// **'Discard'**
-  String get discardChanges;
-
-  /// No description provided for @unsavedChangesBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Discard the new order?'**
-  String get unsavedChangesBody;
-
-  /// No description provided for @orderSaved.
-  ///
-  /// In en, this message translates to:
-  /// **'Order saved'**
-  String get orderSaved;
-
-  /// No description provided for @addToGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Add to collection'**
-  String get addToGroup;
-
-  /// No description provided for @newGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'New collection'**
-  String get newGroup;
-
-  /// No description provided for @manageGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Manage collection'**
-  String get manageGroup;
-
-  /// No description provided for @addAlbums.
-  ///
-  /// In en, this message translates to:
-  /// **'Add albums'**
-  String get addAlbums;
-
-  /// No description provided for @noAlbumsToAdd.
-  ///
-  /// In en, this message translates to:
-  /// **'No albums available'**
-  String get noAlbumsToAdd;
-
-  /// No description provided for @addedAlbums.
-  ///
-  /// In en, this message translates to:
-  /// **'Added {count} albums'**
-  String addedAlbums(int count);
-
-  /// No description provided for @removedFromGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Removed from collection'**
-  String get removedFromGroup;
-
-  /// No description provided for @newGroupCreated.
-  ///
-  /// In en, this message translates to:
-  /// **'Collection created'**
-  String get newGroupCreated;
-
-  /// No description provided for @groupNameHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Collection name'**
-  String get groupNameHint;
-
-  /// No description provided for @renameGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Rename collection'**
-  String get renameGroup;
-
-  /// No description provided for @dissolveGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Dissolve collection'**
-  String get dissolveGroup;
-
-  /// No description provided for @dissolveGroupBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Albums return to the home screen. No content will be deleted.'**
-  String get dissolveGroupBody;
-
-  /// No description provided for @removeFromGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'Remove from collection'**
-  String get removeFromGroup;
-
-  /// No description provided for @emptyGroup.
-  ///
-  /// In en, this message translates to:
-  /// **'No albums'**
-  String get emptyGroup;
-
-  /// No description provided for @albumsCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} albums'**
-  String albumsCount(int count);
-
-  /// No description provided for @sortsCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} sorts'**
-  String sortsCount(int count);
-
-  /// No description provided for @progressOkSkipFail.
-  ///
-  /// In en, this message translates to:
-  /// **'ok {imported} · skip {skipped} · fail {failed}'**
-  String progressOkSkipFail(int imported, int skipped, int failed);
-
-  /// No description provided for @failedItems.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} failed'**
-  String failedItems(int count);
-
-  /// No description provided for @drawPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Draw a pattern'**
-  String get drawPattern;
-
-  /// No description provided for @confirmPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Confirm pattern'**
-  String get confirmPattern;
-
-  /// No description provided for @redrawPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Redraw pattern'**
-  String get redrawPattern;
-
-  /// No description provided for @drawYourPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Draw your pattern'**
-  String get drawYourPattern;
-
-  /// No description provided for @enterYourPin.
-  ///
-  /// In en, this message translates to:
-  /// **'Enter your PIN'**
-  String get enterYourPin;
-
-  /// No description provided for @connectAtLeast4Dots.
-  ///
-  /// In en, this message translates to:
-  /// **'Connect at least 4 dots'**
-  String get connectAtLeast4Dots;
-
-  /// No description provided for @unlockWithBiometric.
-  ///
-  /// In en, this message translates to:
-  /// **'Unlock with biometric'**
-  String get unlockWithBiometric;
-
-  /// No description provided for @forgotPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Forgot pattern?'**
-  String get forgotPattern;
-
-  /// No description provided for @forgotPatternTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Forgot pattern?'**
-  String get forgotPatternTitle;
-
-  /// No description provided for @forgotPatternBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Use your phone’s fingerprint, face, or screen lock to prove it is you. Then you can draw a new vault pattern.\n\nYour media stays on the device; only the vault unlock pattern is reset.'**
-  String get forgotPatternBody;
-
-  /// No description provided for @enableBiometricTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Enable biometric unlock?'**
-  String get enableBiometricTitle;
-
-  /// No description provided for @enableBiometricBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Use fingerprint or face for faster unlock. Your pattern remains the backup unlock.'**
-  String get enableBiometricBody;
-
-  /// No description provided for @biometricNotEnabled.
-  ///
-  /// In en, this message translates to:
-  /// **'Biometric not enabled — you can try again in Settings'**
-  String get biometricNotEnabled;
-
-  /// No description provided for @patternsDidNotMatch.
-  ///
-  /// In en, this message translates to:
-  /// **'Patterns did not match — try again'**
-  String get patternsDidNotMatch;
-
-  /// No description provided for @drawNewPatternProtect.
-  ///
-  /// In en, this message translates to:
-  /// **'Draw a new pattern to protect the vault'**
-  String get drawNewPatternProtect;
-
-  /// No description provided for @sectionSecurity.
-  ///
-  /// In en, this message translates to:
-  /// **'Security'**
-  String get sectionSecurity;
-
-  /// No description provided for @sectionDisplay.
-  ///
-  /// In en, this message translates to:
-  /// **'Display'**
-  String get sectionDisplay;
-
-  /// No description provided for @sectionPlayback.
-  ///
-  /// In en, this message translates to:
-  /// **'Playback'**
-  String get sectionPlayback;
-
-  /// No description provided for @sectionStorage.
-  ///
-  /// In en, this message translates to:
-  /// **'Storage'**
-  String get sectionStorage;
-
-  /// No description provided for @sectionAbout.
-  ///
-  /// In en, this message translates to:
-  /// **'About'**
-  String get sectionAbout;
-
-  /// No description provided for @lockNow.
-  ///
-  /// In en, this message translates to:
-  /// **'Lock now'**
-  String get lockNow;
-
-  /// No description provided for @changePattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Change pattern'**
-  String get changePattern;
-
-  /// No description provided for @rootUnlockCredential.
-  ///
-  /// In en, this message translates to:
-  /// **'Root unlock credential'**
-  String get rootUnlockCredential;
-
-  /// No description provided for @biometricUnlock.
-  ///
-  /// In en, this message translates to:
-  /// **'Biometric unlock'**
-  String get biometricUnlock;
-
-  /// No description provided for @autoLock.
-  ///
-  /// In en, this message translates to:
-  /// **'Auto-lock'**
-  String get autoLock;
-
-  /// No description provided for @autoLockImmediately.
-  ///
-  /// In en, this message translates to:
-  /// **'Immediately'**
-  String get autoLockImmediately;
-
-  /// No description provided for @autoLockSeconds.
-  ///
-  /// In en, this message translates to:
-  /// **'{seconds} seconds'**
-  String autoLockSeconds(int seconds);
-
-  /// No description provided for @autoLockMinutes.
-  ///
-  /// In en, this message translates to:
-  /// **'{minutes} minute'**
-  String autoLockMinutes(int minutes);
-
-  /// No description provided for @autoLockMinutesPlural.
-  ///
-  /// In en, this message translates to:
-  /// **'{minutes} minutes'**
-  String autoLockMinutesPlural(int minutes);
-
-  /// No description provided for @blockScreenshots.
-  ///
-  /// In en, this message translates to:
-  /// **'Block screenshots'**
-  String get blockScreenshots;
-
-  /// No description provided for @blockScreenshotsSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'FLAG_SECURE — hide content in recents'**
-  String get blockScreenshotsSubtitle;
-
-  /// No description provided for @protectAppPreview.
-  ///
-  /// In en, this message translates to:
-  /// **'Protect app preview'**
-  String get protectAppPreview;
-
-  /// No description provided for @protectAppPreviewSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Hides app-switcher content; screenshots remain possible'**
-  String get protectAppPreviewSubtitle;
-
-  /// No description provided for @mediaGridColumns.
-  ///
-  /// In en, this message translates to:
-  /// **'Default grid columns'**
-  String get mediaGridColumns;
-
-  /// No description provided for @albumColumns.
-  ///
-  /// In en, this message translates to:
-  /// **'Album columns'**
-  String get albumColumns;
-
-  /// No description provided for @preferExternalPlayer.
-  ///
-  /// In en, this message translates to:
-  /// **'Prefer external player'**
-  String get preferExternalPlayer;
-
-  /// No description provided for @inAppPlayback.
-  ///
-  /// In en, this message translates to:
-  /// **'In-app playback'**
-  String get inAppPlayback;
-
-  /// No description provided for @externalPlaybackUnsupported.
-  ///
-  /// In en, this message translates to:
-  /// **'External playback is unavailable'**
-  String get externalPlaybackUnsupported;
-
-  /// No description provided for @shuffleByDefault.
-  ///
-  /// In en, this message translates to:
-  /// **'Shuffle by default'**
-  String get shuffleByDefault;
-
-  /// No description provided for @slideshowDelay.
-  ///
-  /// In en, this message translates to:
-  /// **'Slideshow delay'**
-  String get slideshowDelay;
-
-  /// No description provided for @recycleRetention.
-  ///
-  /// In en, this message translates to:
-  /// **'Recycle Bin retention'**
-  String get recycleRetention;
-
-  /// No description provided for @vaultSize.
-  ///
-  /// In en, this message translates to:
-  /// **'Vault size'**
-  String get vaultSize;
-
-  /// No description provided for @exportVault.
-  ///
-  /// In en, this message translates to:
-  /// **'Export vault…'**
-  String get exportVault;
-
-  /// No description provided for @exportVaultSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Media + metadata to a folder'**
-  String get exportVaultSubtitle;
-
-  /// No description provided for @importVault.
-  ///
-  /// In en, this message translates to:
-  /// **'Import vault…'**
-  String get importVault;
-
-  /// No description provided for @importVaultSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'From a previous export folder'**
-  String get importVaultSubtitle;
-
-  /// No description provided for @backupExportPickerTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Choose backup folder'**
-  String get backupExportPickerTitle;
-
-  /// No description provided for @backupRestorePickerTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Choose backup folder'**
-  String get backupRestorePickerTitle;
-
-  /// No description provided for @backupExportProgressTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Export vault'**
-  String get backupExportProgressTitle;
-
-  /// No description provided for @backupRestoreProgressTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore vault'**
-  String get backupRestoreProgressTitle;
-
-  /// No description provided for @backupExportCompleteTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup verified'**
-  String get backupExportCompleteTitle;
-
-  /// No description provided for @backupRestoreCompleteTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore complete'**
-  String get backupRestoreCompleteTitle;
-
-  /// No description provided for @backupExportErrorTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Export failed'**
-  String get backupExportErrorTitle;
-
-  /// No description provided for @backupRestoreErrorTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore failed'**
-  String get backupRestoreErrorTitle;
-
-  /// No description provided for @backupCancelledTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Cancelled'**
-  String get backupCancelledTitle;
-
-  /// No description provided for @backupCancelledBody.
-  ///
-  /// In en, this message translates to:
-  /// **'No changes saved.'**
-  String get backupCancelledBody;
-
-  /// No description provided for @backupCancelling.
-  ///
-  /// In en, this message translates to:
-  /// **'Finishing current file…'**
-  String get backupCancelling;
-
-  /// No description provided for @backupStagePreparing.
-  ///
-  /// In en, this message translates to:
-  /// **'Preparing'**
-  String get backupStagePreparing;
-
-  /// No description provided for @backupStageCheckingSource.
-  ///
-  /// In en, this message translates to:
-  /// **'Checking source'**
-  String get backupStageCheckingSource;
-
-  /// No description provided for @backupStageCopying.
-  ///
-  /// In en, this message translates to:
-  /// **'Copying media'**
-  String get backupStageCopying;
-
-  /// No description provided for @backupStageWritingManifest.
-  ///
-  /// In en, this message translates to:
-  /// **'Writing manifest'**
-  String get backupStageWritingManifest;
-
-  /// No description provided for @backupStageCheckingBackup.
-  ///
-  /// In en, this message translates to:
-  /// **'Checking backup'**
-  String get backupStageCheckingBackup;
-
-  /// No description provided for @backupStageRestoring.
-  ///
-  /// In en, this message translates to:
-  /// **'Restoring media'**
-  String get backupStageRestoring;
-
-  /// No description provided for @backupStageComplete.
-  ///
-  /// In en, this message translates to:
-  /// **'Complete'**
-  String get backupStageComplete;
-
-  /// No description provided for @backupProgressLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup progress'**
-  String get backupProgressLabel;
-
-  /// No description provided for @backupProgressCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{completed} / {total}'**
-  String backupProgressCount(int completed, int total);
-
-  /// No description provided for @backupItemCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{count} items'**
-  String backupItemCount(int count);
-
-  /// No description provided for @backupChecksumVerified.
-  ///
-  /// In en, this message translates to:
-  /// **'SHA-256 checked'**
-  String get backupChecksumVerified;
-
-  /// No description provided for @backupCheckedWithoutChecksum.
-  ///
-  /// In en, this message translates to:
-  /// **'Files checked · no checksums'**
-  String get backupCheckedWithoutChecksum;
-
-  /// No description provided for @backupUnknownItem.
-  ///
-  /// In en, this message translates to:
-  /// **'Unknown item'**
-  String get backupUnknownItem;
-
-  /// No description provided for @backupFolderSelectionFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Couldn\'t open folders. Try again.'**
-  String get backupFolderSelectionFailed;
-
-  /// No description provided for @backupManifestMissing.
-  ///
-  /// In en, this message translates to:
-  /// **'No Privi manifest was found.'**
-  String get backupManifestMissing;
-
-  /// No description provided for @backupManifestMalformed.
-  ///
-  /// In en, this message translates to:
-  /// **'The backup manifest is not valid.'**
-  String get backupManifestMalformed;
-
-  /// No description provided for @backupManifestMalformedItem.
-  ///
-  /// In en, this message translates to:
-  /// **'Invalid manifest item: {name}'**
-  String backupManifestMalformedItem(String name);
-
-  /// No description provided for @backupVersionUnsupported.
-  ///
-  /// In en, this message translates to:
-  /// **'This backup version is not supported.'**
-  String get backupVersionUnsupported;
-
-  /// No description provided for @backupSourceMissing.
-  ///
-  /// In en, this message translates to:
-  /// **'Source file is missing: {name}'**
-  String backupSourceMissing(String name);
-
-  /// No description provided for @backupSourceUnreadable.
-  ///
-  /// In en, this message translates to:
-  /// **'Source file cannot be read: {name}'**
-  String backupSourceUnreadable(String name);
-
-  /// No description provided for @backupSourceEmpty.
-  ///
-  /// In en, this message translates to:
-  /// **'Source file is empty: {name}'**
-  String backupSourceEmpty(String name);
-
-  /// No description provided for @backupSourceChanged.
-  ///
-  /// In en, this message translates to:
-  /// **'Source changed during export: {name}'**
-  String backupSourceChanged(String name);
-
-  /// No description provided for @backupPayloadMissing.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup file is missing: {name}'**
-  String backupPayloadMissing(String name);
-
-  /// No description provided for @backupPayloadUnreadable.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup file cannot be read: {name}'**
-  String backupPayloadUnreadable(String name);
-
-  /// No description provided for @backupPayloadEmpty.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup file is empty: {name}'**
-  String backupPayloadEmpty(String name);
-
-  /// No description provided for @backupPayloadLengthMismatch.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup file size does not match: {name}'**
-  String backupPayloadLengthMismatch(String name);
-
-  /// No description provided for @backupPayloadDigestMismatch.
-  ///
-  /// In en, this message translates to:
-  /// **'Backup file checksum does not match: {name}'**
-  String backupPayloadDigestMismatch(String name);
-
-  /// No description provided for @backupUnsafePath.
-  ///
-  /// In en, this message translates to:
-  /// **'Unsafe backup path: {name}'**
-  String backupUnsafePath(String name);
-
-  /// No description provided for @backupDestinationConflict.
-  ///
-  /// In en, this message translates to:
-  /// **'Choose an empty folder. Existing item: {name}'**
-  String backupDestinationConflict(String name);
-
-  /// No description provided for @backupExportWriteFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not write the backup. Check folder access and free space.'**
-  String get backupExportWriteFailed;
-
-  /// No description provided for @backupRestoreWriteFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not restore the backup. Check storage access and free space.'**
-  String get backupRestoreWriteFailed;
-
-  /// No description provided for @backupExportFailedGeneric.
-  ///
-  /// In en, this message translates to:
-  /// **'Export failed. Check the source files and try again.'**
-  String get backupExportFailedGeneric;
-
-  /// No description provided for @backupRestoreFailedGeneric.
-  ///
-  /// In en, this message translates to:
-  /// **'Restore failed. Check the backup and try again.'**
-  String get backupRestoreFailedGeneric;
-
-  /// No description provided for @scanOrphans.
-  ///
-  /// In en, this message translates to:
-  /// **'Scan orphan hidden files'**
-  String get scanOrphans;
-
-  /// No description provided for @scanningOrphans.
-  ///
-  /// In en, this message translates to:
-  /// **'Scanning for orphan hidden files…'**
-  String get scanningOrphans;
-
-  /// No description provided for @recoverVault.
-  ///
-  /// In en, this message translates to:
-  /// **'Recover vault after reinstall'**
-  String get recoverVault;
-
-  /// No description provided for @recoverVaultSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Re-index media left in .privateheart_vault'**
-  String get recoverVaultSubtitle;
-
-  /// No description provided for @recoverVaultBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Scan the on-disk vault folder and bring missing items back into Invisible. Use this after reinstalling Privi when files are still on the phone.'**
-  String get recoverVaultBody;
-
-  /// No description provided for @recoverAndUnhide.
-  ///
-  /// In en, this message translates to:
-  /// **'Recover & restore to Gallery'**
-  String get recoverAndUnhide;
-
-  /// No description provided for @recoverAndUnhideSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Re-index vault files and unhide them'**
-  String get recoverAndUnhideSubtitle;
-
-  /// No description provided for @recoverAndUnhideBody.
-  ///
-  /// In en, this message translates to:
-  /// **'Re-index files under the vault folder, then move them back to public folders (Downloads / original when known). Use after reinstall if you want media visible in Gallery again.'**
-  String get recoverAndUnhideBody;
-
-  /// No description provided for @recoveringVault.
-  ///
-  /// In en, this message translates to:
-  /// **'Recovering vault files…'**
-  String get recoveringVault;
-
-  /// No description provided for @repairCaptureDates.
-  ///
-  /// In en, this message translates to:
-  /// **'Repair capture dates'**
-  String get repairCaptureDates;
-
-  /// No description provided for @repairCaptureDatesSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Fix vault sort order from original capture time (not hide time)'**
-  String get repairCaptureDatesSubtitle;
-
-  /// No description provided for @repairingCaptureDates.
-  ///
-  /// In en, this message translates to:
-  /// **'Repairing capture dates…'**
-  String get repairingCaptureDates;
-
-  /// No description provided for @author.
-  ///
-  /// In en, this message translates to:
-  /// **'Author'**
-  String get author;
-
-  /// No description provided for @license.
-  ///
-  /// In en, this message translates to:
-  /// **'License'**
-  String get license;
-
-  /// No description provided for @couldNotOpenBrowser.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not open browser'**
-  String get couldNotOpenBrowser;
-
-  /// No description provided for @versionLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Version {version}'**
-  String versionLabel(String version);
-
-  /// No description provided for @patchLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Patch {number}'**
-  String patchLabel(int number);
-
-  /// No description provided for @checkUpdates.
-  ///
-  /// In en, this message translates to:
-  /// **'Check updates'**
-  String get checkUpdates;
-
-  /// No description provided for @updateAvailableTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Update available'**
-  String get updateAvailableTitle;
-
-  /// No description provided for @updateDownloadPrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Download and restart now?'**
-  String get updateDownloadPrompt;
-
-  /// No description provided for @updateDownloadRelaunchPrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Download now? Reopen Privi to apply it.'**
-  String get updateDownloadRelaunchPrompt;
-
-  /// No description provided for @appReleasePrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Privi {version} is available on GitHub.'**
-  String appReleasePrompt(String version);
-
-  /// No description provided for @later.
-  ///
-  /// In en, this message translates to:
-  /// **'Later'**
-  String get later;
-
-  /// No description provided for @updateAction.
-  ///
-  /// In en, this message translates to:
-  /// **'Update'**
-  String get updateAction;
-
-  /// No description provided for @viewRelease.
-  ///
-  /// In en, this message translates to:
-  /// **'View'**
-  String get viewRelease;
-
-  /// No description provided for @upToDate.
-  ///
-  /// In en, this message translates to:
-  /// **'Up to date'**
-  String get upToDate;
-
-  /// No description provided for @updateRestartFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Restart failed. Reopen Privi.'**
-  String get updateRestartFailed;
-
-  /// No description provided for @updateRelaunchRequired.
-  ///
-  /// In en, this message translates to:
-  /// **'Update downloaded. Reopen Privi to apply it.'**
-  String get updateRelaunchRequired;
-
-  /// No description provided for @updatesUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'Updates unavailable'**
-  String get updatesUnavailable;
-
-  /// No description provided for @updateCheckFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Check failed'**
-  String get updateCheckFailed;
-
-  /// No description provided for @updateDownloadFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Update failed'**
-  String get updateDownloadFailed;
-
-  /// No description provided for @authorLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Author: {author}'**
-  String authorLabel(String author);
-
-  /// No description provided for @scanFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Scan failed: {error}'**
-  String scanFailed(String error);
-
-  /// No description provided for @playing.
-  ///
-  /// In en, this message translates to:
-  /// **'Playing'**
-  String get playing;
-
-  /// No description provided for @emptyPlaylist.
-  ///
-  /// In en, this message translates to:
-  /// **'Empty playlist'**
-  String get emptyPlaylist;
-
-  /// No description provided for @openExternal.
-  ///
-  /// In en, this message translates to:
-  /// **'Open external'**
-  String get openExternal;
-
-  /// No description provided for @previousMedia.
-  ///
-  /// In en, this message translates to:
-  /// **'Previous'**
-  String get previousMedia;
-
-  /// No description provided for @nextMedia.
-  ///
-  /// In en, this message translates to:
-  /// **'Next'**
-  String get nextMedia;
-
-  /// No description provided for @play.
-  ///
-  /// In en, this message translates to:
-  /// **'Play'**
-  String get play;
-
-  /// No description provided for @pause.
-  ///
-  /// In en, this message translates to:
-  /// **'Pause'**
-  String get pause;
-
-  /// No description provided for @portrait.
-  ///
-  /// In en, this message translates to:
-  /// **'Portrait'**
-  String get portrait;
-
-  /// No description provided for @landscape.
-  ///
-  /// In en, this message translates to:
-  /// **'Landscape'**
-  String get landscape;
-
-  /// No description provided for @videoDisplayMode.
-  ///
-  /// In en, this message translates to:
-  /// **'Display mode'**
-  String get videoDisplayMode;
-
-  /// No description provided for @videoFit.
-  ///
-  /// In en, this message translates to:
-  /// **'Fit'**
-  String get videoFit;
-
-  /// No description provided for @videoFill.
-  ///
-  /// In en, this message translates to:
-  /// **'Fill screen'**
-  String get videoFill;
-
-  /// No description provided for @videoOriginal.
-  ///
-  /// In en, this message translates to:
-  /// **'Original'**
-  String get videoOriginal;
-
-  /// No description provided for @videoRatioFourThree.
-  ///
-  /// In en, this message translates to:
-  /// **'4:3'**
-  String get videoRatioFourThree;
-
-  /// No description provided for @videoRatioSixteenNine.
-  ///
-  /// In en, this message translates to:
-  /// **'16:9'**
-  String get videoRatioSixteenNine;
-
-  /// No description provided for @playerSettings.
-  ///
-  /// In en, this message translates to:
-  /// **'Player settings'**
-  String get playerSettings;
-
-  /// No description provided for @doubleTapSeek.
-  ///
-  /// In en, this message translates to:
-  /// **'Double-tap seek'**
-  String get doubleTapSeek;
-
-  /// No description provided for @playbackSpeed.
-  ///
-  /// In en, this message translates to:
-  /// **'Playback speed'**
-  String get playbackSpeed;
-
-  /// No description provided for @mute.
-  ///
-  /// In en, this message translates to:
-  /// **'Mute'**
-  String get mute;
-
-  /// No description provided for @loopVideo.
-  ///
-  /// In en, this message translates to:
-  /// **'Loop video'**
-  String get loopVideo;
-
-  /// No description provided for @typeLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Type'**
-  String get typeLabel;
-
-  /// No description provided for @typeVideo.
-  ///
-  /// In en, this message translates to:
-  /// **'Video'**
-  String get typeVideo;
-
-  /// No description provided for @typeImage.
-  ///
-  /// In en, this message translates to:
-  /// **'Image'**
-  String get typeImage;
-
-  /// No description provided for @nameLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Name'**
-  String get nameLabel;
-
-  /// No description provided for @sizeLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Size'**
-  String get sizeLabel;
-
-  /// No description provided for @pathLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Path'**
-  String get pathLabel;
-
-  /// No description provided for @ratingLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Rating'**
-  String get ratingLabel;
-
-  /// No description provided for @currentPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Current pattern'**
-  String get currentPattern;
-
-  /// No description provided for @newPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'New pattern'**
-  String get newPattern;
-
-  /// No description provided for @confirmNewPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Confirm new pattern'**
-  String get confirmNewPattern;
-
-  /// No description provided for @patternUpdated.
-  ///
-  /// In en, this message translates to:
-  /// **'Pattern updated'**
-  String get patternUpdated;
-
-  /// No description provided for @newPatternsDidNotMatch.
-  ///
-  /// In en, this message translates to:
-  /// **'New patterns did not match'**
-  String get newPatternsDidNotMatch;
-
-  /// No description provided for @drawCurrentPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Draw your current pattern to continue'**
-  String get drawCurrentPattern;
-
-  /// No description provided for @drawSamePatternAgain.
-  ///
-  /// In en, this message translates to:
-  /// **'Draw the same pattern again'**
-  String get drawSamePatternAgain;
-
-  /// No description provided for @currentPin.
-  ///
-  /// In en, this message translates to:
-  /// **'Current PIN'**
-  String get currentPin;
-
-  /// No description provided for @enterPinThenPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Enter PIN, then set a new pattern'**
-  String get enterPinThenPattern;
-
-  /// No description provided for @pin.
-  ///
-  /// In en, this message translates to:
-  /// **'PIN'**
-  String get pin;
-
-  /// No description provided for @retention.
-  ///
-  /// In en, this message translates to:
-  /// **'Retention'**
-  String get retention;
-
-  /// No description provided for @language.
-  ///
-  /// In en, this message translates to:
-  /// **'Language'**
-  String get language;
-
-  /// No description provided for @languageSystem.
-  ///
-  /// In en, this message translates to:
-  /// **'System default'**
-  String get languageSystem;
-
-  /// No description provided for @languageEnglish.
-  ///
-  /// In en, this message translates to:
-  /// **'English'**
-  String get languageEnglish;
-
-  /// No description provided for @languageZhCn.
-  ///
-  /// In en, this message translates to:
-  /// **'简体中文'**
-  String get languageZhCn;
-
-  /// No description provided for @languageZhHk.
-  ///
-  /// In en, this message translates to:
-  /// **'繁體中文（香港）'**
-  String get languageZhHk;
-
-  /// No description provided for @verifyIdentity.
-  ///
-  /// In en, this message translates to:
-  /// **'Verify identity'**
-  String get verifyIdentity;
-
-  /// No description provided for @unlockPrivi.
-  ///
-  /// In en, this message translates to:
-  /// **'Unlock Privi'**
-  String get unlockPrivi;
-
-  /// No description provided for @biometricAvailable.
-  ///
-  /// In en, this message translates to:
-  /// **'Fingerprint / face when available'**
-  String get biometricAvailable;
-
-  /// No description provided for @biometricUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'Not available on this device'**
-  String get biometricUnavailable;
-
-  /// No description provided for @biometricCancelled.
-  ///
-  /// In en, this message translates to:
-  /// **'Biometric not enabled (cancelled or failed)'**
-  String get biometricCancelled;
-
-  /// No description provided for @biometricUpdateFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not update biometric setting'**
-  String get biometricUpdateFailed;
-
-  /// No description provided for @externalPlayerSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Hand off videos to VLC / system player'**
-  String get externalPlayerSubtitle;
-
-  /// No description provided for @scanOrphansSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Find vault files missing from the library'**
-  String get scanOrphansSubtitle;
-
-  /// No description provided for @retentionDays.
-  ///
-  /// In en, this message translates to:
-  /// **'{days} days'**
-  String retentionDays(int days);
-
-  /// No description provided for @retention1Day.
-  ///
-  /// In en, this message translates to:
-  /// **'1 day'**
-  String get retention1Day;
-
-  /// No description provided for @secondsCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{n} seconds'**
-  String secondsCount(int n);
-
-  /// No description provided for @secondCount.
-  ///
-  /// In en, this message translates to:
-  /// **'{n} second'**
-  String secondCount(int n);
-
-  /// No description provided for @empty.
-  ///
-  /// In en, this message translates to:
-  /// **'Empty'**
-  String get empty;
-
-  /// No description provided for @couldNotOpenExternally.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not open externally — preview in-app'**
-  String get couldNotOpenExternally;
-
-  /// No description provided for @openWith.
-  ///
-  /// In en, this message translates to:
-  /// **'Open with'**
-  String get openWith;
-
-  /// No description provided for @playVideoWith.
-  ///
-  /// In en, this message translates to:
-  /// **'Play video with'**
-  String get playVideoWith;
-
-  /// No description provided for @calculating.
-  ///
-  /// In en, this message translates to:
-  /// **'Calculating…'**
-  String get calculating;
-
-  /// No description provided for @cancelled.
-  ///
-  /// In en, this message translates to:
-  /// **'Cancelled'**
-  String get cancelled;
-
-  /// No description provided for @restoredToGallery.
-  ///
-  /// In en, this message translates to:
-  /// **'Restored to Gallery'**
-  String get restoredToGallery;
-
-  /// No description provided for @couldNotUnhideFile.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not unhide file'**
-  String get couldNotUnhideFile;
-
-  /// No description provided for @favoriteToggle.
-  ///
-  /// In en, this message translates to:
-  /// **'Favorite'**
-  String get favoriteToggle;
-
-  /// No description provided for @ratedHearts.
-  ///
-  /// In en, this message translates to:
-  /// **'Rated {rating} of 3 hearts'**
-  String ratedHearts(int rating);
-
-  /// No description provided for @confirmBiometricEnable.
-  ///
-  /// In en, this message translates to:
-  /// **'Confirm to enable biometric unlock'**
-  String get confirmBiometricEnable;
-
-  /// No description provided for @confirmResetPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Confirm it is you to reset Privi pattern'**
-  String get confirmResetPattern;
-
-  /// No description provided for @wrongPattern.
-  ///
-  /// In en, this message translates to:
-  /// **'Wrong pattern'**
-  String get wrongPattern;
-
-  /// No description provided for @wrongPin.
-  ///
-  /// In en, this message translates to:
-  /// **'Wrong PIN'**
-  String get wrongPin;
-
-  /// No description provided for @noSystemLock.
-  ///
-  /// In en, this message translates to:
-  /// **'Set up a screen lock in Android Settings first'**
-  String get noSystemLock;
-
-  /// No description provided for @systemAuthCancelled.
-  ///
-  /// In en, this message translates to:
-  /// **'System authentication cancelled'**
-  String get systemAuthCancelled;
-
-  /// No description provided for @scanFailedShort.
-  ///
-  /// In en, this message translates to:
-  /// **'Scan failed'**
-  String get scanFailedShort;
-
-  /// No description provided for @screenshotSettingFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not update screenshot protection'**
-  String get screenshotSettingFailed;
-
-  /// No description provided for @privacySettingFailed.
-  ///
-  /// In en, this message translates to:
-  /// **'Could not update app preview protection'**
-  String get privacySettingFailed;
-
-  /// No description provided for @noOrphanVaultFiles.
-  ///
-  /// In en, this message translates to:
-  /// **'No vault files found'**
-  String get noOrphanVaultFiles;
-
-  /// No description provided for @recoveryResult.
-  ///
-  /// In en, this message translates to:
-  /// **'Recovered {recovered} · skipped {skipped} · failed {failed}'**
-  String recoveryResult(int recovered, int skipped, int failed);
-
-  /// No description provided for @galleryRecoveryResult.
-  ///
-  /// In en, this message translates to:
-  /// **'Restored {restored} · skipped {skipped} · failed {failed}'**
-  String galleryRecoveryResult(int restored, int skipped, int failed);
-
-  /// No description provided for @noVaultMediaToRepair.
-  ///
-  /// In en, this message translates to:
-  /// **'No vault media to repair'**
-  String get noVaultMediaToRepair;
-
-  /// No description provided for @captureDateRepairResult.
-  ///
-  /// In en, this message translates to:
-  /// **'Fixed {fixed} · skipped {skipped} · failed {failed}'**
-  String captureDateRepairResult(int fixed, int skipped, int failed);
-
-  /// No description provided for @unlockLockout.
-  ///
-  /// In en, this message translates to:
-  /// **'Try again in {seconds}s'**
-  String unlockLockout(int seconds);
-}
-
-class _AppLocalizationsDelegate
-    extends LocalizationsDelegate<AppLocalizations> {
-  const _AppLocalizationsDelegate();
-
-  @override
-  Future<AppLocalizations> load(Locale locale) {
-    return SynchronousFuture<AppLocalizations>(lookupAppLocalizations(locale));
+  String restoreAlbumBody(int count, String name) {
+    return '将“$name”中的 $count 项取消隐藏并还原到系统图库。';
   }
 
-  @override
-  bool isSupported(Locale locale) =>
-      <String>['en', 'zh'].contains(locale.languageCode);
+  String get unhideAllInAlbum => '还原此相册中的全部项目';
 
-  @override
-  bool shouldReload(_AppLocalizationsDelegate old) => false;
-}
+  String get pinToTop => '置顶';
 
-AppLocalizations lookupAppLocalizations(Locale locale) {
-  // Lookup logic when language+country codes are specified.
-  switch (locale.languageCode) {
-    case 'zh':
-      {
-        switch (locale.countryCode) {
-          case 'CN':
-            return AppLocalizationsZhCn();
-          case 'HK':
-            return AppLocalizationsZhHk();
-        }
-        break;
-      }
+  String get unpin => '取消置顶';
+
+  String get pinnedToTop => '已置顶';
+
+  String get unpinned => '已取消置顶';
+
+  String get noMediaToPlay => '没有可播放的媒体';
+
+  String get nothingToRestore => '没有可还原的内容';
+
+  String restoredItems(int count) {
+    return '已还原 $count 项';
   }
 
-  // Lookup logic when only language code is specified.
-  switch (locale.languageCode) {
-    case 'en':
-      return AppLocalizationsEn();
-    case 'zh':
-      return AppLocalizationsZh();
+  String itemsCount(int count) {
+    return '$count 项';
   }
 
-  throw FlutterError(
-      'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
-      'an issue with the localizations generation tool. Please file an issue '
-      'on GitHub with a reproducible sample app and the gen-l10n configuration '
-      'that was used.');
+  String errorWithDetails(String error) {
+    return '错误：$error';
+  }
+
+  String get hide => '隐藏';
+
+  String get hiding => '正在隐藏…';
+
+  String get resolvingMedia => '正在准备媒体…';
+
+  String get unhiding => '正在取消隐藏…';
+
+  String hidingParallel(int workers) {
+    return '正在隐藏（×$workers）…';
+  }
+
+  String get hideFolderTitle => '隐藏文件夹？';
+
+  String hideFolderBody(String name, int count) {
+    return '将“$name”中的媒体从系统图库隐藏（共 $count 项）。';
+  }
+
+  String get moveFolderToVault => '将此文件夹移入私密保险库';
+
+  String get permissionNeeded => '需要权限';
+
+  String get permissionNeededBody => 'Privi 需要权限才能从系统图库隐藏照片和视频。请在设置中允许后重试。';
+
+  String get openSettings => '打开设置';
+
+  String get openSystemSettings => '打开系统设置';
+
+  String get grantPermission => '授予权限';
+
+  String get allowGalleryAccess => '允许访问图库';
+
+  String get allowGalleryAccessBody => '“可见”会列出你的照片或视频文件夹。请授予权限以便浏览和隐藏。';
+
+  String get limitedPhotosAccess => '仅可访问已选择的照片';
+
+  String get mediaNotAvailableOffline => '原始媒体尚未下载到本机';
+
+  String get sourceStillPresent => '私密副本已保存，原件仍在照片中';
+
+  String get privateCopyVerificationFailed => '无法验证私密副本';
+
+  String get operationUnavailableOnPlatform => '当前平台不支持此操作';
+
+  String get noPhotoFolders => '未找到照片文件夹';
+
+  String get noVideoFolders => '未找到视频文件夹';
+
+  String couldNotLoadGallery(String error) {
+    return '无法加载图库：$error';
+  }
+
+  String get noMediaToHide => '没有可隐藏的媒体';
+
+  String get couldNotOpenFilesToHide => '无法打开要隐藏的文件';
+
+  String get couldNotOpenPathsToRename => '无法打开要重命名的文件路径。';
+
+  String get couldNotHideMedia => '无法隐藏媒体，请重试。';
+
+  String get nothingHidden => '未隐藏任何内容';
+
+  String hiddenToAlbum(String name) {
+    return '已隐藏 → 私密 / $name';
+  }
+
+  String hiddenCountToAlbum(int count, String name) {
+    return '已隐藏 $count 项 → 私密 / $name';
+  }
+
+  String hiddenSharedItems(int count) {
+    return '已隐藏 $count 个分享项';
+  }
+
+  String get unlockToHideShared => '解锁后即可隐藏分享的媒体';
+
+  String get unhide => '取消隐藏';
+
+  String unhiddenItems(int count) {
+    return '已取消隐藏 $count 项';
+  }
+
+  String get share => '分享';
+
+  String get delete => '删除';
+
+  String get deleteFromDeviceTitle => '从设备删除？';
+
+  String deleteFromDeviceBody(int count) {
+    return '将从系统图库永久删除 $count 项。此操作无法撤销。';
+  }
+
+  String deleteFailed(String error) {
+    return '删除失败：$error';
+  }
+
+  String get noItemsDeleted => '未删除任何项目';
+
+  String deletedItems(int count) {
+    return '已删除 $count 项';
+  }
+
+  String selectedCount(int count) {
+    return '已选 $count 项';
+  }
+
+  String get noMatches => '无匹配结果';
+
+  String get noPhotosInFolder => '此文件夹中没有照片';
+
+  String get noVideosInFolder => '此文件夹中没有视频';
+
+  String get playPlaylist => '播放列表';
+
+  String get playPlaylistShuffleOn => '以随机播放开始？';
+
+  String get playPlaylistShuffleOff => '以顺序播放开始？可在播放器中切换。';
+
+  String get inOrder => '顺序';
+
+  String get noExternalPlayer => '未找到外部播放器 — 改用应用内播放';
+
+  String get openedExternalPlayer => '已在外部打开';
+
+  String get rate => '评分';
+
+  String get details => '详情';
+
+  String get moveToAlbum => '移到相册';
+
+  String get moveToRecycleBin => '移到回收站';
+
+  String get deleteForever => '永久删除';
+
+  String get setAsCover => '设为封面';
+
+  String get coverUpdated => '封面已更新';
+
+  String get unhideRestoreOriginal => '取消隐藏（还原原始名称）';
+
+  String restoredCount(int count) {
+    return '已还原 $count';
+  }
+
+  String movedToRecycleBinCount(int count) {
+    return '已将 $count 项移到回收站';
+  }
+
+  String deletedForeverCount(int count) {
+    return '已永久删除 $count 项';
+  }
+
+  String movedToAlbumCount(int count) {
+    return '已将 $count 项移到相册';
+  }
+
+  String get createUserAlbumFirst => '请先创建用户相册';
+
+  String get createAnotherAlbumFirst => '请先创建另一个相册';
+
+  String get noMediaYet => '暂无媒体';
+
+  String get noFavoritesYet => '暂无收藏';
+
+  String get recycleBinEmpty => '回收站为空';
+
+  String get noFavoritesHint => '长按媒体并用爱心评分。';
+
+  String get recycleEmptyHint => '软删除的项目会出现在这里。';
+
+  String get noMediaHint => '从“可见”标签隐藏媒体。';
+
+  String get favorites => '收藏';
+
+  String get allMedia => '全部媒体';
+
+  String get recycleBin => '回收站';
+
+  String get hearts => '爱心';
+
+  String get unrated => '未评分';
+
+  String get all => '全部';
+
+  String get emptyRecycleBin => '清空回收站';
+
+  String get emptyRecycleBinTitle => '清空回收站？';
+
+  String get emptyRecycleBinBody => '永久删除所有软删除项目。';
+
+  String purgedItems(int count) {
+    return '已清理 $count 项';
+  }
+
+  String get sortNewestFirst => '最新优先';
+
+  String get sortOldestFirst => '最早优先';
+
+  String get sortNameAsc => '名称 A–Z';
+
+  String get sortNameDesc => '名称 Z–A';
+
+  String get sortHighestRating => '评分从高到低';
+
+  String get sortLowestRating => '评分从低到高';
+
+  String get albumSortNewest => '相册从新到旧';
+
+  String get albumSortOldest => '相册从旧到新';
+
+  String get albumSortCustom => '自定义顺序';
+
+  String get arrangeOrder => '整理顺序';
+
+  String get listView => '列表';
+
+  String get mosaicView => '马赛克';
+
+  String get unsavedChanges => '尚未保存';
+
+  String get discardChanges => '放弃';
+
+  String get unsavedChangesBody => '放弃新的顺序？';
+
+  String get orderSaved => '顺序已保存';
+
+  String get addToGroup => '加入合集';
+
+  String get newGroup => '新建合集';
+
+  String get manageGroup => '管理合集';
+
+  String get addAlbums => '添加相册';
+
+  String get noAlbumsToAdd => '没有可添加的相册';
+
+  String addedAlbums(int count) {
+    return '已添加 $count 个相册';
+  }
+
+  String get removedFromGroup => '已移出合集';
+
+  String get newGroupCreated => '合集已创建';
+
+  String get groupNameHint => '合集名称';
+
+  String get renameGroup => '重命名合集';
+
+  String get dissolveGroup => '解散合集';
+
+  String get dissolveGroupBody => '相册将回到主页，不会删除任何内容。';
+
+  String get removeFromGroup => '移出合集';
+
+  String get emptyGroup => '暂无相册';
+
+  String albumsCount(int count) {
+    return '$count 个相册';
+  }
+
+  String sortsCount(int count) {
+    return '$count 项排序';
+  }
+
+  String progressOkSkipFail(int imported, int skipped, int failed) {
+    return '成功 $imported · 跳过 $skipped · 失败 $failed';
+  }
+
+  String failedItems(int count) {
+    return '失败 $count 项';
+  }
+
+  String get drawPattern => '绘制图案';
+
+  String get confirmPattern => '确认图案';
+
+  String get redrawPattern => '重新绘制图案';
+
+  String get drawYourPattern => '绘制你的图案';
+
+  String get enterYourPin => '输入 PIN';
+
+  String get connectAtLeast4Dots => '至少连接 4 个点';
+
+  String get unlockWithBiometric => '使用生物识别解锁';
+
+  String get forgotPattern => '忘记图案？';
+
+  String get forgotPatternTitle => '忘记图案？';
+
+  String get forgotPatternBody =>
+      '请使用手机的指纹、面容或屏幕锁验证身份，然后可绘制新的保险库图案。\n\n媒体仍保留在设备上；仅重置保险库解锁图案。';
+
+  String get enableBiometricTitle => '启用生物识别解锁？';
+
+  String get enableBiometricBody => '使用指纹或面容更快解锁。图案仍可作为备用解锁方式。';
+
+  String get biometricNotEnabled => '未启用生物识别 — 可在设置中重试';
+
+  String get patternsDidNotMatch => '图案不匹配 — 请重试';
+
+  String get drawNewPatternProtect => '绘制新图案以保护保险库';
+
+  String get sectionSecurity => '安全';
+
+  String get sectionDisplay => '显示';
+
+  String get sectionPlayback => '播放';
+
+  String get sectionStorage => '存储';
+
+  String get sectionAbout => '关于';
+
+  String get lockNow => '立即锁定';
+
+  String get changePattern => '更改图案';
+
+  String get rootUnlockCredential => '主解锁凭据';
+
+  String get biometricUnlock => '生物识别解锁';
+
+  String get autoLock => '自动锁定';
+
+  String get autoLockImmediately => '立即';
+
+  String autoLockSeconds(int seconds) {
+    return '$seconds 秒';
+  }
+
+  String autoLockMinutes(int minutes) {
+    return '$minutes 分钟';
+  }
+
+  String autoLockMinutesPlural(int minutes) {
+    return '$minutes 分钟';
+  }
+
+  String get blockScreenshots => '阻止截屏';
+
+  String get blockScreenshotsSubtitle => 'FLAG_SECURE — 在最近任务中隐藏内容';
+
+  String get protectAppPreview => '保护后台预览';
+
+  String get protectAppPreviewSubtitle => '隐藏后台预览，不阻止截屏';
+
+  String get mediaGridColumns => '默认网格列数';
+
+  String get albumColumns => '相册列数';
+
+  String get preferExternalPlayer => '优先使用外部播放器';
+
+  String get inAppPlayback => '应用内播放';
+
+  String get externalPlaybackUnsupported => '外部播放不可用';
+
+  String get shuffleByDefault => '默认随机播放';
+
+  String get slideshowDelay => '幻灯片间隔';
+
+  String get recycleRetention => '回收站保留时间';
+
+  String get vaultSize => '保险库大小';
+
+  String get exportVault => '导出保险库…';
+
+  String get exportVaultSubtitle => '将媒体与元数据导出到文件夹';
+
+  String get importVault => '导入保险库…';
+
+  String get importVaultSubtitle => '从先前的导出文件夹导入';
+
+  String get backupExportPickerTitle => '选择备份文件夹';
+
+  String get backupRestorePickerTitle => '选择备份文件夹';
+
+  String get backupExportProgressTitle => '导出保险库';
+
+  String get backupRestoreProgressTitle => '恢复保险库';
+
+  String get backupExportCompleteTitle => '备份已验证';
+
+  String get backupRestoreCompleteTitle => '恢复完成';
+
+  String get backupExportErrorTitle => '导出失败';
+
+  String get backupRestoreErrorTitle => '恢复失败';
+
+  String get backupCancelledTitle => '已取消';
+
+  String get backupCancelledBody => '未保存任何更改。';
+
+  String get backupCancelling => '正在完成当前文件…';
+
+  String get backupStagePreparing => '正在准备';
+
+  String get backupStageCheckingSource => '正在检查源文件';
+
+  String get backupStageCopying => '正在复制媒体';
+
+  String get backupStageWritingManifest => '正在写入清单';
+
+  String get backupStageCheckingBackup => '正在检查备份';
+
+  String get backupStageRestoring => '正在恢复媒体';
+
+  String get backupStageComplete => '已完成';
+
+  String get backupProgressLabel => '备份进度';
+
+  String backupProgressCount(int completed, int total) {
+    return '$completed / $total';
+  }
+
+  String backupItemCount(int count) {
+    return '$count 项';
+  }
+
+  String get backupChecksumVerified => '已检查 SHA-256';
+
+  String get backupCheckedWithoutChecksum => '文件已检查 · 无校验值';
+
+  String get backupUnknownItem => '未知项目';
+
+  String get backupFolderSelectionFailed => '无法打开文件夹，请重试';
+
+  String get backupManifestMissing => '未找到 Privi 备份清单。';
+
+  String get backupManifestMalformed => '备份清单无效。';
+
+  String backupManifestMalformedItem(String name) {
+    return '清单项目无效：$name';
+  }
+
+  String get backupVersionUnsupported => '不支持此备份版本。';
+
+  String backupSourceMissing(String name) {
+    return '源文件缺失：$name';
+  }
+
+  String backupSourceUnreadable(String name) {
+    return '无法读取源文件：$name';
+  }
+
+  String backupSourceEmpty(String name) {
+    return '源文件为空：$name';
+  }
+
+  String backupSourceChanged(String name) {
+    return '导出期间源文件发生变化：$name';
+  }
+
+  String backupPayloadMissing(String name) {
+    return '备份文件缺失：$name';
+  }
+
+  String backupPayloadUnreadable(String name) {
+    return '无法读取备份文件：$name';
+  }
+
+  String backupPayloadEmpty(String name) {
+    return '备份文件为空：$name';
+  }
+
+  String backupPayloadLengthMismatch(String name) {
+    return '备份文件大小不符：$name';
+  }
+
+  String backupPayloadDigestMismatch(String name) {
+    return '备份文件校验值不符：$name';
+  }
+
+  String backupUnsafePath(String name) {
+    return '备份路径不安全：$name';
+  }
+
+  String backupDestinationConflict(String name) {
+    return '请选择空文件夹。已有项目：$name';
+  }
+
+  String get backupExportWriteFailed => '无法写入备份，请检查文件夹权限和剩余空间。';
+
+  String get backupRestoreWriteFailed => '无法恢复备份，请检查存储权限和剩余空间。';
+
+  String get backupExportFailedGeneric => '导出失败，请检查源文件后重试。';
+
+  String get backupRestoreFailedGeneric => '恢复失败，请检查备份后重试。';
+
+  String get scanOrphans => '扫描孤立隐藏文件';
+
+  String get scanningOrphans => '正在扫描孤立隐藏文件…';
+
+  String get recoverVault => '重装后恢复保险库';
+
+  String get recoverVaultSubtitle => '重新索引仍在 .privateheart_vault 中的媒体';
+
+  String get recoverVaultBody =>
+      '扫描磁盘上的保险库文件夹，把缺失项带回 Invisible。卸载重装后文件仍在手机上时使用。';
+
+  String get recoverAndUnhide => '恢复并还原到图库';
+
+  String get recoverAndUnhideSubtitle => '重新索引保险库文件并取消隐藏';
+
+  String get recoverAndUnhideBody =>
+      '重新索引保险库文件夹中的文件，再移回公共目录（下载/已知原路径）。重装后若希望图库再次可见时使用。';
+
+  String get recoveringVault => '正在恢复保险库文件…';
+
+  String get repairCaptureDates => '修复拍摄日期';
+
+  String get repairCaptureDatesSubtitle => '按原始拍摄时间修正保险库排序（非隐藏时间）';
+
+  String get repairingCaptureDates => '正在修复拍摄日期…';
+
+  String get author => '作者';
+
+  String get license => '许可证';
+
+  String get couldNotOpenBrowser => '无法打开浏览器';
+
+  String versionLabel(String version) {
+    return '版本 $version';
+  }
+
+  String patchLabel(int number) {
+    return '补丁 $number';
+  }
+
+  String get checkUpdates => '检查更新';
+
+  String get updateAvailableTitle => '有可用更新';
+
+  String get updateDownloadPrompt => '立即下载并重启？';
+
+  String get updateDownloadRelaunchPrompt => '立即下载？重新打开后生效。';
+
+  String appReleasePrompt(String version) {
+    return 'GitHub 已发布 Privi $version';
+  }
+
+  String get later => '稍后';
+
+  String get updateAction => '更新';
+
+  String get viewRelease => '查看';
+
+  String get upToDate => '已是最新版本';
+
+  String get updateRestartFailed => '重启失败，请重新打开';
+
+  String get updateRelaunchRequired => '更新已下载，请重新打开应用';
+
+  String get updatesUnavailable => '此版本不支持更新';
+
+  String get updateCheckFailed => '检查失败';
+
+  String get updateDownloadFailed => '更新失败';
+
+  String authorLabel(String author) {
+    return '作者：$author';
+  }
+
+  String scanFailed(String error) {
+    return '扫描失败：$error';
+  }
+
+  String get playing => '正在播放';
+
+  String get emptyPlaylist => '播放列表为空';
+
+  String get openExternal => '外部打开';
+
+  String get previousMedia => '上一项';
+
+  String get nextMedia => '下一项';
+
+  String get play => '播放';
+
+  String get pause => '暂停';
+
+  String get portrait => '竖屏';
+
+  String get landscape => '横屏';
+
+  String get videoDisplayMode => '画面比例';
+
+  String get videoFit => '适应';
+
+  String get videoFill => '铺满';
+
+  String get videoOriginal => '原始';
+
+  String get videoRatioFourThree => '4:3';
+
+  String get videoRatioSixteenNine => '16:9';
+
+  String get playerSettings => '播放设置';
+
+  String get doubleTapSeek => '双击跳转';
+
+  String get playbackSpeed => '播放速度';
+
+  String get mute => '静音';
+
+  String get loopVideo => '循环播放';
+
+  String get typeLabel => '类型';
+
+  String get typeVideo => '视频';
+
+  String get typeImage => '图片';
+
+  String get nameLabel => '名称';
+
+  String get sizeLabel => '大小';
+
+  String get pathLabel => '路径';
+
+  String get ratingLabel => '评分';
+
+  String get currentPattern => '当前图案';
+
+  String get newPattern => '新图案';
+
+  String get confirmNewPattern => '确认新图案';
+
+  String get patternUpdated => '图案已更新';
+
+  String get newPatternsDidNotMatch => '新图案不匹配';
+
+  String get drawCurrentPattern => '绘制当前图案以继续';
+
+  String get drawSamePatternAgain => '请再次绘制相同图案';
+
+  String get currentPin => '当前 PIN';
+
+  String get enterPinThenPattern => '输入 PIN，然后设置新图案';
+
+  String get pin => 'PIN';
+
+  String get retention => '保留时间';
+
+  String get language => '语言';
+
+  String get languageSystem => '跟随系统';
+
+  String get languageEnglish => 'English';
+
+  String get languageZhCn => '简体中文';
+
+  String get languageZhHk => '繁體中文（香港）';
+
+  String get verifyIdentity => '验证身份';
+
+  String get unlockPrivi => '解锁 Privi';
+
+  String get biometricAvailable => '可用时使用指纹 / 面容';
+
+  String get biometricUnavailable => '此设备不可用';
+
+  String get biometricCancelled => '未启用生物识别（已取消或失败）';
+
+  String get biometricUpdateFailed => '无法更新生物识别设置';
+
+  String get externalPlayerSubtitle => '将视频交给 VLC / 系统播放器';
+
+  String get scanOrphansSubtitle => '查找库中缺失的保险库文件';
+
+  String retentionDays(int days) {
+    return '$days 天';
+  }
+
+  String get retention1Day => '1 天';
+
+  String secondsCount(int n) {
+    return '$n 秒';
+  }
+
+  String secondCount(int n) {
+    return '$n 秒';
+  }
+
+  String get empty => '清空';
+
+  String get couldNotOpenExternally => '无法用外部应用打开 — 改用应用内预览';
+
+  String get openWith => '打开方式';
+
+  String get playVideoWith => '播放视频';
+
+  String get calculating => '计算中…';
+
+  String get cancelled => '已取消';
+
+  String get restoredToGallery => '已还原到图库';
+
+  String get couldNotUnhideFile => '无法取消隐藏文件';
+
+  String get favoriteToggle => '收藏';
+
+  String ratedHearts(int rating) {
+    return '已评 $rating / 3 心';
+  }
+
+  String get confirmBiometricEnable => '确认以启用生物识别解锁';
+
+  String get confirmResetPattern => '确认身份以重置 Privi 图案';
+
+  String get wrongPattern => '图案错误';
+
+  String get wrongPin => 'PIN 错误';
+
+  String get noSystemLock => '请先在 Android 设置中启用屏幕锁定';
+
+  String get systemAuthCancelled => '系统验证已取消';
+
+  String get scanFailedShort => '扫描失败';
+
+  String get screenshotSettingFailed => '无法更新截屏保护';
+
+  String get privacySettingFailed => '无法更新后台预览保护';
+
+  String get noOrphanVaultFiles => '未找到保险库文件';
+
+  String recoveryResult(int recovered, int skipped, int failed) {
+    return '已恢复 $recovered · 跳过 $skipped · 失败 $failed';
+  }
+
+  String galleryRecoveryResult(int restored, int skipped, int failed) {
+    return '已还原 $restored · 跳过 $skipped · 失败 $failed';
+  }
+
+  String get noVaultMediaToRepair => '没有需要修复的媒体';
+
+  String captureDateRepairResult(int fixed, int skipped, int failed) {
+    return '已修复 $fixed · 跳过 $skipped · 失败 $failed';
+  }
+
+  String unlockLockout(int seconds) {
+    return '请在 $seconds 秒后重试';
+  }
 }

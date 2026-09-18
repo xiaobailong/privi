@@ -3,19 +3,15 @@ import 'package:pub_semver/pub_semver.dart';
 import 'app_release_source.dart';
 import 'app_update_service.dart';
 
-/// Checks full application releases before checking the current hot-update base.
 final class AppUpdateCoordinator implements AppUpdateService {
   const AppUpdateCoordinator({
     required Version currentVersion,
     required AppReleaseSource releaseSource,
-    required AppUpdateService hotUpdates,
   })  : _currentVersion = currentVersion,
-        _releaseSource = releaseSource,
-        _hotUpdates = hotUpdates;
+        _releaseSource = releaseSource;
 
   final Version _currentVersion;
   final AppReleaseSource _releaseSource;
-  final AppUpdateService _hotUpdates;
 
   @override
   Future<AppUpdateCheck> checkForUpdate() async {
@@ -28,12 +24,9 @@ final class AppUpdateCoordinator implements AppUpdateService {
         );
       }
     }
-    return _hotUpdates.checkForUpdate();
+    return const AppUpdateCheck.upToDate();
   }
 
   @override
-  Future<void> downloadUpdate() => _hotUpdates.downloadUpdate();
-
-  @override
-  Future<int?> readCurrentPatchNumber() => _hotUpdates.readCurrentPatchNumber();
+  Future<void> downloadUpdate() async {}
 }

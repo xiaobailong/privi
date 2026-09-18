@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 import 'app.dart';
 import 'application/providers.dart';
@@ -19,22 +18,17 @@ import 'core/app_build_info.dart';
 import 'data/services/android_external_url_launcher.dart';
 import 'data/services/github_app_release_source.dart';
 import 'data/services/platform_app_restart_service.dart';
-import 'data/services/shorebird_app_update_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final packageInfo = await PackageInfo.fromPlatform();
-  final hotUpdateService = ShorebirdAppUpdateService(
-    updater: ShorebirdUpdater(),
-  );
   final currentVersion = Version.parse(packageInfo.version);
   final AppReleaseSource releaseSource =
       GithubAppReleaseSource(client: http.Client());
   final appUpdateService = AppUpdateCoordinator(
     currentVersion: currentVersion,
     releaseSource: releaseSource,
-    hotUpdates: hotUpdateService,
   );
   final AppRestartService appRestartService =
       const PlatformAppRestartService();
@@ -43,7 +37,6 @@ Future<void> main() async {
   final appBuildInfo = AppBuildInfo(
     version: packageInfo.version,
     buildNumber: packageInfo.buildNumber,
-    patchNumber: await hotUpdateService.readCurrentPatchNumber(),
   );
   final prefs = await SharedPreferences.getInstance();
   final container = ProviderContainer(

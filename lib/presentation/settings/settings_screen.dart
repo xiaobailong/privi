@@ -29,11 +29,7 @@ class SettingsScreen extends ConsumerWidget {
     final backupBusy = ref.watch(
       vaultBackupControllerProvider.select((state) => state.busy),
     );
-    final versionAndPatch = [
-      appBuildInfo.versionAndBuild,
-      if (appBuildInfo.patchNumber case final patchNumber?)
-        context.l10n.patchLabel(patchNumber),
-    ].join(' · ');
+    final versionAndBuild = appBuildInfo.versionAndBuild;
     final notifier = ref.read(settingsControllerProvider.notifier);
 
     return Scaffold(
@@ -328,9 +324,9 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.info_outline),
             title: const Text(AppInfo.name),
             subtitle: Text(
-              'v$versionAndPatch · ${AppInfo.licenseShort}',
+              'v$versionAndBuild · ${AppInfo.licenseShort}',
             ),
-            onTap: () => _showAbout(context, ref, versionAndPatch),
+            onTap: () => _showAbout(context, ref, versionAndBuild),
           ),
           const AppUpdateTile(),
           ListTile(
