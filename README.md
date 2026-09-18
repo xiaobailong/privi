@@ -98,3 +98,9 @@ flutter build apk --release
 ├── settings.gradle.kts # Android 项目设置
 └── pubspec.yaml        # Flutter 项目配置
 ```
+
+## 感谢
+
+如果这个工具帮到了您，欢迎随意赞赏，无论多少都是对我最大的鼓励！
+
+![赞助](img/pay.jpg)

@@ -588,8 +588,6 @@ class GalleryService {
     }
     if (path == null) return const [];
 
-    // Android keeps its established over-fetch behavior. iOS scans raw mixed
-    // pages from the beginning so filtering media kinds cannot skip assets.
     final assets = _library.capabilities.filtersAssetTypesInDart
         ? await _filteredAssetPage(
             path,
@@ -597,10 +595,10 @@ class GalleryService {
             page: page,
             size: size,
           )
-        : await _library.assetPage(
+        : await _filteredAndroidAssetPage(
             path,
             page: page,
-            size: size + 40,
+            size: size,
           );
     final out = <GalleryAsset>[];
     for (final a in assets) {
@@ -646,6 +644,71 @@ class GalleryService {
       if (assets.length < rawPageSize) break;
     }
     return out;
+  }
+
+  /// Android path: loop raw pages so [size] valid assets are always collected
+  /// without skipping items between calls, even when excluded assets are mixed in.
+  Future<List<AssetEntity>> _filteredAndroidAssetPage(
+    AssetPathEntity path, {
+    required int page,
+    required int size,
+  }) async {
+    final targetStart = page * size;
+    final out = <AssetEntity>[];
+    var matched = 0;
+    final rawPageSize = math.max(size + 40, 100);
+    for (var rawPage = 0;; rawPage++) {
+      final assets = await _library.assetPage(
+        path,
+        page: rawPage,
+        size: rawPageSize,
+      );
+      if (assets.isEmpty) break;
+      for (final asset in assets) {
+        if (_isExcluded(asset)) continue;
+        if (matched++ < targetStart) continue;
+        out.add(asset);
+        if (out.length >= size) return out;
+      }
+      if (assets.length < rawPageSize) break;
+    }
+    return out;
+  }
+
+  /// Efficient single-pass collection of all asset IDs from a folder.
+  ///
+  /// Unlike [listAssets] which paginates with O(n²) re-scanning, this
+  /// streams through all raw pages exactly once and returns every matching id.
+  Future<List<String>> listAllAssetIds({
+    required String pathId,
+    required MediaKindFilter filter,
+  }) async {
+    final paths = await _paths(filter);
+    AssetPathEntity? path;
+    for (final pth in paths) {
+      if (pth.id == pathId) {
+        path = pth;
+        break;
+      }
+    }
+    if (path == null) return const [];
+
+    final ids = <String>[];
+    const rawPageSize = 240;
+    for (var rawPage = 0;; rawPage++) {
+      final assets = await _library.assetPage(
+        path,
+        page: rawPage,
+        size: rawPageSize,
+      );
+      if (assets.isEmpty) break;
+      for (final a in assets) {
+        if (_isExcluded(a) || !_matchesFilter(a, filter)) continue;
+        ids.add(a.id);
+      }
+      if (assets.length < rawPageSize) break;
+    }
+    return ids;
   }
 
   Future<AssetEntity?> entity(String id) => AssetEntity.fromId(id);

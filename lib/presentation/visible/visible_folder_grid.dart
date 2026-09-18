@@ -356,22 +356,10 @@ Future<void> _hideFolder({
   var imported = 0;
   List<ImportSource> resolvedSources = const [];
   try {
-    final ids = <String>[];
-    var page = 0;
-    while (true) {
-      if (import.isCancelRequested) break;
-      final batch = await gallery.listAssets(
-        pathId: folder.id,
-        filter: filter,
-        page: page,
-        size: 200,
-      );
-      if (batch.isEmpty) break;
-      ids.addAll(batch.map((a) => a.id));
-      if (batch.length < 200) break;
-      page++;
-      if (page > 200) break; // safety
-    }
+    final ids = await gallery.listAllAssetIds(
+      pathId: folder.id,
+      filter: filter,
+    );
     if (import.isCancelRequested) {
       if (context.mounted) {
         messenger.showSnackBar(
