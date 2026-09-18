@@ -52,18 +52,18 @@ coverage/
 app.*.symbols
 app.*.map.json
 
-# Android
-**/android/**/gradle-wrapper.jar
-**/android/.gradle
-**/android/captures/
-**/android/gradlew
-**/android/gradlew.bat
-**/android/local.properties
-**/android/**/GeneratedPluginRegistrant.java
-**/android/key.properties
-**/android/app/upload-keystore.jks
+# Android (project root is Android root)
+gradle-wrapper.jar
+/.gradle
+/captures/
+/gradlew
+/gradlew.bat
+/local.properties
+**/GeneratedPluginRegistrant.java
+key.properties
 *.jks
 *.keystore
+.cxx/
 
 # iOS / macOS (not a target, but ignore if generated)
 **/ios/Pods/

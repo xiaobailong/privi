@@ -7,7 +7,7 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Release signing: load android/key.properties when present (local + CI).
+// Release signing: load key.properties when present (local + CI).
 // Never commit key.properties or *.jks / *.keystore (see .gitignore).
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
@@ -76,7 +76,7 @@ kotlin {
 }
 
 flutter {
-    source = "../.."
+    source = ".."
 }
 
 dependencies {
