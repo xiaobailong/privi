@@ -3,18 +3,15 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../application/import/import_controller.dart';
-import '../../application/lock/lock_controller.dart';
 import '../../application/media/rating_controller.dart';
 import '../../application/player/external_player_coordinator.dart';
 import '../../application/providers.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
-import '../../data/services/video_frame_service.dart';
-import '../../domain/enums.dart';
+import '../../data/services/native_video_controller.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
 import '../common/keep_vault_unlocked.dart';
@@ -43,11 +40,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   bool _chrome = true;
   bool _imageZoomed = false;
   bool _programmaticPopAllowed = false;
-  VideoPlayerController? _video;
+  NativeVideoController? _video;
   String? _videoId;
   String? _completedForId;
   int _videoRequest = 0;
-  final _videoOps = VideoControllerQueue();
   DateTime? _ignoreAutoAdvanceUntil;
   VideoFitMode _fitMode = VideoFitMode.fit;
   double _playbackSpeed = 1;
@@ -77,10 +73,6 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     _videoId = null;
     _completedForId = null;
     if (c != null) {
-      try {
-        c.pause();
-      } catch (_) {}
-      // ignore: discarded_futures
       c.dispose();
     }
     unawaited(VideoSystemUi.restore());
@@ -126,7 +118,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   Future<void> _syncVideo() {
     final item = _current;
     final request = ++_videoRequest;
-    return _videoOps.enqueue(() => _syncVideoBody(request, item));
+    return _syncVideoBody(request, item);
   }
 
   Future<void> _syncVideoBody(int request, MediaItem item) async {
@@ -142,8 +134,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     final file = File(item.privatePath);
     if (!file.existsSync()) return;
     if (!mounted || request != _videoRequest) return;
-    final c = VideoPlayerController.file(file);
-    await c.initialize();
+    final c = await NativeVideoController.create(file.path);
     if (!mounted || request != _videoRequest || _current.id != item.id) {
       await c.dispose();
       return;
@@ -156,10 +147,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       await c.dispose();
       return;
     }
-    c.addListener(() {
+    c.onCompleted = () {
       if (!mounted) return;
-      _maybeAdvanceOnVideoEnd(c, item.id);
-    });
+      _onVideoEnded(item.id);
+    };
     setState(() {
       _video = c;
       _videoId = item.id;
@@ -173,34 +164,21 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     );
   }
 
-  void _maybeAdvanceOnVideoEnd(VideoPlayerController video, String itemId) {
+  void _onVideoEnded(String itemId) {
     if (!mounted) return;
-    final unlocked =
-        ref.read(lockControllerProvider).status == LockStatus.unlocked;
-    if (!shouldAdvanceFolderVideoOnEnd(
-      value: video.value,
-      looping: _looping,
-      vaultUnlocked: unlocked,
-      isCurrentItem: _current.id == itemId,
-      alreadyAdvanced: _completedForId == itemId,
-      ignoreUntil: _ignoreAutoAdvanceUntil,
-    )) {
-      return;
-    }
+    if (_looping) return;
+    final now = DateTime.now();
+    if (_ignoreAutoAdvanceUntil != null &&
+        !now.isAfter(_ignoreAutoAdvanceUntil!)) return;
     _completedForId = itemId;
-    final nextIndex = nextIndexAfterVideoEnd(
-      index: _index,
-      length: widget.items.length,
-      looping: _looping,
-      ended: true,
-    );
-    if (nextIndex == null) return;
+    final nextIndex = _index + 1;
+    if (nextIndex >= widget.items.length) return;
     unawaited(_showItem(nextIndex));
   }
 
   Future<void> _disposeVideo() {
     _videoRequest++;
-    return _videoOps.enqueue(_detachVideo);
+    return _detachVideo();
   }
 
   Future<void> _detachVideo() async {
@@ -209,12 +187,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     _videoId = null;
     _completedForId = null;
     if (c != null) {
-      try {
-        await c.pause();
-      } catch (_) {}
-      try {
-        await c.dispose();
-      } catch (_) {}
+      await c.dispose();
     }
     if (mounted) setState(() {});
   }
@@ -269,7 +242,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     unawaited(_playFromCurrentPosition(video));
   }
 
-  Future<void> _playFromCurrentPosition(VideoPlayerController video) async {
+  Future<void> _playFromCurrentPosition(NativeVideoController video) async {
     final value = video.value;
     if (value.isCompleted ||
         (value.duration > Duration.zero && value.position >= value.duration)) {
@@ -516,16 +489,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
         ),
       );
     }
-    return VideoGestureSurface(
-      controller: video,
-      seekSeconds: ref.watch(settingsControllerProvider).playerSeekSeconds,
+    return GestureDetector(
       onTap: _toggleChrome,
-      onUserSeek: _markUserSeek,
-      onPreviewFrameRequested: (position) => VideoFrameService().frameAtTime(
-        path: _current.privatePath,
-        position: position,
-      ),
-      child: VideoViewport(controller: video, fitMode: _fitMode),
+      child: NativeVideoViewport(controller: video, fitMode: _fitMode),
     );
   }
 
@@ -583,10 +549,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: ValueListenableBuilder<VideoPlayerValue>(
+      child: ValueListenableBuilder<NativeVideoValue>(
         valueListenable: video,
         builder: (context, value, _) {
-          return VideoBottomControls(
+          return NativeVideoBottomControls(
             value: value,
             landscape: landscape,
             fitMode: _fitMode,
@@ -599,8 +565,6 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
             onToggleOrientation: () => unawaited(_toggleOrientation(context)),
             onChooseFit: () => unawaited(_chooseFit()),
             onOpenSettings: () => unawaited(_openSettings()),
-            onPreviewFrameRequested: (position) => VideoFrameService()
-                .frameAtTime(path: item.privatePath, position: position),
           );
         },
       ),

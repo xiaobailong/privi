@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,9 +18,6 @@ import 'application/update/external_url_launcher.dart';
 import 'core/app_build_info.dart';
 import 'data/services/android_external_url_launcher.dart';
 import 'data/services/github_app_release_source.dart';
-import 'data/services/ios_app_release_source.dart';
-import 'data/services/ios_app_restart_service.dart';
-import 'data/services/ios_external_url_launcher.dart';
 import 'data/services/platform_app_restart_service.dart';
 import 'data/services/shorebird_app_update_service.dart';
 
@@ -33,20 +29,17 @@ Future<void> main() async {
     updater: ShorebirdUpdater(),
   );
   final currentVersion = Version.parse(packageInfo.version);
-  final AppReleaseSource releaseSource = Platform.isIOS
-      ? const IosAppReleaseSource()
-      : GithubAppReleaseSource(client: http.Client());
+  final AppReleaseSource releaseSource =
+      GithubAppReleaseSource(client: http.Client());
   final appUpdateService = AppUpdateCoordinator(
     currentVersion: currentVersion,
     releaseSource: releaseSource,
     hotUpdates: hotUpdateService,
   );
-  final AppRestartService appRestartService = Platform.isIOS
-      ? const IosAppRestartService()
-      : const PlatformAppRestartService();
-  final ExternalUrlLauncher externalUrlLauncher = Platform.isIOS
-      ? const IosExternalUrlLauncher()
-      : const AndroidExternalUrlLauncher();
+  final AppRestartService appRestartService =
+      const PlatformAppRestartService();
+  final ExternalUrlLauncher externalUrlLauncher =
+      const AndroidExternalUrlLauncher();
   final appBuildInfo = AppBuildInfo(
     version: packageInfo.version,
     buildNumber: packageInfo.buildNumber,

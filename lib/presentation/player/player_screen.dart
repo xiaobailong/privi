@@ -3,14 +3,13 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../application/media/rating_controller.dart';
 import '../../application/player/external_player_coordinator.dart';
 import '../../application/player/player_controller.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
-import '../../data/services/video_frame_service.dart';
+import '../../data/services/native_video_controller.dart';
 import '../../domain/models/media_item.dart';
 import '../common/keep_vault_unlocked.dart';
 import 'video_player_controls.dart';
@@ -20,8 +19,6 @@ typedef VideoFileProbe = Future<bool> Function(String path);
 
 Future<bool> _probeVideoFile(String path) => File(path).exists();
 
-/// Playlist player (built-in slideshow + video, external hand-off for VLC).
-/// See docs/02-design/screens/05-player.md.
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({
     super.key,
@@ -43,15 +40,8 @@ class PlayerScreen extends ConsumerStatefulWidget {
 }
 
 class _PlayerScreenState extends ConsumerState<PlayerScreen> {
-  VideoPlayerController? _video;
-  String? _videoItemId;
-  VideoPlayerController? _nextVideo;
-  String? _nextVideoId;
-  Future<void> _videoOperations = Future<void>.value();
-  int _videoRequest = 0;
-  int _preloadRequest = 0;
-  String? _requestedVideoItemId;
-  bool? _requestedVideoPlaying;
+  NativeVideoController? _nVideo;
+  String? _nVideoItemId;
   String? _videoError;
   String? _videoErrorItemId;
   String? _completedForId;
@@ -81,21 +71,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   @override
   void dispose() {
-    _videoRequest++;
-    _preloadRequest++;
-    final c = _video;
-    _video = null;
-    _videoItemId = null;
-    _completedForId = null;
-    if (c != null) {
-      unawaited(_disposeController(c));
-    }
-    final n = _nextVideo;
-    _nextVideo = null;
-    _nextVideoId = null;
-    if (n != null) {
-      unawaited(_disposeController(n));
-    }
+    _disposeNativeVideo();
     unawaited(VideoSystemUi.restore());
     super.dispose();
   }
@@ -115,8 +91,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   void _maybeLockOrientationToVideo() {
-    final video = _video;
-    final itemId = _videoItemId;
+    final video = _nVideo;
+    final itemId = _nVideoItemId;
     if (video == null || itemId == null || !video.value.isInitialized) return;
     if (_orientationLockedItemId == itemId) return;
     _orientationLockedItemId = itemId;
@@ -152,18 +128,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           .read(settingsControllerProvider.notifier)
           .setPlayerPlaybackSpeed(speed),
     );
-    final video = _video;
+    final video = _nVideo;
     if (video != null) unawaited(video.setPlaybackSpeed(speed));
   }
 
   void _setMuted(bool muted) {
     setState(() => _muted = muted);
-    final video = _video;
+    final video = _nVideo;
     if (video != null) unawaited(video.setVolume(muted ? 0 : 1));
   }
 
   Future<void> _seekTo(Duration position) async {
-    final video = _video;
+    final video = _nVideo;
     if (video != null) await video.seekTo(position);
   }
 
@@ -194,8 +170,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Future<void> _configureVideo(
-    VideoPlayerController controller, {
+  Future<void> _configureNativeVideo(
+    NativeVideoController controller, {
     required bool playing,
   }) async {
     await controller.setLooping(false);
@@ -208,52 +184,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
   }
 
-  Future<void> _enqueueVideoOperation(Future<void> Function() operation) {
-    final scheduled = _videoOperations.then((_) => operation());
-    _videoOperations = scheduled.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stackTrace) {
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            library: 'Privi video playback',
-          ),
-        );
-      },
-    );
-    return _videoOperations;
-  }
-
-  void _requestVideoSync(MediaItem? item, bool playing) {
-    _requestedVideoItemId = item?.id;
-    _requestedVideoPlaying = playing;
-    final request = ++_videoRequest;
-    _preloadRequest++;
-    unawaited(_enqueueVideoOperation(() => _syncVideo(request, item, playing)));
-  }
-
-  void _ensureVideoSync(MediaItem item, bool playing) {
-    if (_requestedVideoItemId == item.id && _requestedVideoPlaying == playing) {
-      return;
-    }
-    _requestVideoSync(item, playing);
-  }
-
-  bool _isCurrentVideoRequest(int request, String? itemId) {
-    if (!mounted || request != _videoRequest) return false;
-    return ref.read(playerControllerProvider).current?.id == itemId;
-  }
-
-  bool _isCurrentPreloadRequest(
-    int request, {
-    required String currentItemId,
-    required String nextItemId,
-  }) {
-    if (!mounted || request != _preloadRequest) return false;
-    final playlist = ref.read(playerControllerProvider).playlist;
-    return playlist?.current?.id == currentItemId &&
-        playlist?.peekNext()?.id == nextItemId;
+  Future<void> _disposeNativeVideo() async {
+    final c = _nVideo;
+    _nVideo = null;
+    _nVideoItemId = null;
+    _completedForId = null;
+    if (c != null) await c.dispose();
   }
 
   void _clearVideoError() {
@@ -264,42 +200,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     });
   }
 
-  void _showVideoError(
-    int request,
-    String itemId,
-    Object error,
-    StackTrace stackTrace,
-  ) {
-    debugPrint('video playback failed for $itemId: $error\n$stackTrace');
-    if (!_isCurrentVideoRequest(request, itemId)) return;
-    setState(() {
-      _videoError = error.toString();
-      _videoErrorItemId = itemId;
-    });
-  }
-
-  Future<void> _syncVideo(int request, MediaItem? item, bool playing) async {
-    final itemId = item?.id;
-    if (!_isCurrentVideoRequest(request, itemId)) return;
-    _clearVideoError();
-
-    if (item == null || !item.isVideo) {
-      await _disposeVideo();
-      if (!_isCurrentVideoRequest(request, itemId)) return;
-      await _disposeNextVideo();
-      _clearOrientationLock();
-      return;
-    }
+  Future<void> _loadVideo(MediaItem item, bool playing) async {
     final external = ref.read(settingsControllerProvider).playerExternal &&
         ref.read(externalPlayerCoordinatorProvider).supported;
     if (external) {
-      await _disposeVideo();
-      if (!_isCurrentVideoRequest(request, itemId)) return;
-      await _disposeNextVideo();
+      await _disposeNativeVideo();
       return;
     }
-    if (_videoItemId == item.id && _video != null) {
-      final currentVideo = _video!;
+
+    _clearVideoError();
+
+    // Already showing the right video
+    if (_nVideoItemId == item.id && _nVideo != null) {
+      final currentVideo = _nVideo!;
       try {
         if (playing && !currentVideo.value.isPlaying) {
           if (_completedForId == item.id) {
@@ -312,221 +225,65 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           await currentVideo.pause();
         }
       } catch (error, stackTrace) {
-        _showVideoError(request, item.id, error, stackTrace);
-        return;
+        debugPrint('video control failed for ${item.id}: $error\n$stackTrace');
+        setState(() {
+          _videoError = error.toString();
+          _videoErrorItemId = item.id;
+        });
       }
-      if (_isCurrentVideoRequest(request, item.id)) _schedulePreload();
       return;
     }
 
-    // Promote preloaded controller for seamless advance (shuffle / next).
-    if (_nextVideoId == item.id && _nextVideo != null) {
-      final previous = _video;
-      final candidate = _nextVideo!;
-      _nextVideo = null;
-      _nextVideoId = null;
-      _completedForId = null;
-      try {
-        if (playing) await candidate.seekTo(Duration.zero);
-        if (!_isCurrentVideoRequest(request, item.id)) {
-          await _disposeController(candidate);
-          return;
-        }
-        await _configureVideo(candidate, playing: playing);
-      } catch (error, stackTrace) {
-        await _disposeController(candidate);
-        _showVideoError(request, item.id, error, stackTrace);
-        return;
-      }
-      if (!_isCurrentVideoRequest(request, item.id)) {
-        await _disposeController(candidate);
-        return;
-      }
-      candidate.addListener(() {
-        if (!mounted) return;
-        _maybeAdvanceOnVideoEnd(candidate, item.id);
-      });
-      setState(() {
-        _video = candidate;
-        _videoItemId = item.id;
-      });
-      if (previous != null) await _disposeController(previous);
-      if (_isCurrentVideoRequest(request, item.id)) _schedulePreload();
-      return;
-    }
+    // Need to load a new video
+    await _disposeNativeVideo();
 
-    await _disposeNextVideo();
-    if (!_isCurrentVideoRequest(request, item.id)) return;
-    await _disposeVideo();
-    if (!_isCurrentVideoRequest(request, item.id)) return;
     final file = File(item.privatePath);
     if (!await widget.videoFileProbe(item.privatePath)) {
-      _showVideoError(
-        request,
-        item.id,
-        StateError('Video file does not exist: ${item.privatePath}'),
-        StackTrace.current,
-      );
-      return;
-    }
-    if (!_isCurrentVideoRequest(request, item.id)) return;
-
-    final candidate = VideoPlayerController.file(file);
-    try {
-      await candidate.initialize();
-      if (!_isCurrentVideoRequest(request, item.id)) {
-        await _disposeController(candidate);
-        return;
-      }
-      await _configureVideo(candidate, playing: playing);
-    } catch (error, stackTrace) {
-      await _disposeController(candidate);
-      _showVideoError(request, item.id, error, stackTrace);
-      return;
-    }
-    if (!_isCurrentVideoRequest(request, item.id)) {
-      await _disposeController(candidate);
-      return;
-    }
-    candidate.addListener(() {
       if (!mounted) return;
-      _maybeAdvanceOnVideoEnd(candidate, item.id);
-    });
-    setState(() {
-      _video = candidate;
-      _videoItemId = item.id;
-    });
-    _schedulePreload();
-  }
+      setState(() {
+        _videoError = 'Video file does not exist: ${item.privatePath}';
+        _videoErrorItemId = item.id;
+      });
+      return;
+    }
 
-  Future<void> _disposeController(VideoPlayerController controller) async {
     try {
-      await controller.pause();
-    } catch (error, stackTrace) {
-      debugPrint('pause video during disposal failed: $error\n$stackTrace');
-    }
-    try {
-      await controller.dispose();
-    } catch (error, stackTrace) {
-      debugPrint('dispose video failed: $error\n$stackTrace');
-    }
-  }
-
-  Future<void> _disposeVideo() async {
-    final c = _video;
-    _video = null;
-    _videoItemId = null;
-    _completedForId = null;
-    if (c != null) await _disposeController(c);
-  }
-
-  Future<void> _disposeNextVideo() async {
-    final c = _nextVideo;
-    _nextVideo = null;
-    _nextVideoId = null;
-    if (c != null) await _disposeController(c);
-  }
-
-  void _schedulePreload() {
-    final request = ++_preloadRequest;
-    unawaited(_enqueueVideoOperation(() => _preloadNext(request)));
-  }
-
-  /// Warm the next playlist video so shuffle advances with less black-screen gap.
-  Future<void> _preloadNext(int request) async {
-    if (!mounted || request != _preloadRequest) return;
-    final ui = ref.read(playerControllerProvider);
-    final pl = ui.playlist;
-    final currentItemId = pl?.current?.id;
-    if (pl == null || !pl.hasNext) {
-      await _disposeNextVideo();
-      return;
-    }
-    final nextItem = pl.peekNext();
-    if (nextItem == null || !nextItem.isVideo) {
-      await _disposeNextVideo();
-      return;
-    }
-    if (currentItemId == null) return;
-    if (_nextVideoId == nextItem.id && _nextVideo != null) return;
-
-    await _disposeNextVideo();
-    if (!_isCurrentPreloadRequest(
-      request,
-      currentItemId: currentItemId,
-      nextItemId: nextItem.id,
-    )) {
-      return;
-    }
-    final external = ref.read(settingsControllerProvider).playerExternal &&
-        ref.read(externalPlayerCoordinatorProvider).supported;
-    if (external) return;
-
-    final file = File(nextItem.privatePath);
-    if (!await widget.videoFileProbe(nextItem.privatePath)) return;
-    if (!_isCurrentPreloadRequest(
-      request,
-      currentItemId: currentItemId,
-      nextItemId: nextItem.id,
-    )) {
-      return;
-    }
-    final candidate = VideoPlayerController.file(file);
-    try {
-      await candidate.initialize();
-      if (!_isCurrentPreloadRequest(
-        request,
-        currentItemId: currentItemId,
-        nextItemId: nextItem.id,
-      )) {
-        await _disposeController(candidate);
+      final controller = await NativeVideoController.create(item.privatePath);
+      if (!mounted) {
+        await controller.dispose();
         return;
       }
-      await candidate.pause();
-      await candidate.setVolume(_muted ? 0 : 1);
-      await candidate.setPlaybackSpeed(_playbackSpeed);
-      if (!_isCurrentPreloadRequest(
-        request,
-        currentItemId: currentItemId,
-        nextItemId: nextItem.id,
-      )) {
-        await _disposeController(candidate);
-        return;
-      }
-      _nextVideo = candidate;
-      _nextVideoId = nextItem.id;
+      await _configureNativeVideo(controller, playing: playing);
+      controller.onCompleted = () {
+        if (!mounted) return;
+        _completedForId = item.id;
+        ref.read(playerControllerProvider.notifier).onItemCompleted();
+      };
+      controller.onError = () {
+        if (!mounted) return;
+        setState(() {
+          _videoError = controller.value.errorDescription;
+          _videoErrorItemId = item.id;
+        });
+      };
+      setState(() {
+        _nVideo = controller;
+        _nVideoItemId = item.id;
+      });
     } catch (error, stackTrace) {
-      await _disposeController(candidate);
-      debugPrint(
-        'preload next video failed for ${nextItem.id}: '
-        '$error\n$stackTrace',
-      );
+      if (!mounted) return;
+      debugPrint('video load failed for ${item.id}: $error\n$stackTrace');
+      setState(() {
+        _videoError = error.toString();
+        _videoErrorItemId = item.id;
+      });
     }
-  }
-
-  Future<void> _cancelVideoOperationsAndDispose() {
-    _videoRequest++;
-    _preloadRequest++;
-    return _enqueueVideoOperation(() async {
-      await _disposeVideo();
-      await _disposeNextVideo();
-    });
   }
 
   void _toggleChrome() => setState(() => _chrome = !_chrome);
 
   void _hideChrome() {
     if (_chrome) setState(() => _chrome = false);
-  }
-
-  void _maybeAdvanceOnVideoEnd(VideoPlayerController c, String itemId) {
-    if (!mounted) return;
-    if (!ref.read(playerControllerProvider).playing) return;
-    if (_completedForId == itemId) return;
-    if (!videoPlaybackEnded(c.value)) return;
-    _completedForId = itemId;
-    // ignore: discarded_futures
-    ref.read(playerControllerProvider.notifier).onItemCompleted();
   }
 
   void _exitPlayer() {
@@ -536,8 +293,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _chrome = false;
       _programmaticPopAllowed = true;
     });
-    // PopScope's canPop value is updated by the rebuild above. Wait for that
-    // frame before issuing the programmatic pop from the visible back button.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) Navigator.of(context).pop();
     });
@@ -550,24 +305,34 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final pl = ui.playlist;
     final landscape = _isLandscape(context);
     final builtInVideo = item?.isVideo == true &&
-        _video != null &&
-        _videoItemId == item?.id &&
-        _video!.value.isInitialized;
+        _nVideo != null &&
+        _nVideoItemId == item?.id &&
+        _nVideo!.value.isInitialized;
     final immersive = landscape && builtInVideo;
     _syncSystemUi(immersive);
     if (builtInVideo) {
       _maybeLockOrientationToVideo();
     }
 
-    // Keep video engine in sync with playlist cursor.
+    // Keep video engine in sync with playlist cursor
     ref.listen(playerControllerProvider, (prev, next) {
-      _requestVideoSync(next.current, next.playing);
+      if (next.current?.id != prev.current?.id) {
+        if (next.current?.isVideo == true) {
+          _loadVideo(next.current!, next.playing);
+        } else {
+          _disposeNativeVideo();
+        }
+      } else if (next.playing != prev.playing && next.current?.isVideo == true) {
+        final v = _nVideo;
+        if (v != null && v.value.isInitialized) {
+          if (next.playing) {
+            unawaited(v.play());
+          } else {
+            unawaited(v.pause());
+          }
+        }
+      }
     });
-    if (item?.isVideo == true &&
-        _videoItemId != item?.id &&
-        _videoErrorItemId != item?.id) {
-      _ensureVideoSync(item!, ui.playing);
-    }
 
     return KeepVaultUnlocked(
       child: PopScope(
@@ -578,7 +343,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             return;
           }
           ref.read(playerControllerProvider.notifier).stop();
-          await _cancelVideoOperationsAndDispose();
+          await _disposeNativeVideo();
         },
         child: AutoHideVideoControls(
           enabled: item?.isVideo == true,
@@ -603,7 +368,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 if (_chrome)
                   _topBar(ui, pl?.positionDisplay ?? 0, pl?.length ?? 0),
                 if (_chrome && builtInVideo)
-                  _videoBottomBar(ui, landscape)
+                  _nVideoBottomBar(ui, landscape)
                 else if (_chrome)
                   _bottomBar(ui, landscape),
               ],
@@ -675,10 +440,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ),
                 const SizedBox(height: 16),
                 FilledButton(
-                  onPressed: () {
-                    _clearVideoError();
-                    _requestVideoSync(item, ui.playing);
-                  },
+                  onPressed: () => _loadVideo(item, ui.playing),
                   child: Text(context.l10n.retry),
                 ),
               ],
@@ -687,8 +449,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       );
     }
-    final c = _video;
-    if (c == null || _videoItemId != item.id || !c.value.isInitialized) {
+    final c = _nVideo;
+    if (c == null || _nVideoItemId != item.id || !c.value.isInitialized) {
       return GestureDetector(
         onTap: _toggleChrome,
         child: const Center(
@@ -696,15 +458,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       );
     }
-    return VideoGestureSurface(
-      controller: c,
-      seekSeconds: ref.watch(settingsControllerProvider).playerSeekSeconds,
+    return GestureDetector(
       onTap: _toggleChrome,
-      onPreviewFrameRequested: (position) => VideoFrameService().frameAtTime(
-        path: item.privatePath,
-        position: position,
-      ),
-      child: VideoViewport(controller: c, fitMode: _fitMode),
+      child: NativeVideoViewport(controller: c, fitMode: _fitMode),
     );
   }
 
@@ -725,7 +481,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ),
                 Expanded(
                   child: Text(
-                    '$title · $pos/$total',
+                    '$title \u00b7 $pos/$total',
                     style: const TextStyle(color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -740,7 +496,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _bottomBar(PlayerUiState ui, bool landscape) {
     final pl = ui.playlist;
-
     return Align(
       alignment: Alignment.bottomCenter,
       child: SafeArea(
@@ -820,19 +575,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _videoBottomBar(PlayerUiState ui, bool landscape) {
-    final video = _video;
+  Widget _nVideoBottomBar(PlayerUiState ui, bool landscape) {
+    final video = _nVideo;
     final playlist = ui.playlist;
-    final item = ui.current;
     if (video == null || !video.value.isInitialized) {
       return const SizedBox.shrink();
     }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: ValueListenableBuilder<VideoPlayerValue>(
+      child: ValueListenableBuilder<NativeVideoValue>(
         valueListenable: video,
         builder: (context, value, _) {
-          return VideoBottomControls(
+          return NativeVideoBottomControls(
             value: value,
             landscape: landscape,
             fitMode: _fitMode,
@@ -848,12 +602,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             onToggleOrientation: () => unawaited(_toggleOrientation(context)),
             onChooseFit: () => unawaited(_chooseFit()),
             onOpenSettings: () => unawaited(_openSettings(ui)),
-            onPreviewFrameRequested: item == null
-                ? null
-                : (position) => VideoFrameService().frameAtTime(
-                      path: item.privatePath,
-                      position: position,
-                    ),
           );
         },
       ),

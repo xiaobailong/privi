@@ -4,14 +4,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:video_player/video_player.dart';
 
-import '../../application/lock/lock_controller.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../data/services/gallery_service.dart';
-import '../../data/services/video_frame_service.dart';
-import '../../domain/enums.dart';
+import '../../data/services/native_video_controller.dart';
 import '../common/keep_vault_unlocked.dart';
 import '../common/zoomable_media_image.dart';
 import '../player/video_player_controls.dart';
@@ -44,7 +41,7 @@ class GalleryPreviewScreen extends ConsumerStatefulWidget {
 
 class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
   late final PageController _page;
-  VideoPlayerController? _video;
+  NativeVideoController? _video;
   File? _file;
   String? _error;
   String? _completedForId;
@@ -53,7 +50,6 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
   bool _imageZoomed = false;
   late int _index;
   int _loadRequest = 0;
-  final _videoOps = VideoControllerQueue();
   DateTime? _ignoreAutoAdvanceUntil;
   bool _programmaticPopAllowed = false;
   bool _muted = false;
@@ -80,7 +76,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
 
   Future<void> _loadCurrent() {
     final request = ++_loadRequest;
-    return _videoOps.enqueue(() => _loadCurrentBody(request));
+    return _loadCurrentBody(request);
   }
 
   Future<void> _loadCurrentBody(int request) async {
@@ -104,8 +100,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
         return;
       }
       if (item.isVideo) {
-        final c = VideoPlayerController.file(file);
-        await c.initialize();
+        final c = await NativeVideoController.create(file.path);
         if (!mounted || request != _loadRequest) {
           await c.dispose();
           return;
@@ -118,10 +113,10 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
           await c.dispose();
           return;
         }
-        c.addListener(() {
+        c.onCompleted = () {
           if (!mounted) return;
-          _maybeAdvanceOnVideoEnd(c, item.id);
-        });
+          _onNativeVideoEnded(item.id);
+        };
         setState(() {
           _video = c;
           _file = file;
@@ -180,28 +175,15 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
     );
   }
 
-  void _maybeAdvanceOnVideoEnd(VideoPlayerController video, String itemId) {
+  void _onNativeVideoEnded(String itemId) {
     if (!mounted) return;
-    final unlocked =
-        ref.read(lockControllerProvider).status == LockStatus.unlocked;
-    if (!shouldAdvanceFolderVideoOnEnd(
-      value: video.value,
-      looping: _looping,
-      vaultUnlocked: unlocked,
-      isCurrentItem: _current.id == itemId,
-      alreadyAdvanced: _completedForId == itemId,
-      ignoreUntil: _ignoreAutoAdvanceUntil,
-    )) {
-      return;
-    }
+    if (_looping) return;
+    final now = DateTime.now();
+    if (_ignoreAutoAdvanceUntil != null &&
+        !now.isAfter(_ignoreAutoAdvanceUntil!)) return;
     _completedForId = itemId;
-    final nextIndex = nextIndexAfterVideoEnd(
-      index: _index,
-      length: widget.items.length,
-      looping: _looping,
-      ended: true,
-    );
-    if (nextIndex == null) return;
+    final nextIndex = _index + 1;
+    if (nextIndex >= widget.items.length) return;
     unawaited(_showItem(nextIndex));
   }
 
@@ -209,14 +191,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
     final c = _video;
     _video = null;
     _completedForId = null;
-    if (c != null) {
-      try {
-        await c.pause();
-      } catch (_) {}
-      try {
-        await c.dispose();
-      } catch (_) {}
-    }
+    if (c != null) await c.dispose();
   }
 
   @override
@@ -226,10 +201,6 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
     _video = null;
     _completedForId = null;
     if (c != null) {
-      try {
-        c.pause();
-      } catch (_) {}
-      // ignore: discarded_futures
       c.dispose();
     }
     unawaited(VideoSystemUi.restore());
@@ -306,7 +277,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
     unawaited(_playFromCurrentPosition(video));
   }
 
-  Future<void> _playFromCurrentPosition(VideoPlayerController video) async {
+  Future<void> _playFromCurrentPosition(NativeVideoController video) async {
     final value = video.value;
     if (value.isCompleted ||
         (value.duration > Duration.zero && value.position >= value.duration)) {
@@ -433,16 +404,9 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
       );
     }
     if (_current.isVideo && video != null && video.value.isInitialized) {
-      return VideoGestureSurface(
-        controller: video,
-        seekSeconds: ref.watch(settingsControllerProvider).playerSeekSeconds,
+      return GestureDetector(
         onTap: _toggleChrome,
-        onUserSeek: _markUserSeek,
-        onPreviewFrameRequested: (position) => VideoFrameService().frameAtTime(
-          path: _file!.path,
-          position: position,
-        ),
-        child: VideoViewport(controller: video, fitMode: _fitMode),
+        child: NativeVideoViewport(controller: video, fitMode: _fitMode),
       );
     }
     if (_file != null && !_current.isVideo) {
@@ -501,9 +465,9 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
     final video = _video!;
     return Align(
       alignment: Alignment.bottomCenter,
-      child: ValueListenableBuilder<VideoPlayerValue>(
+      child: ValueListenableBuilder<NativeVideoValue>(
         valueListenable: video,
-        builder: (context, value, _) => VideoBottomControls(
+        builder: (context, value, _) => NativeVideoBottomControls(
           value: value,
           landscape: landscape,
           fitMode: _fitMode,
@@ -516,8 +480,6 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
           onToggleOrientation: () => unawaited(_toggleOrientation(context)),
           onChooseFit: () => unawaited(_chooseFit()),
           onOpenSettings: () => unawaited(_openSettings()),
-          onPreviewFrameRequested: (position) => VideoFrameService()
-              .frameAtTime(path: _file!.path, position: position),
         ),
       ),
     );

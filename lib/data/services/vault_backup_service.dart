@@ -51,7 +51,7 @@ class VaultBackupService implements VaultBackupOperations {
   final Uuid _uuid;
   final bool _usePrivateMediaStorage;
 
-  String get _platformName => _usePrivateMediaStorage ? 'ios' : 'android';
+  String get _platformName => 'android';
 
   @override
   Future<VaultBackupResult> exportToDirectory(

@@ -12,6 +12,7 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.view.TextureRegistry
 import java.util.concurrent.Executors
 
 /**
@@ -23,6 +24,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val ioExecutor = Executors.newFixedThreadPool(3)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var externalPlayer: ExternalPlayerHandler? = null
+    private val videoPlayers = mutableMapOf<Long, VideoPlayerHandler>()
 
     private fun <T> runIo(result: MethodChannel.Result, block: () -> T) {
         ioExecutor.execute {
@@ -231,11 +233,97 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        val textures = flutterEngine.renderer ?: return
+        val videoChannel = MethodChannel(messenger, "com.privi.app/video_player")
+        videoChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "create" -> {
+                    val filePath = call.argument<String>("filePath")
+                    if (filePath.isNullOrEmpty()) {
+                        result.error("bad_args", "filePath is required", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val textureEntry = textures.createSurfaceTexture()
+                        val handler = VideoPlayerHandler(
+                            this,
+                            textureEntry,
+                        ) { event, data ->
+                            mainHandler.post {
+                                videoChannel.invokeMethod(event, data)
+                            }
+                        }
+                        handler.initialize(filePath)
+                        videoPlayers[textureEntry.id()] = handler
+                        result.success(textureEntry.id())
+                    } catch (e: Exception) {
+                        result.error("create_error", e.message, null)
+                    }
+                }
+                "dispose" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    if (textureId == null) {
+                        result.error("bad_args", "textureId is required", null)
+                        return@setMethodCallHandler
+                    }
+                    videoPlayers.remove(textureId)?.release()
+                    result.success(null)
+                }
+                "play" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    videoPlayers[textureId]?.play()
+                    result.success(null)
+                }
+                "pause" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    videoPlayers[textureId]?.pause()
+                    result.success(null)
+                }
+                "seekTo" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    val positionMs = call.argument<Number>("positionMs")?.toLong()
+                    if (positionMs != null) {
+                        videoPlayers[textureId]?.seekTo(positionMs)
+                    }
+                    result.success(null)
+                }
+                "setVolume" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    val volume = call.argument<Double>("volume") ?: 1.0
+                    videoPlayers[textureId]?.setVolume(volume)
+                    result.success(null)
+                }
+                "setPlaybackSpeed" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    val speed = call.argument<Double>("speed") ?: 1.0
+                    videoPlayers[textureId]?.setPlaybackSpeed(speed)
+                    result.success(null)
+                }
+                "getPosition" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    val pos = videoPlayers[textureId]?.getPosition() ?: 0L
+                    result.success(pos)
+                }
+                "getDuration" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    val dur = videoPlayers[textureId]?.getDuration() ?: 0L
+                    result.success(dur)
+                }
+                "isPlaying" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    result.success(videoPlayers[textureId]?.isPlaying() ?: false)
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onDestroy() {
         externalPlayer?.dispose()
         externalPlayer = null
+        videoPlayers.values.forEach { it.release() }
+        videoPlayers.clear()
         ioExecutor.shutdown()
         super.onDestroy()
     }

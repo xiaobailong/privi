@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -26,12 +24,6 @@ import '../data/services/platform/android_share_source_stager.dart';
 import '../data/services/platform/android_vault_access_adapter.dart';
 import '../data/services/platform/android_vault_workflow_adapter.dart';
 import '../data/services/platform/android_visible_library_adapter.dart';
-import '../data/services/platform/ios_photos_vault_workflow_adapter.dart';
-import '../data/services/platform/ios_photos_visible_library_adapter.dart';
-import '../data/services/platform/ios_privacy_shield_adapter.dart';
-import '../data/services/platform/ios_share_source_stager.dart';
-import '../data/services/platform/ios_vault_access_adapter.dart';
-import '../data/services/platform/unsupported_external_player_gateway.dart';
 import '../data/services/security_service.dart';
 import '../data/services/thumbnail_cache.dart';
 import '../data/services/vault_backup_service.dart';
@@ -86,7 +78,6 @@ final externalUrlLauncherProvider = Provider<ExternalUrlLauncher>((ref) {
 });
 
 final externalPlayerGatewayProvider = Provider<ExternalPlayerGateway>((ref) {
-  if (Platform.isIOS) return const UnsupportedExternalPlayerGateway();
   final gateway = MethodChannelExternalPlayerGateway();
   ref.onDispose(gateway.dispose);
   return gateway;
@@ -99,13 +90,10 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 });
 
 final vaultStorageProvider = Provider<VaultStorageService>((ref) {
-  return VaultStorageService(initializeSharedRoot: !Platform.isIOS);
+  return VaultStorageService(initializeSharedRoot: true);
 });
 
 final shareSourceStagerProvider = Provider<ShareSourceStager>((ref) {
-  if (Platform.isIOS) {
-    return IosShareSourceStager(storage: ref.watch(vaultStorageProvider));
-  }
   return const AndroidShareSourceStager();
 });
 
@@ -114,7 +102,6 @@ final securityServiceProvider = Provider<SecurityService>((ref) {
 });
 
 final privacyShieldProvider = Provider<PrivacyShield>((ref) {
-  if (Platform.isIOS) return IosPrivacyShieldAdapter();
   return AndroidPrivacyShieldAdapter();
 });
 
@@ -129,7 +116,6 @@ final mediaStoreServiceProvider = Provider<MediaStoreService>((ref) {
 /// Shared-storage permission is an Android-only capability. Presentation code
 /// uses this seam instead of constructing MediaRenameService directly.
 final vaultAccessProvider = Provider<VaultAccess>((ref) {
-  if (Platform.isIOS) return const IosVaultAccessAdapter();
   return AndroidVaultAccessAdapter(MediaRenameService());
 });
 
@@ -140,9 +126,6 @@ final assetGatewayProvider = Provider<AssetGateway>((ref) {
 /// Read-only system-library adapter selected once at the composition root.
 final visibleLibraryProvider = Provider<VisibleLibrary>((ref) {
   final assets = ref.watch(assetGatewayProvider);
-  if (Platform.isIOS) {
-    return IosPhotosVisibleLibraryAdapter(assets: assets);
-  }
   return AndroidVisibleLibraryAdapter(
     assets: assets,
     files: const IoFileSystemGateway(),
@@ -197,14 +180,6 @@ final vaultWorkflowProvider = Provider<VaultWorkflow>((ref) {
   final storage = ref.watch(vaultStorageProvider);
   final media = ref.watch(mediaRepositoryProvider);
   final albums = ref.watch(albumRepositoryProvider);
-  if (Platform.isIOS) {
-    return IosPhotosVaultWorkflowAdapter(
-      storage: storage,
-      media: media,
-      albums: albums,
-      thumbnailCache: ref.watch(mediaThumbnailCacheProvider),
-    );
-  }
   final android = ImportService(
     storage: storage,
     mediaRepository: media,
@@ -227,7 +202,7 @@ final vaultBackupServiceProvider = Provider<VaultBackupOperations>((ref) {
     media: ref.watch(mediaRepositoryProvider),
     albums: ref.watch(albumRepositoryProvider),
     storage: ref.watch(vaultStorageProvider),
-    usePrivateMediaStorage: Platform.isIOS,
+    usePrivateMediaStorage: false,
   );
 });
 
@@ -238,7 +213,7 @@ final maintenanceServiceProvider = Provider<MaintenanceService>((ref) {
     storage: ref.watch(vaultStorageProvider),
     albums: ref.watch(albumRepositoryProvider),
     import: ref.watch(importServiceProvider),
-    sharedStorageEnabled: !Platform.isIOS,
+    sharedStorageEnabled: true,
   );
 });
 
