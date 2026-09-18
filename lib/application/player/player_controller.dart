@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/app_logger.dart';
 import '../../domain/models/media_item.dart';
 import '../../domain/models/playlist.dart';
 import '../settings/settings_controller.dart';
@@ -51,6 +52,8 @@ class PlayerController extends Notifier<PlayerUiState> {
     if (items.isEmpty) return;
     final useShuffle =
         shuffle ?? ref.read(settingsControllerProvider).shuffleDefault;
+    AppLogger.i('PlayerController',
+        'Starting playlist: ${items.length} items, shuffle=$useShuffle');
     final pl = Playlist(items: items, shuffle: useShuffle);
     if (startItemId != null) pl.jumpToItemId(startItemId);
     state = PlayerUiState(playlist: pl, playing: true);
@@ -88,10 +91,14 @@ class PlayerController extends Notifier<PlayerUiState> {
   Future<void> next() async {
     final pl = state.playlist;
     if (pl == null || !pl.hasNext) {
+      AppLogger.i('PlayerController', 'Playlist ended, no more items');
       state = state.copyWith(playing: false);
       return;
     }
     pl.next();
+    final current = pl.current;
+    AppLogger.i('PlayerController',
+        'Next item: ${current?.id ?? 'null'} (${pl.positionDisplay}/${pl.length})');
     state =
         state.copyWith(playlist: pl, playing: true, externalHandedOff: false);
     await _onItemEntered();
@@ -109,6 +116,8 @@ class PlayerController extends Notifier<PlayerUiState> {
   /// Called when built-in video finishes or slideshow timer fires.
   Future<void> onItemCompleted() async {
     if (!state.playing) return;
+    AppLogger.i('PlayerController',
+        'Item completed, advancing to next');
     await next();
   }
 
@@ -126,10 +135,13 @@ class PlayerController extends Notifier<PlayerUiState> {
     if (item == null || !state.playing) return;
 
     final settings = ref.read(settingsControllerProvider);
+    AppLogger.d('PlayerController',
+        'Item entered: ${item.id}, isVideo=${item.isVideo}, external=${settings.playerExternal}');
 
     if (item.isVideo && settings.playerExternal) {
       final external = ref.read(externalPlayerCoordinatorProvider);
       if (external.supported) {
+        AppLogger.i('PlayerController', 'Handing off to external player');
         final ok = await external.open(
           filePath: item.privatePath,
           mimeType: item.mimeType,

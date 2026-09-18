@@ -45,6 +45,62 @@ Android 原生代码、插件、权限、内置资源和 Flutter 引擎相关的
 
 ---
 
+## 日志与故障排查
+
+Privi 运行时会自动将关键环节的日志写入本地文件，方便排查问题。
+
+### 日志位置
+
+```
+/storage/emulated/0/Download/Privi/logs/
+```
+
+日志文件按天分卷：`privi_log_YYYY-MM-DD.txt`
+
+### 自动清理
+
+应用启动时自动删除 **7 天前**的日志文件，无需手动管理。
+
+### 日志级别
+
+| 级别 | 含义 | 典型场景 |
+|------|------|---------|
+| DEBUG | 调试信息 | 播放/暂停操作、状态切换、页面跳转 |
+| INFO | 关键流程 | 应用启动、导入开始/完成、视频加载、播放列表切换 |
+| WARN | 警告 | 非关键异常、降级处理 |
+| ERROR | 错误 | 播放失败、导入失败、文件丢失（含完整堆栈） |
+
+### 日志覆盖的关键环节
+
+- **应用生命周期**：启动、版本号、关闭
+- **视频播放器**：`PlayerScreen` 和 `VideoPlayer` 标签详细记录加载、播放、暂停、完成、错误，以及原生 ExoPlayer 的状态变化；`PlayerController` 记录播放列表切换和连续播放逻辑
+- **导入流程**：开始导入、每批传输结果、最终统计（成功/跳过/失败）
+- **原生层**：Android Kotlin 侧的 ExoPlayer 初始化、准备、缓冲区、错误码、释放等完整状态机
+
+### 排查视频播放问题
+
+如果内置播放器异常或连续播放中断，按以下步骤提取日志：
+
+1. 复现问题后立即用文件管理器打开 `/storage/emulated/0/Download/Privi/logs/`
+2. 打开当天 `privi_log_*.txt` 文件
+3. 搜索以下标签定位问题：
+
+| 搜索关键词 | 对应问题 |
+|-----------|---------|
+| `VideoPlayer` | 原生播放器创建、初始化、错误 |
+| `PlayerScreen` | UI 层视频加载、控制、文件缺失 |
+| `PlayerController` | 播放列表切换、连续播放逻辑 |
+| `PriviVideoPlayer` | Kotlin ExoPlayer 状态机、播放错误码 |
+| `PriviMain` | 原生通道创建/销毁 |
+
+常见问题定位示例：
+
+- **黑屏/无声**：搜索 `Playback error` → 查看 error code 和 message
+- **连播中断**：搜索 `Item completed` + `Next item` → 检查是否正常切换到下一首
+- **视频加载失败**：搜索 `Video load failed` + `Video file not found` → 确认文件路径
+
+---
+
 ## 开发
 
 ### 前置要求
@@ -77,6 +133,88 @@ flutter run
 flutter build apk --release
 ```
 
+### 一键构建（build.bat）
+
+项目根目录提供了 `build.bat` 一键构建脚本，自动完成版本递增、代码生成、依赖安装和 APK 编译：
+
+```bash
+# 完整构建（递增版本号 → 代码生成 → 编译 → 输出带版本名的 APK）
+build.bat
+
+# 快速构建（跳过代码生成，仅递增版本并编译）
+build.bat fast
+
+# 仅运行代码生成（l10n + Drift）
+build.bat codegen
+
+# 清理所有构建产物
+build.bat clean
+```
+
+#### 版本号管理
+
+每次执行 `build.bat` 或 `build.bat fast` 都会**自动递增 `pubspec.yaml` 中的 build number**：
+
+```
+version: 1.0.25+30   →   version: 1.0.25+31
+             ↑                              ↑
+        build name                    build code 自动 +1
+```
+
+构建成功后输出的 APK 文件名包含完整版本号：
+
+```
+privi-1.0.25+31.apk
+```
+
+#### 首次配置
+
+1. 打开 `build.bat`，修改顶部的三个路径变量：
+
+   ```batch
+   set "JAVA_HOME=D:\Tools\DevTools\Java\JDK\jdk-21.0.10-oracle"
+   set "FLUTTER_HOME=D:\Tools\DevTools\flutter"
+   set "ANDROID_HOME=D:\Tools\DevTools\Android\Sdk"
+   ```
+
+2. 确保已安装所需的构建工具：
+
+| 工具 | 版本 | 下载 |
+|------|------|------|
+| Java JDK | 17+ | https://jdk.java.net/17/ 或 Oracle JDK |
+| Flutter SDK | 3.38+ | https://docs.flutter.dev/get-started/install/windows |
+| Android SDK | platform 37 | 通过 Android Studio 安装 或 https://developer.android.com/studio#command-line-tools-only |
+
+3. 双击 `build.bat` 开始构建。首次构建会自动生成 `local.properties` 并下载 Gradle 依赖，耗时约 5–10 分钟。
+
+#### 构建流程
+
+脚本按以下顺序执行：
+
+| 步骤 | 操作 |
+|------|------|
+| 1 | 环境检查（Java / Flutter / Android SDK） |
+| 2 | 代码生成：`flutter gen-l10n` + `build_runner build` |
+| 3 | 清理：`flutter clean` |
+| 4 | 安装依赖：`flutter pub get` |
+| 5 | 编译：`flutter build apk --release` |
+| 6 | 将 APK 复制到项目根目录 |
+
+构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-release.apk`。
+
+#### Release 签名
+
+正式发布时需提供 `key.properties` 签名配置（不会提交到 Git）：
+
+```properties
+storeFile=../release.keystore
+storePassword=你的密钥库密码
+keyAlias=你的密钥别名
+keyPassword=你的密钥密码
+```
+
+脚本会自动检测 `key.properties`：存在时使用正式签名，不存在时使用 debug 签名（仅用于本地测试）。
+
 ### 项目结构
 
 ```
@@ -87,6 +225,8 @@ flutter build apk --release
 ├── lib/                # Dart 源码
 │   ├── application/    # 业务逻辑控制器
 │   ├── core/           # 工具、主题、常量
+│   │   └── utils/
+│   │       └── app_logger.dart  # 文件日志系统（7天自动清理）
 │   ├── data/           # 数据层（数据库、服务、仓库）
 │   ├── domain/         # 领域模型
 │   ├── l10n/           # 多语言

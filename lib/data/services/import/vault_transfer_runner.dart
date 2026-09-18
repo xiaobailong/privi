@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../core/utils/app_logger.dart';
 import '../media_rename_service.dart';
 import 'file_system_gateway.dart';
 import 'hide_preparer.dart';
@@ -70,6 +71,8 @@ class VaultTransferRunner {
     Future<void> Function(List<TransferOutcome> outcomes)? onChunk,
     bool collectOutcomes = true,
   }) async {
+    AppLogger.i('VaultTransfer',
+        'Starting transfer: ${jobs.length} jobs, chunkSize=$nativeBatchChunk');
     final allOutcomes = <TransferOutcome>[];
     for (var offset = 0;
         offset < jobs.length && !session.isCancelled;
@@ -114,7 +117,11 @@ class VaultTransferRunner {
         timeout: Duration(seconds: 20 + chunk.length * 5),
         label: 'hide batch timed out (${chunk.length} items)',
       );
+      AppLogger.d('VaultTransfer',
+          'Chunk transferred: ${results.length}/${chunk.length} results');
     } catch (error, stackTrace) {
+      AppLogger.e('VaultTransfer',
+          'Hide batch failed: $error', stackTrace);
       debugPrint('hide batch failed: $error\n$stackTrace');
       results = const [];
     }

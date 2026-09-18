@@ -9,6 +9,7 @@ import '../../application/player/external_player_coordinator.dart';
 import '../../application/player/player_controller.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
+import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
 import '../../domain/models/media_item.dart';
 import '../common/keep_vault_unlocked.dart';
@@ -204,6 +205,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final external = ref.read(settingsControllerProvider).playerExternal &&
         ref.read(externalPlayerCoordinatorProvider).supported;
     if (external) {
+      AppLogger.d('PlayerScreen', 'External player mode, skipping native load');
       await _disposeNativeVideo();
       return;
     }
@@ -217,14 +219,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         if (playing && !currentVideo.value.isPlaying) {
           if (_completedForId == item.id) {
             _completedForId = null;
+            AppLogger.d('PlayerScreen', 'Replaying completed video: ${item.id}');
             await currentVideo.seekTo(Duration.zero);
           }
+          AppLogger.d('PlayerScreen', 'Resuming video: ${item.id}');
           await currentVideo.play();
           await currentVideo.setPlaybackSpeed(_playbackSpeed);
         } else if (!playing && currentVideo.value.isPlaying) {
+          AppLogger.d('PlayerScreen', 'Pausing video: ${item.id}');
           await currentVideo.pause();
         }
       } catch (error, stackTrace) {
+        AppLogger.e('PlayerScreen',
+            'Video control failed for ${item.id}: $error', stackTrace);
         debugPrint('video control failed for ${item.id}: $error\n$stackTrace');
         setState(() {
           _videoError = error.toString();
@@ -235,11 +242,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
 
     // Need to load a new video
+    AppLogger.i('PlayerScreen', 'Loading new video: ${item.id} -> ${item.privatePath}');
     await _disposeNativeVideo();
 
     final file = File(item.privatePath);
     if (!await widget.videoFileProbe(item.privatePath)) {
       if (!mounted) return;
+      AppLogger.e('PlayerScreen', 'Video file not found: ${item.privatePath}');
       setState(() {
         _videoError = 'Video file does not exist: ${item.privatePath}';
         _videoErrorItemId = item.id;
@@ -250,17 +259,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     try {
       final controller = await NativeVideoController.create(item.privatePath);
       if (!mounted) {
+        AppLogger.d('PlayerScreen', 'Widget unmounted during load, disposing');
         await controller.dispose();
         return;
       }
+      AppLogger.i('PlayerScreen', 'Configuring native video: ${item.id}, playing=$playing');
       await _configureNativeVideo(controller, playing: playing);
       controller.onCompleted = () {
         if (!mounted) return;
         _completedForId = item.id;
+        AppLogger.i('PlayerScreen', 'Video completed callback: ${item.id}');
         ref.read(playerControllerProvider.notifier).onItemCompleted();
       };
       controller.onError = () {
         if (!mounted) return;
+        AppLogger.e('PlayerScreen',
+            'Video error callback: ${item.id}, ${controller.value.errorDescription}');
         setState(() {
           _videoError = controller.value.errorDescription;
           _videoErrorItemId = item.id;
@@ -270,8 +284,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         _nVideo = controller;
         _nVideoItemId = item.id;
       });
+      AppLogger.i('PlayerScreen', 'Video loaded successfully: ${item.id}');
     } catch (error, stackTrace) {
       if (!mounted) return;
+      AppLogger.e('PlayerScreen',
+          'Video load failed for ${item.id}: $error', stackTrace);
       debugPrint('video load failed for ${item.id}: $error\n$stackTrace');
       setState(() {
         _videoError = error.toString();

@@ -8,6 +8,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -235,16 +236,19 @@ class MainActivity : FlutterFragmentActivity() {
             }
 
         val textures = flutterEngine.renderer ?: return
+        Log.i("PriviMain", "Registering video player channel")
         val videoChannel = MethodChannel(messenger, "com.privi.app/video_player")
         videoChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "create" -> {
                     val filePath = call.argument<String>("filePath")
                     if (filePath.isNullOrEmpty()) {
+                        Log.e("PriviMain", "video create: filePath is null or empty")
                         result.error("bad_args", "filePath is required", null)
                         return@setMethodCallHandler
                     }
                     try {
+                        Log.i("PriviMain", "Creating video player: $filePath")
                         val textureEntry = textures.createSurfaceTexture()
                         val handler = VideoPlayerHandler(
                             this,
@@ -256,8 +260,10 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                         handler.initialize(filePath)
                         videoPlayers[textureEntry.id()] = handler
+                        Log.i("PriviMain", "Video player created: textureId=${textureEntry.id()}")
                         result.success(textureEntry.id())
                     } catch (e: Exception) {
+                        Log.e("PriviMain", "Video player create error: ${e.message}", e)
                         result.error("create_error", e.message, null)
                     }
                 }
@@ -267,6 +273,7 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("bad_args", "textureId is required", null)
                         return@setMethodCallHandler
                     }
+                    Log.i("PriviMain", "Disposing video player: textureId=$textureId")
                     videoPlayers.remove(textureId)?.release()
                     result.success(null)
                 }
@@ -320,6 +327,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onDestroy() {
+        Log.i("PriviMain", "onDestroy: releasing ${videoPlayers.size} video players")
         externalPlayer?.dispose()
         externalPlayer = null
         videoPlayers.values.forEach { it.release() }

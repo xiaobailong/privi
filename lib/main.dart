@@ -15,6 +15,7 @@ import 'application/update/app_restart_service.dart';
 import 'application/update/app_update_coordinator.dart';
 import 'application/update/external_url_launcher.dart';
 import 'core/app_build_info.dart';
+import 'core/utils/app_logger.dart';
 import 'data/services/android_external_url_launcher.dart';
 import 'data/services/github_app_release_source.dart';
 import 'data/services/platform_app_restart_service.dart';
@@ -22,7 +23,12 @@ import 'data/services/platform_app_restart_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Initialize file logger to Download/Privi/logs/
+  await AppLogger.init('/storage/emulated/0/Download');
+  AppLogger.i('Main', 'Privi starting...');
+
   final packageInfo = await PackageInfo.fromPlatform();
+  AppLogger.i('Main', 'Version: ${packageInfo.version}+${packageInfo.buildNumber}');
   final currentVersion = Version.parse(packageInfo.version);
   final AppReleaseSource releaseSource =
       GithubAppReleaseSource(client: http.Client());

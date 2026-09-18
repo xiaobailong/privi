@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../../application/platform/vault_workflow.dart';
+import '../../core/utils/app_logger.dart';
 import '../../domain/models/media_item.dart';
 import '../repositories/album_repository.dart';
 import '../repositories/media_repository.dart';
@@ -124,6 +125,8 @@ class ImportService implements VaultWorkflow {
     ImportSession? session,
   }) async {
     final activeSession = session ?? ImportSession();
+    AppLogger.i('ImportService',
+        'Starting import: ${sources.length} sources, targetAlbum=$targetUserAlbumId');
     _preparer.beginBatch();
     var imported = 0;
     var skipped = 0;
@@ -352,6 +355,8 @@ class ImportService implements VaultWorkflow {
       lastError: lastError,
       errorCode: lastErrorCode,
     );
+    AppLogger.i('ImportService',
+        'Import completed: imported=$imported, skipped=$skipped, failed=$failed');
     onProgress?.call(done);
     return done;
   }

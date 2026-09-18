@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/utils/app_logger.dart';
+
 class NativeVideoValue {
   final bool isInitialized;
   final bool isPlaying;
@@ -82,18 +84,26 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   }) : super(const NativeVideoValue());
 
   static Future<NativeVideoController> create(String filePath) async {
-    final textureId = await _channel.invokeMethod<int>('create', {
-      'filePath': filePath,
-    });
-    if (textureId == null) {
-      throw Exception('Failed to create native video player');
+    AppLogger.i('VideoPlayer', 'Creating native player for: $filePath');
+    try {
+      final textureId = await _channel.invokeMethod<int>('create', {
+        'filePath': filePath,
+      });
+      if (textureId == null) {
+        AppLogger.e('VideoPlayer', 'Failed to create native player: textureId is null');
+        throw Exception('Failed to create native video player');
+      }
+      AppLogger.i('VideoPlayer', 'Native player created, textureId=$textureId');
+      final controller = NativeVideoController._(
+        textureId: textureId,
+        filePath: filePath,
+      );
+      controller._listenForEvents();
+      return controller;
+    } catch (e, st) {
+      AppLogger.e('VideoPlayer', 'Exception creating native player: $e', st);
+      rethrow;
     }
-    final controller = NativeVideoController._(
-      textureId: textureId,
-      filePath: filePath,
-    );
-    controller._listenForEvents();
-    return controller;
   }
 
   void _listenForEvents() {
@@ -105,6 +115,9 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           _durationMs = data?['duration'] as int? ?? 0;
           _width = data?['width'] as int? ?? 0;
           _height = data?['height'] as int? ?? 0;
+          AppLogger.i('VideoPlayer',
+              'Initialized: duration=${_durationMs}ms, '
+              'size=${_width}x$_height, textureId=$textureId');
           value = value.copyWith(
             isInitialized: true,
             duration: Duration(milliseconds: _durationMs),
@@ -113,6 +126,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           _startPositionTimer();
           break;
         case 'completed':
+          AppLogger.i('VideoPlayer', 'Playback completed, textureId=$textureId');
           _nativePlaying = false;
           _stopPositionTimer();
           value = value.copyWith(
@@ -124,11 +138,13 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           break;
         case 'error':
           final data = call.arguments as Map?;
+          final msg = data?['message'] as String? ?? 'Unknown playback error';
+          AppLogger.e('VideoPlayer',
+              'Playback error: $msg, code=${data?['code']}, textureId=$textureId');
           value = value.copyWith(
             hasError: true,
             isPlaying: false,
-            errorDescription:
-                data?['message'] as String? ?? 'Unknown playback error',
+            errorDescription: msg,
           );
           _stopPositionTimer();
           onError?.call();
@@ -136,6 +152,8 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         case 'playingChanged':
           final data = call.arguments as Map?;
           _nativePlaying = data?['isPlaying'] as bool? ?? false;
+          AppLogger.d('VideoPlayer',
+              'playingChanged: $_nativePlaying, textureId=$textureId');
           value = value.copyWith(isPlaying: _nativePlaying);
           if (_nativePlaying) {
             _startPositionTimer();
@@ -217,13 +235,16 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
 
   @override
   Future<void> dispose() async {
+    AppLogger.i('VideoPlayer', 'Disposing player, textureId=$textureId');
     _disposed = true;
     _stopPositionTimer();
     await _eventSubscription?.cancel();
     _eventSubscription = null;
     try {
       await _channel.invokeMethod('dispose', {'textureId': textureId});
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.w('VideoPlayer', 'Error during dispose: $e');
+    }
     super.dispose();
   }
 }
