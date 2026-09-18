@@ -55,6 +55,9 @@ app.*.map.json
 # Android (project root is Android root)
 gradle-wrapper.jar
 /.gradle
+/.gradle_home
+/.BUILD_NUM
+/android/.gradle
 /captures/
 /gradlew
 /gradlew.bat

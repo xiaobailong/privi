@@ -1,6 +1,23 @@
 @echo off
-setlocal enabledelayedexpansion
 chcp 65001 > nul 2>&1
+setlocal enabledelayedexpansion
+
+REM ============================================
+REM  Log tee: restart self via PowerShell so all
+REM  output goes to both console and build_full.log
+REM ============================================
+if "%~1" NEQ "--log" (
+    if not exist "%~dp0build" mkdir "%~dp0build" 2>nul
+    powershell -NoProfile -Command ^
+        "$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [Text.Encoding]::UTF8; " ^
+        "$utf8NoBom = [Text.UTF8Encoding]::new($false); " ^
+        "$sw = [System.IO.StreamWriter]::new('%~dp0build\build_full.log', $false, $utf8NoBom); " ^
+        "try { cmd /c '%~f0 --log %*' 2>&1 | ForEach-Object { Write-Host $_; $sw.WriteLine($_) } } finally { $sw.Close() }"
+    exit /b
+) else (
+    shift
+)
+
 title Privi Build
 
 REM ============================================
@@ -22,6 +39,7 @@ set "ANDROID_HOME=D:\Tools\DevTools\Android\Sdk"
 set "ANDROID_SDK_ROOT=D:\Tools\DevTools\Android\Sdk"
 set "PUB_HOSTED_URL=https://pub.flutter-io.cn"
 set "FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn"
+set "GRADLE_USER_HOME=%~dp0.gradle_home"
 set "PATH=%JAVA_HOME%\bin;%FLUTTER_HOME%\bin;%ANDROID_HOME%\platform-tools;%PATH%"
 
 REM ---- 切换到项目根目录 ----
@@ -127,46 +145,42 @@ if not exist "local.properties" (
 goto :eof
 
 REM ============================================
-REM  递增版本号（PowerShell 解析 pubspec.yaml）
+REM  递增版本号（根目录 BUILD 文件 + pubspec.yaml 联动）
 REM ============================================
 :increment_version
 echo.
 echo [递增版本号]...
 
 if not exist "pubspec.yaml" (
-    echo [警告] pubspec.yaml 不存在，跳过版本号递增
+    echo [警告] pubspec.yaml 不存在，跳过
     set "NEW_VER=unknown"
     goto :eof
 )
 
-for /f "delims=" %%v in ('powershell -NoProfile -Command ^
-    "$y = Get-Content pubspec.yaml -Raw; ^
-    if ($y -match 'version:\s*(\S+)') { ^
-        $v = $Matches[1]; ^
-        if ($v -match '^(.+)\+(\d+)$') { ^
-            $name = $Matches[1]; $code = [int]$Matches[2] + 1; ^
-            $new = \"$name+$code\"; ^
-            $y = $y -replace 'version:\s*\S+', \"version: $new\"; ^
-            $y ^| Set-Content pubspec.yaml -NoNewline; ^
-            Write-Output $new ^
-        } else { Write-Output \"PARSE_ERROR\" } ^
-    } else { Write-Output \"NOT_FOUND\" }" 2^>nul') do set "NEW_VER=%%v"
+REM ---- 初始化 BUILD_NUM 文件（从 pubspec.yaml 提取当前 build number） ----
+if not exist ".BUILD_NUM" (
+    for /f "tokens=2 delims=+" %%n in ('findstr /c:"version: " pubspec.yaml') do (
+        echo %%n> ".BUILD_NUM"
+    )
+    if not exist ".BUILD_NUM" echo 0> ".BUILD_NUM"
+)
 
-if "%NEW_VER%"=="PARSE_ERROR" (
-    echo [警告] 无法解析版本号格式，期待 ^<name^>+^<code^>
-    set "NEW_VER=unknown"
-    goto :eof
+REM ---- 读取并递增 ----
+set /p B=<".BUILD_NUM"
+set /a BN=%B%+1
+set "NEW_BUILD_NUM=%BN%"
+echo %BN%> ".BUILD_NUM"
+
+REM ---- 更新 pubspec.yaml：仅替换 + 号后面的数字，不动版本名 ----
+set "PS_CMD=Set-Content pubspec.yaml -Encoding UTF8 -NoNewline -Value ((Get-Content pubspec.yaml -Encoding UTF8 -Raw) -replace '(\+)\d+','${1}%BN%')"
+powershell -NoProfile -Command "!PS_CMD!"
+if %ERRORLEVEL% neq 0 (
+    echo [警告] 更新 pubspec.yaml 失败
 )
-if "%NEW_VER%"=="NOT_FOUND" (
-    echo [警告] pubspec.yaml 中未找到 version 字段
-    set "NEW_VER=unknown"
-    goto :eof
-)
-if "%NEW_VER%"=="" (
-    echo [警告] 版本号递增返回空值，跳过
-    set "NEW_VER=unknown"
-    goto :eof
-)
+
+REM ---- 读取更新后的版本号用于显示和日志 ----
+for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "NEW_VER=%%v"
+
 echo       版本号已更新: %NEW_VER%
 goto :eof
 
@@ -202,14 +216,15 @@ echo       pub get 完成。
 echo [2/3] flutter gen-l10n...
 call flutter gen-l10n 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [警告] l10n 生成失败！
+    echo [警告] l10n 生成失败！缺少 .arb 文件或未配置国际化，不影响 build_runner
     set BUILD_FAILED=1
-    goto :eof
+    REM 非致命：继续运行 build_runner
+) else (
+    echo       gen-l10n 完成。
 )
-echo       gen-l10n 完成。
 
 echo [3/3] build_runner (Drift)...
-call flutter pub run build_runner build --delete-conflicting-outputs 2>&1
+call dart run build_runner build 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [警告] build_runner 失败！
     set BUILD_FAILED=1
@@ -304,15 +319,20 @@ set "STEP_NAME=[5/6] flutter build apk"
 call flutter build apk --release
 set BUILD_EXIT=%ERRORLEVEL%
 
-echo.
-if !BUILD_EXIT! neq 0 (
+REM flutter 可能不传递 Gradle 错误码，以 APK 是否真正生成作为唯一判断依据
+set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
+if not exist "!APK_SOURCE!" (
+    echo.
     echo ============================================
-    echo  [警告] 构建失败！Exit code=!BUILD_EXIT!
+    echo  [警告] 构建失败！未找到构建产物
+    if !BUILD_EXIT! neq 0 echo        Flutter exit code=!BUILD_EXIT!
+    echo        预期路径: !APK_SOURCE!
     echo ============================================
     set BUILD_FAILED=1
     goto :end
 )
 
+echo.
 echo ============================================
 echo  构建成功！
 echo ============================================
@@ -320,17 +340,9 @@ echo ============================================
 echo [6/6] 复制 APK 到项目根目录...
 set "STEP_NAME=[6/6] 复制 APK"
 if exist "privi-*.apk" del /q "privi-*.apk" 2>nul
-set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
 set "APK_DEST=privi-%NEW_VER%.apk"
-if exist "!APK_SOURCE!" (
-    copy /y "!APK_SOURCE!" "!APK_DEST!" > nul 2>&1
-    for %%f in ("!APK_DEST!") do echo  APK: %%~nxf  (%%~zf bytes)
-) else (
-    echo [警告] 未找到构建产物: !APK_SOURCE!
-    echo       可能构建未成功生成 APK。
-    set BUILD_FAILED=1
-    goto :end
-)
+copy /y "!APK_SOURCE!" "!APK_DEST!" > nul 2>&1
+for %%f in ("!APK_DEST!") do echo  APK: %%~nxf  (%%~zf bytes)
 
 echo.
 echo  APK 已复制到项目根目录。
@@ -340,6 +352,8 @@ REM ============================================
 REM  统一出口：永远 pause，让用户看到结果
 REM ============================================
 :end
+REM 写入诊断文件，确认脚本走到了 :end
+echo %date% %time% BUILD_FAILED=%BUILD_FAILED% NEW_VER=%NEW_VER% > build\build_exit.log 2>nul
 echo.
 echo ============================================
 if "%BUILD_FAILED%"=="1" (
@@ -349,6 +363,6 @@ if "%BUILD_FAILED%"=="1" (
 )
 echo ============================================
 echo.
-echo 按任意键关闭窗口...
-pause > nul
+echo 窗口将在 60 秒后自动关闭，或按任意键立即关闭...
+timeout /t 60 > nul
 exit /b %BUILD_FAILED%

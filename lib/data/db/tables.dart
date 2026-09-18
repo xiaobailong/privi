@@ -74,8 +74,8 @@ class AlbumGroups extends Table {
 /// Explicit membership for **user albums only**.
 @DataClassName('AlbumMediaRow')
 class AlbumMedia extends Table {
-  TextColumn get albumId => text().references(Albums, #id)();
-  TextColumn get mediaId => text().references(MediaItems, #id)();
+  TextColumn get albumId => text().references(Albums, #id, onDelete: KeyAction.cascade)();
+  TextColumn get mediaId => text().references(MediaItems, #id, onDelete: KeyAction.cascade)();
   DateTimeColumn get addedAt => dateTime()();
 
   @override
