@@ -12,6 +12,7 @@ import '../vault_storage_service.dart';
 import 'asset_gateway.dart';
 import 'file_system_gateway.dart';
 import 'import_models.dart';
+import '../../../core/utils/app_logger.dart';
 
 class PreparedHide {
   const PreparedHide({
@@ -102,7 +103,7 @@ class HidePreparer {
         originalPath = resolved.path;
         pathExists = await _safeExists(originalPath);
       } catch (error, stackTrace) {
-        debugPrint('entity.file: $error\n$stackTrace');
+        AppLogger.e('HidePreparer', 'entity.file: $error\n$stackTrace');
         return null;
       }
     }
@@ -154,7 +155,8 @@ class HidePreparer {
     try {
       return await _files.exists(path);
     } catch (error, stackTrace) {
-      debugPrint('file exists probe ($path): $error\n$stackTrace');
+      AppLogger.e(
+          'HidePreparer', 'file exists probe ($path): $error\n$stackTrace');
       return false;
     }
   }
@@ -179,7 +181,7 @@ class HidePreparer {
           );
         }
       } catch (error, stackTrace) {
-        debugPrint('capture date: $error\n$stackTrace');
+        AppLogger.e('HidePreparer', 'capture date: $error\n$stackTrace');
       }
     }
     if (dateTaken == null && source.assetId != null) {
@@ -192,7 +194,7 @@ class HidePreparer {
           );
         }
       } catch (error, stackTrace) {
-        debugPrint('asset create date: $error\n$stackTrace');
+        AppLogger.e('HidePreparer', 'asset create date: $error\n$stackTrace');
       }
     }
     return dateTaken;

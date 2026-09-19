@@ -251,7 +251,8 @@ final class _VaultBackupFileOps {
       try {
         if (await file.exists()) await file.delete();
       } catch (error, stackTrace) {
-        debugPrint('vault backup cleanup failed: $error\n$stackTrace');
+        AppLogger.e('VaultBackupSupport',
+            'vault backup cleanup failed: $error\n$stackTrace');
         firstError ??= error;
       }
     }
@@ -267,7 +268,8 @@ final class _VaultBackupFileOps {
     try {
       if (await directory.exists()) await directory.delete(recursive: true);
     } catch (error, stackTrace) {
-      debugPrint('vault backup staging cleanup failed: $error\n$stackTrace');
+      AppLogger.e('VaultBackupSupport',
+          'vault backup staging cleanup failed: $error\n$stackTrace');
       throw VaultBackupException(
         VaultBackupErrorCode.destinationWriteFailed,
         cause: error,
@@ -296,7 +298,8 @@ void _emitBackupProgress(
   } catch (error, stackTrace) {
     // Progress is an observer. A disposed UI must not turn a committed backup
     // into a failed operation or trigger restore cleanup after a DB commit.
-    debugPrint('vault backup progress observer failed: $error\n$stackTrace');
+    AppLogger.e('VaultBackupSupport',
+        'vault backup progress observer failed: $error\n$stackTrace');
   }
 }
 

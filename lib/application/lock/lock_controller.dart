@@ -7,6 +7,7 @@ import '../../data/services/security_service.dart';
 import '../../domain/enums.dart';
 import '../providers.dart';
 import '../settings/settings_controller.dart';
+import '../../core/utils/app_logger.dart';
 
 /// App vault lock UI state (not Flutter's shortcuts [LockState]).
 enum VaultLockErrorCode {
@@ -320,7 +321,7 @@ class LockController extends Notifier<VaultLockState> {
     final bio = ref.read(biometricServiceProvider);
     if (enabled) {
       final hw = await bio.isHardwareAvailable();
-      debugPrint('setBiometricEnabled hw=$hw');
+      AppLogger.d('LockController', 'setBiometricEnabled hw=$hw');
       if (!hw) {
         throw StateError(
           'Biometrics not available — enroll fingerprint/face in system Settings first',
@@ -335,7 +336,7 @@ class LockController extends Notifier<VaultLockState> {
         biometricHint: biometricHint ?? 'Verify identity',
         cancelButton: cancelButton ?? 'Cancel',
       );
-      debugPrint('setBiometricEnabled auth ok=$ok');
+      AppLogger.d('LockController', 'setBiometricEnabled auth ok=$ok');
       if (!ok) {
         // User cancelled or failed — not an exceptional state.
         return false;

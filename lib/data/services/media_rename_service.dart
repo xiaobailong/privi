@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Result of a platform rename / hide.
 class MediaRenameResult {
@@ -72,7 +72,7 @@ class MediaRenameService {
       final v = await _channel.invokeMethod<bool>('isExternalStorageManager');
       return v ?? false;
     } catch (e) {
-      debugPrint('isExternalStorageManager: $e');
+      AppLogger.w('MediaRenameService', 'isExternalStorageManager: $e');
       return false;
     }
   }
@@ -81,7 +81,7 @@ class MediaRenameService {
     try {
       await _channel.invokeMethod<void>('openManageAllFilesSettings');
     } catch (e) {
-      debugPrint('openManageAllFilesSettings: $e');
+      AppLogger.w('MediaRenameService', 'openManageAllFilesSettings: $e');
     }
   }
 
@@ -107,7 +107,7 @@ class MediaRenameService {
         needManageStorage: map['needManageStorage'] == true,
       );
     } catch (e) {
-      debugPrint('renameMedia: $e');
+      AppLogger.w('MediaRenameService', 'renameMedia: $e');
       return MediaRenameResult(ok: false, error: '$e');
     }
   }
@@ -131,7 +131,7 @@ class MediaRenameService {
       }
       return _parseResult(Map<String, dynamic>.from(raw));
     } catch (e) {
-      debugPrint('hideToVault: $e');
+      AppLogger.w('MediaRenameService', 'hideToVault: $e');
       return MediaRenameResult(ok: false, error: '$e');
     }
   }
@@ -175,7 +175,7 @@ class MediaRenameService {
             const MediaRenameResult(ok: false, error: 'bad_item'),
       ];
     } catch (e) {
-      debugPrint('hideToVaultBatch: $e');
+      AppLogger.w('MediaRenameService', 'hideToVaultBatch: $e');
       return [
         for (final i in items)
           MediaRenameResult(ok: false, error: '$e', clientId: i.clientId),
@@ -219,7 +219,7 @@ class MediaRenameService {
       }
       return _parseResult(Map<String, dynamic>.from(raw));
     } catch (e) {
-      debugPrint('unhideFromVault: $e');
+      AppLogger.w('MediaRenameService', 'unhideFromVault: $e');
       return MediaRenameResult(ok: false, error: '$e');
     }
   }
@@ -261,7 +261,7 @@ class MediaRenameService {
             const MediaRenameResult(ok: false, error: 'bad_item'),
       ];
     } catch (e) {
-      debugPrint('unhideFromVaultBatch: $e');
+      AppLogger.w('MediaRenameService', 'unhideFromVaultBatch: $e');
       return [
         for (final i in items)
           MediaRenameResult(ok: false, error: '$e', clientId: i.clientId),
@@ -284,7 +284,7 @@ class MediaRenameService {
       });
       return ok == true;
     } catch (e) {
-      debugPrint('videoThumbnail: $e');
+      AppLogger.w('MediaRenameService', 'videoThumbnail: $e');
       return false;
     }
   }

@@ -1,5 +1,4 @@
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
@@ -8,6 +7,7 @@ import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../gallery/gallery_controller.dart';
 import '../providers.dart';
+import '../../core/utils/app_logger.dart';
 
 class ImportUiState {
   const ImportUiState({
@@ -278,7 +278,8 @@ class ImportController extends Notifier<ImportUiState> {
     try {
       await gallery.clearFileCache().timeout(const Duration(seconds: 2));
     } catch (error, stackTrace) {
-      debugPrint('visible cache refresh: $error\n$stackTrace');
+      AppLogger.e(
+          'ImportController', 'visible cache refresh: $error\n$stackTrace');
     }
     // MediaStore needs a short beat after scan before folder counts update.
     await Future<void>.delayed(const Duration(milliseconds: 400));
@@ -287,7 +288,8 @@ class ImportController extends Notifier<ImportUiState> {
     try {
       await ref.read(galleryFoldersProvider.future);
     } catch (error, stackTrace) {
-      debugPrint('visible folder refresh: $error\n$stackTrace');
+      AppLogger.e(
+          'ImportController', 'visible folder refresh: $error\n$stackTrace');
     }
   }
 

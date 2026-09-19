@@ -1,7 +1,7 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:local_auth_android/local_auth_android.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Biometric convenience unlock (pattern/PIN remains root credential).
 ///
@@ -20,16 +20,18 @@ class BiometricService {
       final supported = await _auth.isDeviceSupported();
       final canCheck = await _auth.canCheckBiometrics;
       final types = await _auth.getAvailableBiometrics();
-      // Always log for adb: `adb logcat | grep biometric`
-      debugPrint(
+      // Always logged: it lands in the log file and, while the switch is on,
+      // in `adb logcat | grep biometric` too.
+      AppLogger.d(
+        'BiometricService',
         'biometric status: supported=$supported canCheck=$canCheck '
-        'types=$types',
+            'types=$types',
       );
       if (types.isNotEmpty) return true;
       // Some OEMs return an empty type list even with enrolled fingerprints.
       return supported && canCheck;
     } catch (e) {
-      debugPrint('biometric hw: $e');
+      AppLogger.w('BiometricService', 'biometric hw: $e');
       return false;
     }
   }
@@ -47,7 +49,7 @@ class BiometricService {
     try {
       return await _auth.isDeviceSupported();
     } catch (e) {
-      debugPrint('device credential: $e');
+      AppLogger.w('BiometricService', 'device credential: $e');
       return false;
     }
   }
@@ -62,7 +64,8 @@ class BiometricService {
     String cancelButton = 'Cancel',
   }) async {
     try {
-      debugPrint(
+      AppLogger.d(
+        'BiometricService',
         'biometric authenticate start biometricOnly=$biometricOnly reason=$reason',
       );
       final ok = await _auth.authenticate(
@@ -81,18 +84,19 @@ class BiometricService {
           sensitiveTransaction: true,
         ),
       );
-      debugPrint('biometric authenticate result=$ok');
+      AppLogger.d('BiometricService', 'biometric authenticate result=$ok');
       return ok;
     } on PlatformException catch (e) {
       // Codes: NotAvailable, NotEnrolled, LockedOut, PermanentlyLockedOut,
       // PasscodeNotSet, FragmentActivity (if activity wrong), etc.
-      debugPrint(
+      AppLogger.d(
+        'BiometricService',
         'biometric auth platform: code=${e.code} message=${e.message} '
-        'details=${e.details}',
+            'details=${e.details}',
       );
       return false;
     } catch (e) {
-      debugPrint('biometric auth: $e');
+      AppLogger.w('BiometricService', 'biometric auth: $e');
       return false;
     }
   }

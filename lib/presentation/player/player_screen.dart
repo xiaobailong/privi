@@ -49,7 +49,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   int _videoRequest = 0;
   String? _loadingItemId;
   Timer? _loadWatchdog;
+  bool? _nativeInitialized;
   bool _reconcileScheduled = false;
+  /// De-duplication keys for the diagnostic lines written from build(): a
+  /// per-item state change is readable in the log, a per-frame one is not.
+  String? _loggedItemId;
+  String? _loggedVideoBranch;
+  String? _loggedHealItemId;
+  String? _loggedSpinnerKey;
+  String? _loggedSurfaceKey;
   final Set<String> _autoRetriedItemIds = <String>{};
   bool _chrome = true;
   bool _programmaticPopAllowed = false;
@@ -67,6 +75,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     super.initState();
     _playbackSpeed = ref.read(settingsControllerProvider).playerPlaybackSpeed;
     unawaited(VideoSystemUi.apply(false));
+    AppLogger.i(
+      'PlayerScreen',
+      'initState: items=${widget.items.length}, '
+      'startItemId=${widget.startItemId ?? '-'}, shuffle=${widget.shuffle}',
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(playerControllerProvider.notifier).start(
             items: widget.items,
@@ -79,6 +92,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void dispose() {
     _cancelLoadWatchdog();
+    AppLogger.i(
+      'PlayerScreen',
+      'dispose: item=${_nVideoItemId ?? '-'}, '
+      'hasController=${_nVideo != null}, request=$_videoRequest',
+    );
     _disposeNativeVideo();
     unawaited(VideoSystemUi.restore());
     super.dispose();
@@ -205,10 +223,81 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _videoRequest++;
     _cancelLoadWatchdog();
     final c = _nVideo;
+    final previousItemId = _nVideoItemId;
     _nVideo = null;
     _nVideoItemId = null;
     _completedForId = null;
-    if (c != null) await c.dispose();
+    _nativeInitialized = null;
+    if (c != null) {
+      AppLogger.i(
+        'PlayerScreen',
+        'Disposing native player: item=${previousItemId ?? '-'}, '
+        'textureId=${c.textureId}, request=$_videoRequest',
+      );
+      c.removeListener(_onNativeVideoValueChanged);
+      await c.dispose();
+    }
+  }
+
+  /// Native events (initialized/error) land on the controller asynchronously.
+  ///
+  /// [build] decides between the spinner and the video surface by reading
+  /// `controller.value.isInitialized`, so the screen has to repaint when that
+  /// flag flips. Without this listener the second video of a folder autoplay
+  /// keeps spinning forever: the chrome is already hidden by then, so no other
+  /// rebuild is scheduled after the native player becomes ready.
+  void _onNativeVideoValueChanged() {
+    if (!mounted) return;
+    final video = _nVideo;
+    if (video == null) return;
+    final initialized = video.value.isInitialized;
+    if (initialized == _nativeInitialized) return;
+    _nativeInitialized = initialized;
+    // The spinner <-> surface switch in build() keys off this line: when an
+    // autoplay stalls, a missing "Native value changed" for item X is the
+    // answer, and the state printed here tells us why.
+    AppLogger.i(
+      'PlayerScreen',
+      'Native value changed: item=${_nVideoItemId ?? '-'}, '
+      'textureId=${video.textureId}, initialized=$initialized, '
+      'playing=${video.value.isPlaying}, error=${video.value.hasError}, '
+      'size=${video.value.size.width.toInt()}x'
+      '${video.value.size.height.toInt()}',
+    );
+    setState(() {});
+  }
+
+  /// Safety net for a missed `initialized` event: shortly after a load, ask the
+  /// native player for its authoritative state and apply it, so a dropped event
+  /// can never park the UI on the spinner.
+  void _armStatusFallback(
+    NativeVideoController controller,
+    MediaItem item,
+    int request,
+  ) {
+    Timer(const Duration(milliseconds: 900), () async {
+      if (!mounted || !identical(controller, _nVideo)) return;
+      if (controller.value.isInitialized || controller.value.hasError) return;
+      if (_isStaleLoad(request, item)) return;
+      final status = await controller.fetchStatus();
+      if (!mounted || !identical(controller, _nVideo)) return;
+      if (status == null) {
+        AppLogger.w('PlayerScreen',
+            'Status fallback for ${item.id}: getStatus returned null '
+            '(textureId=${controller.textureId})');
+        return;
+      }
+      if (!status.isReady) {
+        AppLogger.w('PlayerScreen',
+            'Status fallback for ${item.id}: native player still not ready '
+            '(textureId=${controller.textureId}, position=${status.position})');
+        return;
+      }
+      AppLogger.w('PlayerScreen',
+          'Recovered video state from native status: ${item.id} '
+          '(initialized event was missed)');
+      controller.applyStatus(status);
+    });
   }
 
   /// Fails the endless-spinner case: when the native side never reports
@@ -218,12 +307,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _loadWatchdog = Timer(const Duration(seconds: 15), () {
       _loadWatchdog = null;
       if (!mounted) return;
-      final video = _nVideo;
-      if (video == null || _nVideoItemId != item.id) return;
-      if (video.value.isInitialized || video.value.hasError) return;
       if (_isStaleLoad(request, item)) return;
-      AppLogger.w('PlayerScreen',
-          'Video did not initialize within 15s: ${item.id}');
+      if (_videoErrorItemId == item.id) return;
+      final video = _nVideo;
+      final showing = video != null && _nVideoItemId == item.id;
+      if (showing && (video.value.isInitialized || video.value.hasError)) return;
+      // A load that never even published a controller (hung create/dispose)
+      // must be retried too, otherwise the spinner stays on screen forever.
+      AppLogger.w(
+        'PlayerScreen',
+        'Video did not initialize within 15s '
+        '(controller=${showing ? 'published' : 'missing'}): ${item.id}',
+      );
       unawaited(_retryLoad(item));
     });
   }
@@ -253,7 +348,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (!mounted) return;
     final state = ref.read(playerControllerProvider);
     if (state.current?.id != item.id) return;
-    unawaited(_loadVideo(item, state.playing));
+    // Forced: the previous attempt may still be hanging inside the platform
+    // channel, and _disposeNativeVideo() already invalidated it.
+    unawaited(_loadVideo(item, state.playing, force: true));
   }
 
   /// Self-heal hook: re-runs the playlist/native sync after the current frame.
@@ -263,7 +360,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reconcileScheduled = false;
       if (!mounted) return;
-      _syncNativeVideo(ref.read(playerControllerProvider));
+      final ui = ref.read(playerControllerProvider);
+      // Logged once per item: build() schedules this on every frame while the
+      // native engine is out of sync, so a raw log here would be a flood.
+      if (_loggedHealItemId != ui.current?.id) {
+        _loggedHealItemId = ui.current?.id;
+        AppLogger.w(
+          'PlayerScreen',
+          'Self-heal: reconciling native video for ${ui.current?.id ?? '-'} '
+          '(loadedItem=${_nVideoItemId ?? '-'}, '
+          'hasController=${_nVideo != null}, '
+          'initialized=${_nVideo?.value.isInitialized})',
+        );
+      }
+      _syncNativeVideo(ui);
     });
   }
 
@@ -275,12 +385,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     });
   }
 
-  Future<void> _loadVideo(MediaItem item, bool playing) async {
-    if (_loadingItemId == item.id) {
+  Future<void> _loadVideo(
+    MediaItem item,
+    bool playing, {
+    bool force = false,
+  }) async {
+    if (!force && _loadingItemId == item.id) {
       AppLogger.d('PlayerScreen', 'Video load already in flight: ${item.id}');
       return;
     }
     _loadingItemId = item.id;
+    AppLogger.d(
+      'PlayerScreen',
+      'loadVideo(${item.id}) playing=$playing force=$force, '
+      'loadedItem=${_nVideoItemId ?? '-'}, '
+      'hasController=${_nVideo != null}',
+    );
     try {
       await _loadVideoInner(item, playing);
     } finally {
@@ -302,6 +422,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // Already showing the right video
     if (_nVideoItemId == item.id && _nVideo != null) {
       final currentVideo = _nVideo!;
+      AppLogger.d(
+        'PlayerScreen',
+        'Reusing loaded video for ${item.id} '
+        '(textureId=${currentVideo.textureId}, '
+        'initialized=${currentVideo.value.isInitialized}, '
+        'playing=${currentVideo.value.isPlaying}, want=$playing)',
+      );
       try {
         if (playing && !currentVideo.value.isPlaying) {
           if (_completedForId == item.id) {
@@ -319,7 +446,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       } catch (error, stackTrace) {
         AppLogger.e('PlayerScreen',
             'Video control failed for ${item.id}: $error', stackTrace);
-        debugPrint('video control failed for ${item.id}: $error\n$stackTrace');
         setState(() {
           _videoError = error.toString();
           _videoErrorItemId = item.id;
@@ -365,7 +491,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       controller.onCompleted = () {
         if (!mounted) return;
         _completedForId = item.id;
-        AppLogger.i('PlayerScreen', 'Video completed callback: ${item.id}');
+        final ui = ref.read(playerControllerProvider);
+        final pl = ui.playlist;
+        AppLogger.i(
+          'PlayerScreen',
+          'Video completed callback: ${item.id} '
+          '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
+          'playing=${ui.playing}, '
+          'next=${pl?.peekNext()?.id ?? 'none'}',
+        );
         ref.read(playerControllerProvider.notifier).onItemCompleted();
       };
       controller.onError = () {
@@ -377,16 +511,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           _videoErrorItemId = item.id;
         });
       };
+      // The spinner/video switch in build() reads controller.value, so the
+      // screen must repaint once the native player reports it is ready.
+      controller.addListener(_onNativeVideoValueChanged);
+      _nativeInitialized = controller.value.isInitialized;
       setState(() {
         _nVideo = controller;
         _nVideoItemId = item.id;
       });
-      AppLogger.i('PlayerScreen', 'Video loaded successfully: ${item.id}');
+      // A fresh controller is a fresh start: let the self-heal log speak again
+      // if this item later loses its video surface.
+      _loggedHealItemId = null;
+      _armStatusFallback(controller, item, request);
+      AppLogger.i(
+        'PlayerScreen',
+        'Video loaded successfully: ${item.id}, '
+        'textureId=${controller.textureId}, '
+        'initialized=${controller.value.isInitialized} (request=$request)',
+      );
     } catch (error, stackTrace) {
       if (_isStaleLoad(request, item)) return;
       AppLogger.e('PlayerScreen',
           'Video load failed for ${item.id}: $error', stackTrace);
-      debugPrint('video load failed for ${item.id}: $error\n$stackTrace');
       setState(() {
         _videoError = error.toString();
         _videoErrorItemId = item.id;
@@ -402,15 +548,29 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void _syncNativeVideo(PlayerUiState ui) {
     final item = ui.current;
     if (item == null || !item.isVideo) {
-      if (_nVideo != null) unawaited(_disposeNativeVideo());
+      if (_nVideo != null) {
+        AppLogger.d('PlayerScreen',
+            'sync: current=${item?.id ?? '-'} is not a video, releasing engine');
+        unawaited(_disposeNativeVideo());
+      }
       return;
     }
     final video = _nVideo;
     if (_nVideoItemId != item.id || video == null) {
+      AppLogger.i(
+        'PlayerScreen',
+        'sync: loading ${item.id} (loaded=${_nVideoItemId ?? '-'}, '
+        'hasController=${video != null}, playing=${ui.playing})',
+      );
       unawaited(_loadVideo(item, ui.playing));
       return;
     }
     if (video.value.isInitialized && video.value.isPlaying != ui.playing) {
+      AppLogger.i(
+        'PlayerScreen',
+        'sync: correcting play state of ${item.id} '
+        '(native=${video.value.isPlaying}, wanted=${ui.playing})',
+      );
       unawaited(_loadVideo(item, ui.playing));
     }
   }
@@ -444,12 +604,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final ui = ref.watch(playerControllerProvider);
     final item = ui.current;
     final pl = ui.playlist;
+    // The single line that answers "did autoplay move on?" when reading a log.
+    if (item?.id != _loggedItemId) {
+      _loggedItemId = item?.id;
+      AppLogger.i(
+        'PlayerScreen',
+        'Showing ${item?.id ?? '-'} '
+        '(${item?.isVideo == true ? 'video' : 'image'}) '
+        '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
+        'playing=${ui.playing}',
+      );
+    }
     final landscape = _isLandscape(context);
     final builtInVideo = item?.isVideo == true &&
         _nVideo != null &&
         _nVideoItemId == item?.id &&
         _nVideo!.value.isInitialized;
     final immersive = landscape && builtInVideo;
+    // One line per (item, playing, branch) transition: enough to see which
+    // branch every clip of an autoplay run settled on, without a log flood.
+    final branchKey = 'item=${item?.id ?? '-'}|playing=${ui.playing}|'
+        'surface=$builtInVideo|error=${_videoErrorItemId ?? '-'}|'
+        'loaded=${_nVideoItemId ?? '-'}|init=${_nVideo?.value.isInitialized}|'
+        'nativePlaying=${_nVideo?.value.isPlaying}';
+    if (branchKey != _loggedVideoBranch) {
+      _loggedVideoBranch = branchKey;
+      AppLogger.d(
+        'PlayerScreen',
+        'build: $branchKey, chrome=$_chrome, '
+        'externalHandedOff=${ui.externalHandedOff}, '
+        'playlist=${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}',
+      );
+    }
     _syncSystemUi(immersive);
     _syncKeepScreenOn(item != null && (ui.playing || item.isVideo));
     if (builtInVideo) {
@@ -531,6 +717,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _buildVideo(MediaItem item, PlayerUiState ui) {
     if (ui.externalHandedOff) {
+      AppLogger.d('PlayerScreen',
+          'Video view: external hand-off placeholder for ${item.id}');
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -552,6 +740,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
     }
     if (_videoErrorItemId == item.id && _videoError != null) {
+      AppLogger.d('PlayerScreen',
+          'Video view: error panel for ${item.id}: $_videoError');
       return GestureDetector(
         onTap: _toggleChrome,
         child: Center(
@@ -586,11 +776,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
     final c = _nVideo;
     if (c == null || _nVideoItemId != item.id || !c.value.isInitialized) {
+      // Logged once per distinct spinner state: an endless spinner plus this
+      // line is the exact failure signature reported from the phone.
+      final spinnerKey = '${item.id}|loaded=${_nVideoItemId ?? '-'}|'
+          'texture=${c?.textureId ?? '-'}|init=${c?.value.isInitialized}|'
+          'error=${c?.value.hasError}';
+      if (spinnerKey != _loggedSpinnerKey) {
+        _loggedSpinnerKey = spinnerKey;
+        AppLogger.w(
+          'PlayerScreen',
+          'Video view: spinner for ${item.id} '
+          '(hasController=${c != null}, loadedItem=${_nVideoItemId ?? '-'}, '
+          'initialized=${c?.value.isInitialized}, '
+          'nativeError=${c?.value.hasError}, '
+          'loadingItem=${_loadingItemId ?? '-'}, '
+          'watchdog=${_loadWatchdog != null})',
+        );
+      }
       return GestureDetector(
         onTap: _toggleChrome,
         child: const Center(
           child: CircularProgressIndicator(color: Colors.white54),
         ),
+      );
+    }
+    final surfaceKey = '${item.id}|${c.textureId}';
+    if (surfaceKey != _loggedSurfaceKey) {
+      _loggedSurfaceKey = surfaceKey;
+      AppLogger.i(
+        'PlayerScreen',
+        'Video surface visible: ${item.id}, textureId=${c.textureId}, '
+        'size=${c.value.size.width.toInt()}x'
+        '${c.value.size.height.toInt()}, playing=${c.value.isPlaying}',
       );
     }
     return GestureDetector(

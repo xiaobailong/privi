@@ -230,7 +230,8 @@ final class _VaultBackupRestoreInstaller {
       try {
         if (await temporary.exists()) await temporary.delete();
       } catch (caught, stackTrace) {
-        debugPrint('restore temporary cleanup failed: $caught\n$stackTrace');
+        AppLogger.e('VaultBackupRestoreInstall',
+            'restore temporary cleanup failed: $caught\n$stackTrace');
         cleanupError = caught;
       }
       if (cleanupError != null) {
@@ -302,7 +303,8 @@ final class _VaultBackupRestoreInstaller {
       await temporary.rename(destination.path);
       return _InstalledFile(file: destination, created: true);
     } catch (error, stackTrace) {
-      debugPrint('optional restore thumbnail skipped: $error\n$stackTrace');
+      AppLogger.e('VaultBackupRestoreInstall',
+          'optional restore thumbnail skipped: $error\n$stackTrace');
       if (temporary != null && await temporary.exists()) {
         await temporary.delete();
       }

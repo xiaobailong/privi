@@ -15,6 +15,7 @@ import 'import_service.dart';
 import 'media_store_service.dart';
 import 'media_thumbnail_service.dart';
 import 'platform/android_visible_library_adapter.dart';
+import '../../core/utils/app_logger.dart';
 
 class GalleryFolder {
   const GalleryFolder({
@@ -567,7 +568,7 @@ class GalleryService {
       }
       return null;
     } catch (e) {
-      debugPrint('folderCover: $e');
+      AppLogger.w('GalleryService', 'folderCover: $e');
       return null;
     }
   }

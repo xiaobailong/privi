@@ -14,6 +14,7 @@ import 'application/providers.dart';
 import 'application/settings/settings_controller.dart';
 import 'core/l10n.dart';
 import 'core/theme/app_theme.dart';
+import 'core/utils/app_logger.dart';
 import 'data/services/import_service.dart';
 import 'data/services/share_intent_service.dart';
 import 'domain/enums.dart';
@@ -49,7 +50,10 @@ class _PrivateHeartAppState extends ConsumerState<PrivateHeartApp> {
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
-    _lifecycleListener = AppLifecycleListener(onStateChange: _onLifecycleState);
+    _lifecycleListener = AppLifecycleListener(
+      onStateChange: _onLifecycleState,
+      onDetach: () => unawaited(AppLogger.flush()),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(
         _share.start(_onShared).catchError(
@@ -76,6 +80,14 @@ class _PrivateHeartAppState extends ConsumerState<PrivateHeartApp> {
   }
 
   void _onLifecycleState(AppLifecycleState state) {
+    // Lifecycle lines are how a log gets read after a playback stall: an app
+    // that was killed by the system stops writing without a trace otherwise.
+    final player = ref.read(playerControllerProvider);
+    AppLogger.i(
+      'Lifecycle',
+      'state=${state.name}, playing=${player.playing}, '
+      'item=${player.current?.id ?? '-'}',
+    );
     final externalReturn =
         ref.read(externalPlayerCoordinatorProvider).onAppLifecycle(state);
     if (externalReturn != null) {
@@ -91,6 +103,9 @@ class _PrivateHeartAppState extends ConsumerState<PrivateHeartApp> {
       ref.invalidate(galleryPermissionProvider);
       ref.invalidate(galleryFoldersProvider);
       ref.read(galleryServiceProvider).apply(const VisiblePermissionChanged());
+    } else {
+      // Backgrounded: flush now, the process may not get another chance.
+      unawaited(AppLogger.flush());
     }
   }
 

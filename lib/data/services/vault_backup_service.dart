@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -13,6 +12,7 @@ import '../repositories/album_repository.dart';
 import '../repositories/media_repository.dart';
 import 'hide_naming.dart';
 import 'vault_storage_service.dart';
+import '../../core/utils/app_logger.dart';
 
 part 'vault_backup_export.dart';
 part 'vault_backup_manifest.dart';

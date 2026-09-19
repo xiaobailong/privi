@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/utils/app_logger.dart';
 import '../../domain/enums.dart';
 import '../../domain/models/video_playback_settings.dart';
 import '../providers.dart';
@@ -18,6 +19,7 @@ class AppSettings {
     this.shuffleDefault = false,
     this.recycleRetentionDays = 7,
     this.flagSecure = true,
+    this.logEnabled = true,
     this.mediaKindFilter = MediaKindFilter.image,
     this.localeCode = '',
   });
@@ -32,6 +34,11 @@ class AppSettings {
   final bool shuffleDefault;
   final int recycleRetentionDays;
   final bool flagSecure;
+
+  /// Master switch for the diagnostic log file. Default on; turning it off
+  /// silences the logger for the rest of the session (and, because the value
+  /// is persisted, for the next launches too).
+  final bool logEnabled;
 
   /// Shared Visible + Invisible photo XOR video mode (persisted).
   final MediaKindFilter mediaKindFilter;
@@ -50,6 +57,7 @@ class AppSettings {
     bool? shuffleDefault,
     int? recycleRetentionDays,
     bool? flagSecure,
+    bool? logEnabled,
     MediaKindFilter? mediaKindFilter,
     String? localeCode,
   }) {
@@ -64,6 +72,7 @@ class AppSettings {
       shuffleDefault: shuffleDefault ?? this.shuffleDefault,
       recycleRetentionDays: recycleRetentionDays ?? this.recycleRetentionDays,
       flagSecure: flagSecure ?? this.flagSecure,
+      logEnabled: logEnabled ?? this.logEnabled,
       mediaKindFilter: mediaKindFilter ?? this.mediaKindFilter,
       localeCode: localeCode ?? this.localeCode,
     );
@@ -81,6 +90,9 @@ class SettingsController extends Notifier<AppSettings> {
   static const _kShuffle = 'shuffle_default';
   static const _kRecycle = 'recycle_retention_days';
   static const _kFlagSecure = 'flag_secure';
+
+  /// Public because `main()` reads it before the provider container exists.
+  static const String logEnabledKey = 'log_enabled';
   static const _kMediaKind = 'media_kind_filter'; // image | video
   static const _kLocale = 'locale_code'; // '' | en | zh_CN | zh_HK
 
@@ -103,6 +115,7 @@ class SettingsController extends Notifier<AppSettings> {
       shuffleDefault: p.getBool(_kShuffle) ?? false,
       recycleRetentionDays: p.getInt(_kRecycle) ?? 7,
       flagSecure: p.getBool(_kFlagSecure) ?? true,
+      logEnabled: p.getBool(logEnabledKey) ?? true,
       mediaKindFilter: kind,
       localeCode: p.getString(_kLocale) ?? '',
     );
@@ -164,6 +177,14 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setFlagSecure(bool v) async {
     state = state.copyWith(flagSecure: v);
     await _prefs.setBool(_kFlagSecure, v);
+  }
+
+  /// Persists the switch and applies it to [AppLogger] immediately, so the
+  /// user does not have to restart the app for it to take effect.
+  Future<void> setLogEnabled(bool v) async {
+    state = state.copyWith(logEnabled: v);
+    await _prefs.setBool(logEnabledKey, v);
+    AppLogger.setEnabled(v);
   }
 
   Future<void> setMediaKindFilter(MediaKindFilter kind) async {

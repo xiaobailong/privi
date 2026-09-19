@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/services/vault_backup_service.dart';
 import '../providers.dart';
+import '../../core/utils/app_logger.dart';
 
 enum VaultBackupOperation { export, restore }
 
@@ -167,7 +167,8 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
         ref.invalidate(albumsProvider);
       }
     } catch (error, stackTrace) {
-      debugPrint('vault backup controller: $error\n$stackTrace');
+      AppLogger.e('VaultBackupController',
+          'vault backup controller: $error\n$stackTrace');
       if (!ref.mounted || !identical(_session, session)) return;
       state = VaultBackupUiState(
         operation: operation,

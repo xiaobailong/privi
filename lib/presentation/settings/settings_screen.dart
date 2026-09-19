@@ -12,6 +12,7 @@ import '../../data/services/maintenance_service.dart';
 import '../../data/services/vault_backup_service.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Full settings — security, display, playback, storage export/import.
 class SettingsScreen extends ConsumerWidget {
@@ -76,7 +77,8 @@ class SettingsScreen extends ConsumerWidget {
                         );
                       }
                     } catch (e, stackTrace) {
-                      debugPrint('biometric setting update: $e\n$stackTrace');
+                      AppLogger.e('SettingsScreen',
+                          'biometric setting update: $e\n$stackTrace');
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
@@ -126,7 +128,8 @@ class SettingsScreen extends ConsumerWidget {
                 await ref.read(privacyShieldProvider).apply(v);
                 await notifier.setFlagSecure(v);
               } catch (e, stackTrace) {
-                debugPrint('privacy shield setting: $e\n$stackTrace');
+                AppLogger.e('SettingsScreen',
+                    'privacy shield setting: $e\n$stackTrace');
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -299,6 +302,19 @@ class SettingsScreen extends ConsumerWidget {
                       VaultBackupOperation.restore,
                     ),
           ),
+          _SectionHeader(context.l10n.sectionDiagnostics),
+          SwitchListTile(
+            key: const ValueKey('settings-diagnostic-logs'),
+            secondary: const Icon(Icons.receipt_long_outlined),
+            title: Text(context.l10n.diagnosticLog),
+            subtitle: Text(
+              s.logEnabled
+                  ? context.l10n.diagnosticLogEnabled
+                  : context.l10n.diagnosticLogDisabled,
+            ),
+            value: s.logEnabled,
+            onChanged: notifier.setLogEnabled,
+          ),
           _SectionHeader(context.l10n.sectionAbout),
           ListTile(
             leading: const Icon(Icons.language),
@@ -351,7 +367,7 @@ class SettingsScreen extends ConsumerWidget {
             Uri.parse(AppInfo.authorUrl),
           );
     } catch (e) {
-      debugPrint('open author url: $e');
+      AppLogger.w('SettingsScreen', 'open author url: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.couldNotOpenBrowser)),
@@ -518,7 +534,7 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
     } catch (e, stackTrace) {
-      debugPrint('change pattern: $e\n$stackTrace');
+      AppLogger.e('SettingsScreen', 'change pattern: $e\n$stackTrace');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -621,7 +637,7 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
     } catch (e, stackTrace) {
-      debugPrint('orphan scan: $e\n$stackTrace');
+      AppLogger.e('SettingsScreen', 'orphan scan: $e\n$stackTrace');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.scanFailedShort)),
@@ -644,7 +660,7 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
     } catch (e, stackTrace) {
-      debugPrint('capture date repair: $e\n$stackTrace');
+      AppLogger.e('SettingsScreen', 'capture date repair: $e\n$stackTrace');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.scanFailedShort)),
@@ -703,7 +719,7 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
     } catch (e, stackTrace) {
-      debugPrint('vault recovery: $e\n$stackTrace');
+      AppLogger.e('SettingsScreen', 'vault recovery: $e\n$stackTrace');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.scanFailedShort)),
@@ -803,7 +819,8 @@ class SettingsScreen extends ConsumerWidget {
         selectDirectory: () => selectDirectory(pickerTitle),
       );
     } catch (error, stackTrace) {
-      debugPrint(
+      AppLogger.e(
+        'SettingsScreen',
         'vault backup directory selection failed: $error\n$stackTrace',
       );
       if (!context.mounted) return;

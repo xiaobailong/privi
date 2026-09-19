@@ -434,6 +434,14 @@ class AppLocalizations {
 
   String get sectionAbout => '关于';
 
+  String get sectionDiagnostics => '诊断';
+
+  String get diagnosticLog => '记录诊断日志';
+
+  String get diagnosticLogEnabled => '已开启 · 写入 Download/Privi/logs';
+
+  String get diagnosticLogDisabled => '已关闭 · 不再写入任何日志';
+
   String get lockNow => '立即锁定';
 
   String get changePattern => '更改图案';

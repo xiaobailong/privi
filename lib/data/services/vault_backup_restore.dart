@@ -68,7 +68,8 @@ final class _VaultBackupRestorer {
     } on VaultBackupException {
       rethrow;
     } catch (error, stackTrace) {
-      debugPrint('vault restore failed: $error\n$stackTrace');
+      AppLogger.e(
+          'VaultBackupRestore', 'vault restore failed: $error\n$stackTrace');
       throw VaultBackupException(
         VaultBackupErrorCode.databaseWriteFailed,
         stage: VaultBackupStage.checkingBackup,

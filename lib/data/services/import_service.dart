@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -234,7 +233,7 @@ class ImportService implements VaultWorkflow {
         }
         prepared.add(job);
       } catch (e, st) {
-        debugPrint('prepare hide failed: $e\n$st');
+        AppLogger.w('ImportService', 'prepare hide failed: $e\n$st');
         failed++;
         lastError = e.toString();
         completed++;
@@ -313,7 +312,8 @@ class ImportService implements VaultWorkflow {
                   );
               continue;
             } catch (error, stackTrace) {
-              debugPrint(
+              AppLogger.e(
+                'ImportService',
                 'captured thumb ${job.id}: $error\n$stackTrace',
               );
             }

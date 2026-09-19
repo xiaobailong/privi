@@ -9,6 +9,7 @@ import '../../core/theme/vault_colors.dart';
 import '../../domain/enums.dart';
 import 'pattern_lock.dart';
 import 'pin_pad.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Lock / first-run pattern setup + biometric.
 /// Default root credential is **pattern**; legacy PIN installs still unlock via pad.
@@ -185,7 +186,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
               );
             }
           } catch (e, stackTrace) {
-            debugPrint('biometric setup: $e\n$stackTrace');
+            AppLogger.e('LockScreen', 'biometric setup: $e\n$stackTrace');
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text(context.l10n.biometricUpdateFailed)),

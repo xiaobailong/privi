@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../../core/utils/app_logger.dart';
 
 /// MediaStore index maintenance for hide / unhide.
 ///
@@ -35,7 +35,7 @@ class MediaStoreService {
       );
       return result ?? false;
     } catch (e) {
-      debugPrint('purgePath: $e');
+      AppLogger.w('MediaStoreService', 'purgePath: $e');
       return false;
     }
   }
@@ -52,7 +52,7 @@ class MediaStoreService {
       );
       return result;
     } catch (e) {
-      debugPrint('resolveMediaPath: $e');
+      AppLogger.w('MediaStoreService', 'resolveMediaPath: $e');
       return null;
     }
   }
@@ -79,7 +79,7 @@ class MediaStoreService {
       if (result is num) return result.toInt();
       return int.tryParse('$result');
     } catch (e) {
-      debugPrint('resolveCaptureDate: $e');
+      AppLogger.w('MediaStoreService', 'resolveCaptureDate: $e');
       return null;
     }
   }
@@ -108,7 +108,7 @@ class MediaStoreService {
       );
       return result ?? false;
     } catch (e) {
-      debugPrint('scanPath: $e');
+      AppLogger.w('MediaStoreService', 'scanPath: $e');
       return false;
     }
   }

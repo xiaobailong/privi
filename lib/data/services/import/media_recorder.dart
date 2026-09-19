@@ -1,8 +1,8 @@
-import 'package:flutter/foundation.dart';
 
 import '../../../domain/models/media_item.dart';
 import '../../repositories/media_repository.dart';
 import 'vault_transfer_runner.dart';
+import '../../../core/utils/app_logger.dart';
 
 class RecordedHide {
   const RecordedHide({required this.outcome, required this.item});
@@ -48,7 +48,8 @@ class MediaRecorder {
       await _media.insertMany(pending);
       return List<RecordedHide>.unmodifiable(recorded);
     } catch (error, stackTrace) {
-      debugPrint('batch DB insert failed: $error\n$stackTrace');
+      AppLogger.e(
+          'MediaRecorder', 'batch DB insert failed: $error\n$stackTrace');
       final insertedIds = <String>{};
       for (final entry in pending) {
         try {
@@ -58,9 +59,10 @@ class MediaRecorder {
           );
           insertedIds.add(entry.item.id);
         } catch (singleError, singleStackTrace) {
-          debugPrint(
+          AppLogger.w(
+            'MediaRecorder',
             'single DB insert failed ${entry.item.id}: '
-            '$singleError\n$singleStackTrace',
+                '$singleError\n$singleStackTrace',
           );
         }
       }

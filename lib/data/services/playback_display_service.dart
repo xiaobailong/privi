@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Window brightness, keep-screen-on and system media volume for the in-player
 /// swipe gestures.
@@ -35,7 +35,8 @@ class PlaybackDisplayService implements VideoDisplayControls {
     try {
       await _channel.invokeMethod<void>('resetBrightness');
     } catch (error, stackTrace) {
-      debugPrint('resetBrightness: $error\n$stackTrace');
+      AppLogger.e(
+          'PlaybackDisplayService', 'resetBrightness: $error\n$stackTrace');
     }
   }
 
@@ -52,7 +53,8 @@ class PlaybackDisplayService implements VideoDisplayControls {
         'enabled': enabled,
       });
     } catch (error, stackTrace) {
-      debugPrint('setKeepScreenOn: $error\n$stackTrace');
+      AppLogger.e(
+          'PlaybackDisplayService', 'setKeepScreenOn: $error\n$stackTrace');
     }
   }
 
@@ -61,7 +63,7 @@ class PlaybackDisplayService implements VideoDisplayControls {
       final value = await _channel.invokeMethod<num>(method);
       return (value?.toDouble() ?? 0.5).clamp(0.0, 1.0);
     } catch (error, stackTrace) {
-      debugPrint('$method: $error\n$stackTrace');
+      AppLogger.e('PlaybackDisplayService', '$method: $error\n$stackTrace');
       return 0.5;
     }
   }
@@ -72,7 +74,7 @@ class PlaybackDisplayService implements VideoDisplayControls {
         'value': value.clamp(0.0, 1.0),
       });
     } catch (error, stackTrace) {
-      debugPrint('$method: $error\n$stackTrace');
+      AppLogger.e('PlaybackDisplayService', '$method: $error\n$stackTrace');
     }
   }
 }

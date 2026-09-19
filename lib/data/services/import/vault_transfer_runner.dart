@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 
 import '../../../core/utils/app_logger.dart';
 import '../media_rename_service.dart';
@@ -122,7 +121,6 @@ class VaultTransferRunner {
     } catch (error, stackTrace) {
       AppLogger.e('VaultTransfer',
           'Hide batch failed: $error', stackTrace);
-      debugPrint('hide batch failed: $error\n$stackTrace');
       results = const [];
     }
 
@@ -229,7 +227,8 @@ class VaultTransferRunner {
       final length = await _files.length(path);
       return length > 0 ? length : null;
     } catch (error, stackTrace) {
-      debugPrint('destination recovery ($path): $error\n$stackTrace');
+      AppLogger.e('VaultTransfer',
+          'destination recovery ($path): $error\n$stackTrace');
       return null;
     }
   }

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
 
@@ -8,6 +7,7 @@ import '../import/asset_gateway.dart';
 import '../import/file_system_gateway.dart';
 import '../import/import_models.dart';
 import '../media_store_service.dart';
+import '../../../core/utils/app_logger.dart';
 
 /// Android MediaStore adapter. Its path and metadata policy intentionally
 /// mirrors the pre-seam implementation so D5 behavior remains unchanged.
@@ -95,7 +95,8 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
               (await _assets.entityFile(id).timeout(const Duration(seconds: 4)))
                   ?.path;
         } catch (error) {
-          debugPrint('entity.file failed $id: $error');
+          AppLogger.w(
+              'AndroidVisibleLibraryAdapter', 'entity.file failed $id: $error');
         }
         if (resolvedPath == null || !await _files.exists(resolvedPath)) {
           try {
@@ -104,7 +105,8 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
                     .timeout(const Duration(seconds: 6)))
                 ?.path;
           } catch (error) {
-            debugPrint('originFile failed $id: $error');
+            AppLogger.w('AndroidVisibleLibraryAdapter',
+                'originFile failed $id: $error');
           }
         }
       }
@@ -117,7 +119,8 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
           lower.contains('/.thumbnails/') ||
           lower.contains('/android/data/') ||
           lower.contains('/app_flutter/')) {
-        debugPrint('PH_HIDE reject path $resolvedPath');
+        AppLogger.w('AndroidVisibleLibraryAdapter',
+            'PH_HIDE reject path $resolvedPath');
         return null;
       }
 
@@ -159,7 +162,8 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
             );
           }
         } catch (error, stackTrace) {
-          debugPrint('resolve capture date $id: $error\n$stackTrace');
+          AppLogger.e('AndroidVisibleLibraryAdapter',
+              'resolve capture date $id: $error\n$stackTrace');
         }
       }
 
@@ -172,7 +176,8 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
         dateTaken: dateTaken,
       );
     } catch (error, stackTrace) {
-      debugPrint('resolve Android asset $id: $error\n$stackTrace');
+      AppLogger.e('AndroidVisibleLibraryAdapter',
+          'resolve Android asset $id: $error\n$stackTrace');
       return null;
     }
   }

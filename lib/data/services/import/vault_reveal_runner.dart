@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../domain/models/media_item.dart';
@@ -11,6 +10,7 @@ import '../media_store_service.dart';
 import 'asset_gateway.dart';
 import 'file_system_gateway.dart';
 import 'import_models.dart';
+import '../../../core/utils/app_logger.dart';
 
 /// Runs reveal transfers and commits their DB cleanup chunk by chunk.
 class VaultRevealRunner {
@@ -64,7 +64,8 @@ class VaultRevealRunner {
                 .rename(item.privatePath, visiblePath)
                 .timeout(const Duration(seconds: 15));
           } catch (error, stackTrace) {
-            debugPrint('reveal rename fallback: $error\n$stackTrace');
+            AppLogger.e('VaultRevealRunner',
+                'reveal rename fallback: $error\n$stackTrace');
             await _files.copy(item.privatePath, visiblePath);
             await _files.delete(item.privatePath);
           }
@@ -76,7 +77,8 @@ class VaultRevealRunner {
           dateAddedSec: takenSec,
         );
       } catch (error, stackTrace) {
-        debugPrint('reveal file fallback: $error\n$stackTrace');
+        AppLogger.e(
+            'VaultRevealRunner', 'reveal file fallback: $error\n$stackTrace');
         return false;
       }
     }
@@ -172,7 +174,8 @@ class VaultRevealRunner {
           ),
         );
       } catch (error, stackTrace) {
-        debugPrint('prepare reveal ${item.id}: $error\n$stackTrace');
+        AppLogger.e('VaultRevealRunner',
+            'prepare reveal ${item.id}: $error\n$stackTrace');
         failed++;
         lastError = error.toString();
         completed++;
@@ -321,7 +324,8 @@ class VaultRevealRunner {
         label: 'unhide batch timed out (${chunk.length} items)',
       );
     } catch (error, stackTrace) {
-      debugPrint('unhide batch failed: $error\n$stackTrace');
+      AppLogger.e(
+          'VaultRevealRunner', 'unhide batch failed: $error\n$stackTrace');
       return const [];
     }
   }
@@ -370,9 +374,10 @@ class VaultRevealRunner {
         method: 'recovered',
       );
     } catch (error, stackTrace) {
-      debugPrint(
+      AppLogger.d(
+        'VaultRevealRunner',
         'recover reveal destination ${job.destinationPath}: '
-        '$error\n$stackTrace',
+            '$error\n$stackTrace',
       );
       return null;
     }
@@ -384,14 +389,16 @@ class VaultRevealRunner {
       await _media.hardDeleteRowsOnly(ids);
       return deleted..addAll(ids);
     } catch (error, stackTrace) {
-      debugPrint('batch hardDelete after unhide: $error\n$stackTrace');
+      AppLogger.e('VaultRevealRunner',
+          'batch hardDelete after unhide: $error\n$stackTrace');
     }
     for (final id in ids) {
       try {
         await _media.hardDeleteRowOnly(id);
         deleted.add(id);
       } catch (error, stackTrace) {
-        debugPrint('hardDelete after unhide failed $id: $error\n$stackTrace');
+        AppLogger.e('VaultRevealRunner',
+            'hardDelete after unhide failed $id: $error\n$stackTrace');
       }
     }
     return deleted;
@@ -402,7 +409,8 @@ class VaultRevealRunner {
       try {
         if (await _files.exists(path)) await _files.delete(path);
       } catch (error, stackTrace) {
-        debugPrint('delete reveal thumbnail $path: $error\n$stackTrace');
+        AppLogger.e('VaultRevealRunner',
+            'delete reveal thumbnail $path: $error\n$stackTrace');
       }
     }
   }
@@ -411,7 +419,8 @@ class VaultRevealRunner {
     try {
       await _assets.clearFileCache().timeout(const Duration(seconds: 2));
     } catch (error, stackTrace) {
-      debugPrint('clear gallery cache after reveal: $error\n$stackTrace');
+      AppLogger.e('VaultRevealRunner',
+          'clear gallery cache after reveal: $error\n$stackTrace');
     }
   }
 

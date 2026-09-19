@@ -1,11 +1,11 @@
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:drift_flutter/drift_flutter.dart';
-import 'package:flutter/foundation.dart';
 
 import '../../domain/enums.dart';
 import '../../domain/models/album.dart';
 import 'tables.dart';
+import '../../core/utils/app_logger.dart';
 
 part 'database.g.dart';
 
@@ -66,11 +66,12 @@ class AppDatabase extends _$AppDatabase {
               repairedOrganizer ||
               repairedSourceMetadata ||
               repairedSystemNames) {
-            debugPrint(
+            AppLogger.d(
+              'Database',
               'Database v7 safety repair applied: '
-              'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
-              'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
-              'system_album_names=$repairedSystemNames',
+                  'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
+                  'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
+                  'system_album_names=$repairedSystemNames',
             );
           }
           await _createPerfIndexes();

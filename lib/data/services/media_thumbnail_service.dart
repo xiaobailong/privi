@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/media_thumbnail_spec.dart';
 import 'import/asset_gateway.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Shared boundary for Visible poster loading and hide-time poster reuse.
 abstract interface class MediaThumbnailCache {
@@ -46,7 +47,8 @@ class MediaThumbnailService implements MediaThumbnailCache {
         }
         return bytes;
       } catch (error, stackTrace) {
-        debugPrint('media thumbnail $assetId: $error\n$stackTrace');
+        AppLogger.e('MediaThumbnailService',
+            'media thumbnail $assetId: $error\n$stackTrace');
         return null;
       } finally {
         final _ = _loads.remove(assetId);

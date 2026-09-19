@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../../core/utils/app_logger.dart';
 
 /// FLAG_SECURE — block screenshots / recents preview (optional hardening).
 class SecureWindowService {
@@ -9,7 +9,7 @@ class SecureWindowService {
     try {
       await _channel.invokeMethod<void>('setFlagSecure', {'enabled': enabled});
     } catch (e, stackTrace) {
-      debugPrint('FLAG_SECURE: $e\n$stackTrace');
+      AppLogger.e('SecureWindowService', 'FLAG_SECURE: $e\n$stackTrace');
       Error.throwWithStackTrace(e, stackTrace);
     }
   }

@@ -26,6 +26,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var externalPlayer: ExternalPlayerHandler? = null
     private val videoPlayers = mutableMapOf<Long, VideoPlayerHandler>()
+    private var videoChannel: MethodChannel? = null
 
     private fun <T> runIo(result: MethodChannel.Result, block: () -> T) {
         ioExecutor.execute {
@@ -35,6 +36,33 @@ class MainActivity : FlutterFragmentActivity() {
             } catch (e: Exception) {
                 mainHandler.post { result.error("io_error", e.message, null) }
             }
+        }
+    }
+
+    /**
+     * Forwards one MainActivity line to logcat and to the Dart log file.
+     *
+     * The video channel's own bookkeeping (create/dispose/errors) used to be
+     * visible only in logcat, which made a phone-only playback failure hard to
+     * read from the app log. `invokeMethod` must run on the main thread, which
+     * is where the channel handlers and lifecycle callbacks already run.
+     */
+    private fun logToDart(
+        channel: MethodChannel?,
+        message: String,
+        level: String = "i",
+    ) {
+        when (level) {
+            "e" -> Log.e("PriviMain", message)
+            "w" -> Log.w("PriviMain", message)
+            "d" -> Log.d("PriviMain", message)
+            else -> Log.i("PriviMain", message)
+        }
+        val target = channel ?: return
+        try {
+            target.invokeMethod("log", mapOf("level" to level, "text" to message))
+        } catch (e: Exception) {
+            Log.w("PriviMain", "log forward failed: ${e.message}")
         }
     }
 
@@ -247,34 +275,52 @@ class MainActivity : FlutterFragmentActivity() {
             }
 
         val textures = flutterEngine.renderer ?: return
-        Log.i("PriviMain", "Registering video player channel")
         val videoChannel = MethodChannel(messenger, "com.privi.app/video_player")
+        this.videoChannel = videoChannel
+        logToDart(videoChannel, "Registering video player channel")
         videoChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "create" -> {
                     val filePath = call.argument<String>("filePath")
                     if (filePath.isNullOrEmpty()) {
-                        Log.e("PriviMain", "video create: filePath is null or empty")
+                        logToDart(
+                            videoChannel,
+                            "video create: filePath is null or empty",
+                            "e",
+                        )
                         result.error("bad_args", "filePath is required", null)
                         return@setMethodCallHandler
                     }
                     try {
-                        Log.i("PriviMain", "Creating video player: $filePath")
+                        logToDart(videoChannel, "Creating video player: $filePath")
                         val textureEntry = textures.createSurfaceTexture()
                         val handler = VideoPlayerHandler(
                             this,
                             textureEntry,
                         ) { event, data ->
                             mainHandler.post {
-                                videoChannel.invokeMethod(event, data)
+                                try {
+                                    videoChannel.invokeMethod(event, data)
+                                } catch (e: Exception) {
+                                    // A torn-down engine must not crash the app
+                                    // while the last events are still queued.
+                                    Log.w("PriviMain", "event $event dropped: ${e.message}")
+                                }
                             }
                         }
                         handler.initialize(filePath)
                         videoPlayers[textureEntry.id()] = handler
-                        Log.i("PriviMain", "Video player created: textureId=${textureEntry.id()}")
+                        logToDart(
+                            videoChannel,
+                            "Video player created: textureId=${textureEntry.id()}",
+                        )
                         result.success(textureEntry.id())
                     } catch (e: Exception) {
-                        Log.e("PriviMain", "Video player create error: ${e.message}", e)
+                        logToDart(
+                            videoChannel,
+                            "Video player create error: ${e.message}",
+                            "e",
+                        )
                         result.error("create_error", e.message, null)
                     }
                 }
@@ -284,7 +330,7 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("bad_args", "textureId is required", null)
                         return@setMethodCallHandler
                     }
-                    Log.i("PriviMain", "Disposing video player: textureId=$textureId")
+                    logToDart(videoChannel, "Disposing video player: textureId=$textureId")
                     videoPlayers.remove(textureId)?.release()
                     result.success(null)
                 }
@@ -332,17 +378,25 @@ class MainActivity : FlutterFragmentActivity() {
                     val textureId = call.argument<Number>("textureId")?.toLong()
                     result.success(videoPlayers[textureId]?.isPlaying() ?: false)
                 }
+                "getStatus" -> {
+                    val textureId = call.argument<Number>("textureId")?.toLong()
+                    result.success(videoPlayers[textureId]?.status())
+                }
                 else -> result.notImplemented()
             }
         }
     }
 
     override fun onDestroy() {
-        Log.i("PriviMain", "onDestroy: releasing ${videoPlayers.size} video players")
+        logToDart(
+            videoChannel,
+            "onDestroy: releasing ${videoPlayers.size} video players",
+        )
         externalPlayer?.dispose()
         externalPlayer = null
         videoPlayers.values.forEach { it.release() }
         videoPlayers.clear()
+        videoChannel = null
         ioExecutor.shutdown()
         super.onDestroy()
     }

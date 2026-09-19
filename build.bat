@@ -172,6 +172,10 @@ goto :eof
 REM 保存当前步骤到状态文件
 :save_state
 set "SAVE_NUM=%~1"
+REM flutter clean 会删除 build\ 目录；不在这里补建目录，重定向就会失败
+REM （日志里的 "The system cannot find the path specified." 就是它），
+REM 断点续传状态也就永远写不出来。
+if not exist "build" mkdir "build" 2>nul
 (
     echo SAVED_STEP=!SAVE_NUM!
     echo HASH_CODE_GEN=!HASH_CODE_GEN!
@@ -339,14 +343,19 @@ if !PUB_EXIT! neq 0 (
 )
 echo       pub get 完成。
 
-echo [2/3] flutter gen-l10n...
-call flutter gen-l10n 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [警告] l10n 生成失败！缺少 .arb 文件或未配置国际化，不影响 build_runner
-    set BUILD_FAILED=1
-    REM 非致命：继续运行 build_runner
+echo [2/3] i18n 资源检查...
+dir /b "lib\l10n\*.arb" >nul 2>&1
+if errorlevel 1 (
+    echo       [跳过] lib\l10n 下无 .arb 文件，文案为手写 Dart，无需 gen-l10n。
 ) else (
-    echo       gen-l10n 完成。
+    call flutter gen-l10n 2>&1
+    if errorlevel 1 (
+        echo [警告] l10n 生成失败！不影响 build_runner
+        set BUILD_FAILED=1
+        REM 非致命：继续运行 build_runner
+    ) else (
+        echo       gen-l10n 完成。
+    )
 )
 
 echo [3/3] build_runner (Drift)...

@@ -1,12 +1,12 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants.dart';
 import '../../core/media_thumbnail_spec.dart';
 import 'hide_naming.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Manages vault directories:
 /// - App-private: thumbs/metadata under documents/vault/
@@ -49,7 +49,7 @@ class VaultStorageService {
       try {
         await ensureHiddenRoot();
       } catch (e) {
-        debugPrint('ensureHiddenRoot: $e');
+        AppLogger.w('VaultStorageService', 'ensureHiddenRoot: $e');
       }
     }
     return vault;

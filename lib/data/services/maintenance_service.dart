@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -14,6 +13,7 @@ import 'hide_naming.dart';
 import 'media_rename_service.dart';
 import 'media_store_service.dart';
 import 'vault_storage_service.dart';
+import '../../core/utils/app_logger.dart';
 
 /// Result of reinstall / orphan vault recovery.
 enum VaultRecoveryStatus { noFiles, reindexed, restoredToGallery }
@@ -110,7 +110,8 @@ class MaintenanceService {
       } on StateError {
         return true;
       } catch (error) {
-        debugPrint('app-private vault accessibility probe: $error');
+        AppLogger.w('MaintenanceService',
+            'app-private vault accessibility probe: $error');
         return false;
       }
     }
@@ -124,7 +125,7 @@ class MaintenanceService {
     } on StateError {
       return true;
     } catch (e) {
-      debugPrint('vault accessibility probe: $e');
+      AppLogger.w('MaintenanceService', 'vault accessibility probe: $e');
       return false;
     }
   }
@@ -217,7 +218,8 @@ class MaintenanceService {
               );
             }
           } catch (e, stackTrace) {
-            debugPrint('recover capture date ${c.path}: $e\n$stackTrace');
+            AppLogger.e('MaintenanceService',
+                'recover capture date ${c.path}: $e\n$stackTrace');
           }
         }
         final sortKey = dateTaken ?? DateTime.utc(1970);
@@ -242,7 +244,7 @@ class MaintenanceService {
         knownSet.add(_norm(privatePath));
         reindexed++;
       } catch (e) {
-        debugPrint('recover item ${c.path}: $e');
+        AppLogger.w('MaintenanceService', 'recover item ${c.path}: $e');
         failed++;
       }
     }
@@ -251,12 +253,12 @@ class MaintenanceService {
       try {
         await _media.insertMany(pending);
       } catch (e) {
-        debugPrint('recover batch insert: $e');
+        AppLogger.w('MaintenanceService', 'recover batch insert: $e');
         for (final e2 in pending) {
           try {
             await _media.insert(e2.item, userAlbumId: e2.userAlbumId);
           } catch (err) {
-            debugPrint('recover single insert: $err');
+            AppLogger.w('MaintenanceService', 'recover single insert: $err');
             failed++;
             reindexed = (reindexed - 1).clamp(0, reindexed);
           }
@@ -273,7 +275,7 @@ class MaintenanceService {
             final ok = await import.reveal(item, clearGalleryCache: false);
             if (ok) unhid++;
           } catch (e) {
-            debugPrint('recover unhide ${item.id}: $e');
+            AppLogger.w('MaintenanceService', 'recover unhide ${item.id}: $e');
             failed++;
           }
         }
@@ -283,7 +285,8 @@ class MaintenanceService {
               HideNaming.defaultRestoreDir,
             );
           } catch (e, stackTrace) {
-            debugPrint('recover gallery scan: $e\n$stackTrace');
+            AppLogger.e(
+                'MaintenanceService', 'recover gallery scan: $e\n$stackTrace');
           }
         }
         return VaultRecoveryResult(
@@ -363,7 +366,7 @@ class MaintenanceService {
         );
         fixed++;
       } catch (e) {
-        debugPrint('repairCaptureDates ${item.id}: $e');
+        AppLogger.w('MaintenanceService', 'repairCaptureDates ${item.id}: $e');
         failed++;
       }
     }
@@ -393,7 +396,7 @@ class MaintenanceService {
         }
       }
     } catch (e) {
-      debugPrint('ensureHiddenRoot: $e');
+      AppLogger.w('MaintenanceService', 'ensureHiddenRoot: $e');
       const fallback = '/storage/emulated/0/${VaultPaths.hiddenRootName}';
       if (Directory(fallback).existsSync()) {
         parents.add(fallback);
@@ -403,7 +406,8 @@ class MaintenanceService {
             if (ent is Directory) parents.add(ent.path);
           }
         } catch (fallbackError, stackTrace) {
-          debugPrint(
+          AppLogger.e(
+            'MaintenanceService',
             'fallback vault scan: $fallbackError\n$stackTrace',
           );
         }
@@ -462,7 +466,7 @@ class MaintenanceService {
           );
         }
       } catch (e) {
-        debugPrint('orphan scan dir $dirPath: $e');
+        AppLogger.w('MaintenanceService', 'orphan scan dir $dirPath: $e');
       }
     }
     return out;
@@ -555,7 +559,7 @@ class MaintenanceService {
           }
           n++;
         } catch (e) {
-          debugPrint('missing purge: $e');
+          AppLogger.w('MaintenanceService', 'missing purge: $e');
         }
       }
     }
@@ -572,7 +576,8 @@ class MaintenanceService {
     } on StateError {
       return true;
     } catch (e) {
-      debugPrint('directory accessibility probe (${directory.path}): $e');
+      AppLogger.w('MaintenanceService',
+          'directory accessibility probe (${directory.path}): $e');
       return false;
     }
   }
@@ -590,7 +595,7 @@ class MaintenanceService {
           await _media.purge(r.id);
           n++;
         } catch (e) {
-          debugPrint('retention purge: $e');
+          AppLogger.w('MaintenanceService', 'retention purge: $e');
         }
       }
     }
@@ -619,7 +624,7 @@ class MaintenanceService {
       }
       return n;
     } catch (e) {
-      debugPrint('orphan thumbs: $e');
+      AppLogger.w('MaintenanceService', 'orphan thumbs: $e');
       return 0;
     }
   }

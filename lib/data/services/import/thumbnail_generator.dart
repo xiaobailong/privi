@@ -10,6 +10,7 @@ import '../vault_storage_service.dart';
 import 'file_system_gateway.dart';
 import 'hide_preparer.dart';
 import 'import_models.dart';
+import '../../../core/utils/app_logger.dart';
 
 class ThumbnailJob {
   const ThumbnailJob({
@@ -80,7 +81,8 @@ class ThumbnailGenerator {
             const Duration(seconds: 6),
           );
         } catch (error, stackTrace) {
-          debugPrint('deferred thumb ${job.id}: $error\n$stackTrace');
+          AppLogger.e('ThumbnailGenerator',
+              'deferred thumb ${job.id}: $error\n$stackTrace');
         }
       }
     }
@@ -127,7 +129,8 @@ class ThumbnailGenerator {
             ),
           ).timeout(const Duration(seconds: 8));
           if (path == null) {
-            debugPrint('thumbnail repair ${item.id}: no poster generated');
+            AppLogger.d('ThumbnailGenerator',
+                'thumbnail repair ${item.id}: no poster generated');
             continue;
           }
           repaired++;
@@ -135,13 +138,15 @@ class ThumbnailGenerator {
             try {
               if (await _files.exists(oldPath)) await _files.delete(oldPath);
             } catch (error, stackTrace) {
-              debugPrint(
+              AppLogger.e(
+                'ThumbnailGenerator',
                 'delete legacy thumb ${item.id}: $error\n$stackTrace',
               );
             }
           }
         } catch (error, stackTrace) {
-          debugPrint('thumbnail repair ${item.id}: $error\n$stackTrace');
+          AppLogger.e('ThumbnailGenerator',
+              'thumbnail repair ${item.id}: $error\n$stackTrace');
         }
       }
     }
@@ -172,7 +177,7 @@ class ThumbnailGenerator {
           return output.path;
         }
       } catch (error, stackTrace) {
-        debugPrint('asset thumb: $error\n$stackTrace');
+        AppLogger.e('ThumbnailGenerator', 'asset thumb: $error\n$stackTrace');
       }
     }
 
@@ -190,7 +195,7 @@ class ThumbnailGenerator {
           return output.path;
         }
       } catch (error, stackTrace) {
-        debugPrint('video thumb: $error\n$stackTrace');
+        AppLogger.e('ThumbnailGenerator', 'video thumb: $error\n$stackTrace');
       }
       return null;
     }
@@ -213,7 +218,7 @@ class ThumbnailGenerator {
       );
       return output.path;
     } catch (error, stackTrace) {
-      debugPrint('file thumb: $error\n$stackTrace');
+      AppLogger.e('ThumbnailGenerator', 'file thumb: $error\n$stackTrace');
       return null;
     }
   }

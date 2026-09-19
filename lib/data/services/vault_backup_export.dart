@@ -137,7 +137,8 @@ final class _VaultBackupExporter {
       );
       rethrow;
     } catch (error, stackTrace) {
-      debugPrint('vault export failed: $error\n$stackTrace');
+      AppLogger.e(
+          'VaultBackupExport', 'vault export failed: $error\n$stackTrace');
       await _rollback(
         committed,
         staging: staging,
@@ -344,7 +345,8 @@ final class _VaultBackupExporter {
       }
       return name;
     } catch (error, stackTrace) {
-      debugPrint('optional backup thumbnail skipped: $error\n$stackTrace');
+      AppLogger.e('VaultBackupExport',
+          'optional backup thumbnail skipped: $error\n$stackTrace');
       if (await target.exists()) await target.delete();
       return null;
     }
@@ -484,7 +486,8 @@ final class _VaultBackupExporter {
           await createdMediaDirectory.delete();
         }
       } catch (error, stackTrace) {
-        debugPrint(
+        AppLogger.e(
+          'VaultBackupExport',
           'vault backup directory rollback failed: $error\n$stackTrace',
         );
         firstError ??= error;
