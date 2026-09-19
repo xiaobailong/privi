@@ -28,7 +28,7 @@ class VideoPlayerHandler(
 
     fun initialize(filePath: String) {
         Log.i(TAG, "initialize: textureId=$textureId, path=$filePath")
-        release()
+        resetPlayer()
 
         val exoPlayer = ExoPlayer.Builder(context).build()
         this.player = exoPlayer
@@ -55,6 +55,7 @@ class VideoPlayerHandler(
                         Log.i(TAG, "STATE_READY: textureId=$textureId, " +
                             "duration=${duration}ms, size=${vs.width}x${vs.height}")
                         eventSink("initialized", mapOf(
+                            "textureId" to textureId,
                             "duration" to duration,
                             "width" to vs.width,
                             "height" to vs.height
@@ -62,7 +63,7 @@ class VideoPlayerHandler(
                     }
                     Player.STATE_ENDED -> {
                         Log.i(TAG, "STATE_ENDED: textureId=$textureId")
-                        eventSink("completed", null)
+                        eventSink("completed", mapOf("textureId" to textureId))
                     }
                     Player.STATE_BUFFERING -> {
                         Log.d(TAG, "STATE_BUFFERING: textureId=$textureId")
@@ -77,6 +78,7 @@ class VideoPlayerHandler(
                 Log.e(TAG, "onPlayerError: textureId=$textureId, " +
                     "code=${error.errorCode}, msg=${error.localizedMessage}", error)
                 eventSink("error", mapOf(
+                    "textureId" to textureId,
                     "message" to (error.localizedMessage ?: "Playback error"),
                     "code" to error.errorCode
                 ))
@@ -84,7 +86,9 @@ class VideoPlayerHandler(
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 Log.d(TAG, "onIsPlayingChanged: textureId=$textureId, isPlaying=$isPlaying")
-                eventSink("playingChanged", mapOf("isPlaying" to isPlaying))
+                eventSink("playingChanged", mapOf(
+                    "textureId" to textureId,
+                    "isPlaying" to isPlaying))
             }
         })
     }
@@ -125,13 +129,31 @@ class VideoPlayerHandler(
         return player?.isPlaying == true
     }
 
-    fun release() {
-        Log.i(TAG, "release: textureId=$textureId")
-        player?.stop()
-        player?.clearVideoSurface()
-        player?.release()
-        surface?.release()
+    /**
+     * Tears down the ExoPlayer and its Surface while keeping the texture entry
+     * alive, so initialize() can restart playback on the same SurfaceTexture.
+     */
+    private fun resetPlayer() {
+        val current = player
+        val currentSurface = surface
         player = null
         surface = null
+        current?.stop()
+        current?.clearVideoSurface()
+        current?.release()
+        currentSurface?.release()
+    }
+
+    /**
+     * Full disposal: player, surface and the GL texture entry.
+     */
+    fun release() {
+        Log.i(TAG, "release: textureId=$textureId")
+        resetPlayer()
+        try {
+            textureEntry.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "textureEntry.release failed: ${e.message}")
+        }
     }
 }

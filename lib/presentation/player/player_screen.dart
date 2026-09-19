@@ -47,6 +47,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   String? _videoErrorItemId;
   String? _completedForId;
   int _videoRequest = 0;
+  String? _loadingItemId;
+  Timer? _loadWatchdog;
+  bool _reconcileScheduled = false;
+  final Set<String> _autoRetriedItemIds = <String>{};
   bool _chrome = true;
   bool _programmaticPopAllowed = false;
   VideoFitMode _fitMode = VideoFitMode.fit;
@@ -74,6 +78,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   @override
   void dispose() {
+    _cancelLoadWatchdog();
     _disposeNativeVideo();
     unawaited(VideoSystemUi.restore());
     super.dispose();
@@ -198,11 +203,68 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Future<void> _disposeNativeVideo() async {
     // Invalidate any in-flight load so it cannot publish a stale controller.
     _videoRequest++;
+    _cancelLoadWatchdog();
     final c = _nVideo;
     _nVideo = null;
     _nVideoItemId = null;
     _completedForId = null;
     if (c != null) await c.dispose();
+  }
+
+  /// Fails the endless-spinner case: when the native side never reports
+  /// initialized for the item we handed it, retry once and then show an error.
+  void _startLoadWatchdog(MediaItem item, int request) {
+    _cancelLoadWatchdog();
+    _loadWatchdog = Timer(const Duration(seconds: 15), () {
+      _loadWatchdog = null;
+      if (!mounted) return;
+      final video = _nVideo;
+      if (video == null || _nVideoItemId != item.id) return;
+      if (video.value.isInitialized || video.value.hasError) return;
+      if (_isStaleLoad(request, item)) return;
+      AppLogger.w('PlayerScreen',
+          'Video did not initialize within 15s: ${item.id}');
+      unawaited(_retryLoad(item));
+    });
+  }
+
+  void _cancelLoadWatchdog() {
+    _loadWatchdog?.cancel();
+    _loadWatchdog = null;
+  }
+
+  /// One automatic retry per item, then a visible error instead of a spinner.
+  Future<void> _retryLoad(MediaItem item) async {
+    if (!mounted) return;
+    if (_autoRetriedItemIds.contains(item.id)) {
+      if (_videoErrorItemId != item.id) {
+        AppLogger.e('PlayerScreen', 'Video load retry failed: ${item.id}');
+        setState(() {
+          _videoError = 'Video failed to start: ${item.privatePath}';
+          _videoErrorItemId = item.id;
+        });
+      }
+      await _disposeNativeVideo();
+      return;
+    }
+    _autoRetriedItemIds.add(item.id);
+    AppLogger.w('PlayerScreen', 'Retrying video load: ${item.id}');
+    await _disposeNativeVideo();
+    if (!mounted) return;
+    final state = ref.read(playerControllerProvider);
+    if (state.current?.id != item.id) return;
+    unawaited(_loadVideo(item, state.playing));
+  }
+
+  /// Self-heal hook: re-runs the playlist/native sync after the current frame.
+  void _scheduleReconcile() {
+    if (_reconcileScheduled) return;
+    _reconcileScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reconcileScheduled = false;
+      if (!mounted) return;
+      _syncNativeVideo(ref.read(playerControllerProvider));
+    });
   }
 
   void _clearVideoError() {
@@ -214,6 +276,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _loadVideo(MediaItem item, bool playing) async {
+    if (_loadingItemId == item.id) {
+      AppLogger.d('PlayerScreen', 'Video load already in flight: ${item.id}');
+      return;
+    }
+    _loadingItemId = item.id;
+    try {
+      await _loadVideoInner(item, playing);
+    } finally {
+      if (_loadingItemId == item.id) _loadingItemId = null;
+    }
+  }
+
+  Future<void> _loadVideoInner(MediaItem item, bool playing) async {
     final external = ref.read(settingsControllerProvider).playerExternal &&
         ref.read(externalPlayerCoordinatorProvider).supported;
     if (external) {
@@ -262,6 +337,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // Load generation: bumped by every dispose, so a superseded load can
     // never publish a controller for a stale item.
     final request = _videoRequest;
+    _startLoadWatchdog(item, request);
 
     if (!await widget.videoFileProbe(item.privatePath)) {
       if (_isStaleLoad(request, item)) return;
@@ -382,6 +458,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     // Keep the video engine in sync with the playlist's current item.
     ref.listen(playerControllerProvider, (_, next) => _syncNativeVideo(next));
+
+    // Self-heal: a video is on screen but the native engine has nothing
+    // loaded for it (or is stuck on an older texture). Scheduling a
+    // reconciliation pass keeps the player off an endless spinner.
+    if (item != null &&
+        item.isVideo &&
+        _videoErrorItemId != item.id &&
+        (_nVideo == null || _nVideoItemId != item.id)) {
+      _scheduleReconcile();
+    }
 
     return KeepVaultUnlocked(
       child: PopScope(

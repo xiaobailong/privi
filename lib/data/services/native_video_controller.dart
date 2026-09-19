@@ -63,6 +63,55 @@ class NativeVideoValue {
 class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   static const _channel = MethodChannel('com.privi.app/video_player');
 
+  /// Live controllers keyed by native texture id. The platform channel has a
+  /// single process-wide inbound handler, so native events are routed here.
+  static final Map<int, NativeVideoController> _registry =
+      <int, NativeVideoController>{};
+
+  /// Installs the shared inbound handler. It is re-installed whenever a player
+  /// is registered, so a late dispose() of an older controller can never leave
+  /// the newest controller without an event handler.
+  static void _register(NativeVideoController controller) {
+    _registry[controller.textureId] = controller;
+    _channel.setMethodCallHandler(_dispatch);
+    AppLogger.d('VideoPlayer',
+        'Event handler installed for textureId=${controller.textureId} (live=${_registry.length})');
+  }
+
+  static void _unregister(NativeVideoController controller) {
+    if (identical(_registry[controller.textureId], controller)) {
+      _registry.remove(controller.textureId);
+    }
+    if (_registry.isEmpty) {
+      _channel.setMethodCallHandler(null);
+    } else {
+      // Keep the channel alive for the controllers that are still alive.
+      _channel.setMethodCallHandler(_dispatch);
+    }
+    AppLogger.d('VideoPlayer',
+        'Event handler released for textureId=${controller.textureId} (live=${_registry.length})');
+  }
+
+  /// Routes one native event to the controller that owns it. Payloads carry
+  /// the textureId produced by the native side; unknown ids are dropped.
+  static Future<dynamic> _dispatch(MethodCall call) async {
+    final args = call.arguments;
+    int? textureId;
+    if (args is Map) {
+      final raw = args['textureId'];
+      if (raw is int) {
+        textureId = raw;
+      }
+    }
+    final target = textureId == null ? null : _registry[textureId];
+    if (target == null) {
+      AppLogger.d('VideoPlayer',
+          'Ignoring ${call.method}: no live controller for textureId=$textureId');
+      return;
+    }
+    target._handleCall(call);
+  }
+
   final int textureId;
   final String filePath;
 
@@ -97,7 +146,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         textureId: textureId,
         filePath: filePath,
       );
-      controller._listenForEvents();
+      _register(controller);
       return controller;
     } catch (e, st) {
       AppLogger.e('VideoPlayer', 'Exception creating native player: $e', st);
@@ -105,10 +154,9 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     }
   }
 
-  void _listenForEvents() {
-    _channel.setMethodCallHandler((call) async {
-      if (_disposed) return;
-      switch (call.method) {
+  void _handleCall(MethodCall call) {
+    if (_disposed) return;
+    switch (call.method) {
         case 'initialized':
           final data = call.arguments as Map?;
           _durationMs = data?['duration'] as int? ?? 0;
@@ -161,7 +209,6 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           }
           break;
       }
-    });
   }
 
   void _startPositionTimer() {
@@ -237,7 +284,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     AppLogger.i('VideoPlayer', 'Disposing player, textureId=$textureId');
     _disposed = true;
     _stopPositionTimer();
-    _channel.setMethodCallHandler(null);
+    _unregister(this);
     try {
       await _channel.invokeMethod('dispose', {'textureId': textureId});
     } catch (e) {
