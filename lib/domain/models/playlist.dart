@@ -15,6 +15,25 @@ class Playlist {
     if (shuffle) _reshuffle(keepCurrent: false);
   }
 
+  /// Fresh mutable copy sharing the (unmodifiable) item list.
+  ///
+  /// Player state snapshots must never alias each other: every published
+  /// state owns its own cursor, otherwise a listener diffing two consecutive
+  /// states sees no change at all and misses the item switch.
+  Playlist copy() => Playlist._(
+        items: items,
+        order: _order,
+        shuffle: shuffle,
+        cursor: cursor,
+      );
+
+  Playlist._({
+    required this.items,
+    required List<int> order,
+    required this.shuffle,
+    required this.cursor,
+  }) : _order = List.of(order);
+
   final List<MediaItem> items;
   final List<int> _order;
   bool shuffle;

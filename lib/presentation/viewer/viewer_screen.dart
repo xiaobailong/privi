@@ -50,6 +50,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   bool _muted = false;
   bool _looping = false;
   bool? _lastImmersive;
+  bool? _lastKeepScreenOn;
   String? _orientationLockedItemId;
   bool _orientationOverridden = false;
 
@@ -91,6 +92,14 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     if (_lastImmersive == immersive) return;
     _lastImmersive = immersive;
     unawaited(VideoSystemUi.apply(immersive));
+  }
+
+  /// Keeps the screen awake while a video is on screen, so playback is not
+  /// interrupted by the system lock screen.
+  void _syncKeepScreenOn(bool keepOn) {
+    if (_lastKeepScreenOn == keepOn) return;
+    _lastKeepScreenOn = keepOn;
+    unawaited(VideoSystemUi.setKeepScreenOn(keepOn));
   }
 
   Future<void> _toggleOrientation(BuildContext context) async {
@@ -376,6 +385,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     final landscape = _isLandscape(context);
     final immersive = landscape && item.isVideo;
     _syncSystemUi(immersive);
+    _syncKeepScreenOn(item.isVideo);
     if (item.isVideo &&
         _video != null &&
         _videoId == item.id &&

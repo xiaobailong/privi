@@ -31,6 +31,7 @@ REM ============================================
 
 REM ---- 全局状态变量 ----
 set "BUILD_FAILED=0"
+set "BUMP_FAILED=0"
 set "STEP_NAME="
 set "RESUME_STEP=0"
 
@@ -279,16 +280,29 @@ if not exist ".BUILD_NUM" (
 
 REM ---- 读取并递增 ----
 set /p B=<".BUILD_NUM"
-set /a BN=%B%+1
+set /a BN=B+1 2>nul
+if not defined BN set /a BN=1
 set "NEW_BUILD_NUM=%BN%"
-echo %BN%> ".BUILD_NUM"
 
-REM ---- 更新 pubspec.yaml：仅替换 + 号后面的数字，不动版本名 ----
-set "PS_CMD=Set-Content pubspec.yaml -Encoding UTF8 -NoNewline -Value ((Get-Content pubspec.yaml -Encoding UTF8 -Raw) -replace '(\+)\d+','${1}%BN%')"
-powershell -NoProfile -Command "!PS_CMD!"
-if %ERRORLEVEL% neq 0 (
-    echo [警告] 更新 pubspec.yaml 失败
+REM ---- 更新 pubspec.yaml：只替换 + 号后面的数字，不动版本名 ----
+REM  必须用 -File 调脚本，不能用 powershell -Command 一行式！
+REM  本机安全策略会拦截命令行里含正则 (\+)\d+ 的 -Command 调用：powershell 以退出码
+REM  786 静默退出，pubspec.yaml 不会被修改（历史版本号漂移就是这么来的）。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bump_version.ps1" -BuildNumber %BN% -Path "pubspec.yaml"
+set "BUMP_EXIT=%ERRORLEVEL%"
+
+REM ---- 回读校验：pubspec.yaml 的 build number 必须真的等于 %BN% ----
+set "VER_CODE="
+for /f "tokens=2 delims=+" %%n in ('findstr /c:"version: " pubspec.yaml') do set "VER_CODE=%%n"
+if not "!VER_CODE!"=="%BN%" (
+    echo [错误] pubspec.yaml 版本号未更新：期望 +%BN%，实际 +!VER_CODE!（PowerShell 退出码 !BUMP_EXIT!）
+    echo        排查：build\build_full.log；或手动修改 pubspec.yaml 的 version: 行
+    set "BUMP_FAILED=1"
+    goto :eof
 )
+
+REM ---- 确认成功后才回写 .BUILD_NUM，避免两个版本号再次漂移 ----
+echo %BN%> ".BUILD_NUM"
 
 REM ---- 读取更新后的版本号用于显示和日志 ----
 for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "NEW_VER=%%v"
@@ -507,6 +521,10 @@ REM 步骤2: 递增版本号（每次构建都需要）
 echo [2/6] 递增版本号...
 set "STEP_NAME=[2/6] 递增版本号"
 call :increment_version
+if "!BUMP_FAILED!"=="1" (
+    set "BUILD_FAILED=1"
+    goto :end
+)
 if "%BUILD_FAILED%"=="0" call :save_state 2
 
 REM 步骤3: flutter clean

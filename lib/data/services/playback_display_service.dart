@@ -1,13 +1,17 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Window brightness and system media volume for in-player swipe gestures.
+/// Window brightness, keep-screen-on and system media volume for the in-player
+/// swipe gestures.
 abstract class VideoDisplayControls {
   Future<double> getBrightness();
   Future<void> setBrightness(double value);
   Future<void> resetBrightness();
   Future<double> getVolume();
   Future<void> setVolume(double value);
+
+  /// FLAG_KEEP_SCREEN_ON — stops the system from sleeping during playback.
+  Future<void> setKeepScreenOn(bool enabled);
 }
 
 class PlaybackDisplayService implements VideoDisplayControls {
@@ -40,6 +44,17 @@ class PlaybackDisplayService implements VideoDisplayControls {
 
   @override
   Future<void> setVolume(double value) => _writeUnit('setVolume', value);
+
+  @override
+  Future<void> setKeepScreenOn(bool enabled) async {
+    try {
+      await _channel.invokeMethod<void>('setKeepScreenOn', {
+        'enabled': enabled,
+      });
+    } catch (error, stackTrace) {
+      debugPrint('setKeepScreenOn: $error\n$stackTrace');
+    }
+  }
 
   Future<double> _readUnit(String method) async {
     try {

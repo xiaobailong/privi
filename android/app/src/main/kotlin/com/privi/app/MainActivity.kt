@@ -206,6 +206,17 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                         result.success(null)
                     }
+                    "setKeepScreenOn" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        runOnUiThread {
+                            if (enabled) {
+                                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            } else {
+                                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            }
+                        }
+                        result.success(null)
+                    }
                     "getBrightness" -> {
                         val current = window.attributes.screenBrightness
                         result.success(

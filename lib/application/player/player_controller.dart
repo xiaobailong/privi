@@ -78,14 +78,15 @@ class PlayerController extends Notifier<PlayerUiState> {
   void toggleShuffle() {
     final pl = state.playlist;
     if (pl == null) return;
-    pl.toggleShuffle();
+    // Publish a copy: the playlist held by the previous state stays intact.
+    final toggled = pl.copy()..toggleShuffle();
     // Persist preference.
     unawaited(
       ref
           .read(settingsControllerProvider.notifier)
-          .setShuffleDefault(pl.shuffle),
+          .setShuffleDefault(toggled.shuffle),
     );
-    state = state.copyWith(playlist: pl);
+    state = state.copyWith(playlist: toggled);
   }
 
   Future<void> next() async {
@@ -95,21 +96,29 @@ class PlayerController extends Notifier<PlayerUiState> {
       state = state.copyWith(playing: false);
       return;
     }
-    pl.next();
-    final current = pl.current;
+    // Advance a copy so the state published earlier keeps its own cursor.
+    final advanced = pl.copy()..next();
+    final current = advanced.current;
     AppLogger.i('PlayerController',
-        'Next item: ${current?.id ?? 'null'} (${pl.positionDisplay}/${pl.length})');
-    state =
-        state.copyWith(playlist: pl, playing: true, externalHandedOff: false);
+        'Next item: ${current?.id ?? 'null'} '
+        '(${advanced.positionDisplay}/${advanced.length})');
+    state = state.copyWith(
+      playlist: advanced,
+      playing: true,
+      externalHandedOff: false,
+    );
     await _onItemEntered();
   }
 
   Future<void> prev() async {
     final pl = state.playlist;
     if (pl == null || !pl.hasPrev) return;
-    pl.prev();
-    state =
-        state.copyWith(playlist: pl, playing: true, externalHandedOff: false);
+    final rewound = pl.copy()..prev();
+    state = state.copyWith(
+      playlist: rewound,
+      playing: true,
+      externalHandedOff: false,
+    );
     await _onItemEntered();
   }
 

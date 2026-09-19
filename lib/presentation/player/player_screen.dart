@@ -46,12 +46,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   String? _videoError;
   String? _videoErrorItemId;
   String? _completedForId;
+  int _videoRequest = 0;
   bool _chrome = true;
   bool _programmaticPopAllowed = false;
   VideoFitMode _fitMode = VideoFitMode.fit;
   double _playbackSpeed = 1;
   bool _muted = false;
   bool? _lastImmersive;
+  bool? _lastKeepScreenOn;
   String? _orientationLockedItemId;
   bool _orientationOverridden = false;
   final Map<String, int> _ratingOverrides = {};
@@ -84,6 +86,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (_lastImmersive == immersive) return;
     _lastImmersive = immersive;
     unawaited(VideoSystemUi.apply(immersive));
+  }
+
+  /// Keeps the screen awake while the slideshow runs or a video is on screen,
+  /// so playback is not interrupted by the system lock screen.
+  void _syncKeepScreenOn(bool keepOn) {
+    if (_lastKeepScreenOn == keepOn) return;
+    _lastKeepScreenOn = keepOn;
+    unawaited(VideoSystemUi.setKeepScreenOn(keepOn));
   }
 
   Future<void> _toggleOrientation(BuildContext context) async {
@@ -186,6 +196,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _disposeNativeVideo() async {
+    // Invalidate any in-flight load so it cannot publish a stale controller.
+    _videoRequest++;
     final c = _nVideo;
     _nVideo = null;
     _nVideoItemId = null;
@@ -242,12 +254,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
 
     // Need to load a new video
-    AppLogger.i('PlayerScreen', 'Loading new video: ${item.id} -> ${item.privatePath}');
+    AppLogger.i(
+      'PlayerScreen',
+      'Loading new video: ${item.id} -> ${item.privatePath}',
+    );
     await _disposeNativeVideo();
+    // Load generation: bumped by every dispose, so a superseded load can
+    // never publish a controller for a stale item.
+    final request = _videoRequest;
 
-    final file = File(item.privatePath);
     if (!await widget.videoFileProbe(item.privatePath)) {
-      if (!mounted) return;
+      if (_isStaleLoad(request, item)) return;
       AppLogger.e('PlayerScreen', 'Video file not found: ${item.privatePath}');
       setState(() {
         _videoError = 'Video file does not exist: ${item.privatePath}';
@@ -258,13 +275,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     try {
       final controller = await NativeVideoController.create(item.privatePath);
-      if (!mounted) {
-        AppLogger.d('PlayerScreen', 'Widget unmounted during load, disposing');
+      if (_isStaleLoad(request, item)) {
+        AppLogger.d('PlayerScreen', 'Stale video load, disposing: ${item.id}');
         await controller.dispose();
         return;
       }
       AppLogger.i('PlayerScreen', 'Configuring native video: ${item.id}, playing=$playing');
       await _configureNativeVideo(controller, playing: playing);
+      if (_isStaleLoad(request, item)) {
+        await controller.dispose();
+        return;
+      }
       controller.onCompleted = () {
         if (!mounted) return;
         _completedForId = item.id;
@@ -286,7 +307,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       });
       AppLogger.i('PlayerScreen', 'Video loaded successfully: ${item.id}');
     } catch (error, stackTrace) {
-      if (!mounted) return;
+      if (_isStaleLoad(request, item)) return;
       AppLogger.e('PlayerScreen',
           'Video load failed for ${item.id}: $error', stackTrace);
       debugPrint('video load failed for ${item.id}: $error\n$stackTrace');
@@ -295,6 +316,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         _videoErrorItemId = item.id;
       });
     }
+  }
+
+  /// Reconciles the native video engine with the playlist's current item.
+  ///
+  /// Keyed on the loaded item id instead of on prev/next state diffs: every
+  /// item switch ends in either a playing video or a visible error, never in
+  /// an endless spinner.
+  void _syncNativeVideo(PlayerUiState ui) {
+    final item = ui.current;
+    if (item == null || !item.isVideo) {
+      if (_nVideo != null) unawaited(_disposeNativeVideo());
+      return;
+    }
+    final video = _nVideo;
+    if (_nVideoItemId != item.id || video == null) {
+      unawaited(_loadVideo(item, ui.playing));
+      return;
+    }
+    if (video.value.isInitialized && video.value.isPlaying != ui.playing) {
+      unawaited(_loadVideo(item, ui.playing));
+    }
+  }
+
+  /// True when [request] was superseded or the playlist moved to another item.
+  bool _isStaleLoad(int request, MediaItem item) {
+    if (!mounted || request != _videoRequest) return true;
+    return ref.read(playerControllerProvider).current?.id != item.id;
   }
 
   void _toggleChrome() => setState(() => _chrome = !_chrome);
@@ -327,29 +375,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         _nVideo!.value.isInitialized;
     final immersive = landscape && builtInVideo;
     _syncSystemUi(immersive);
+    _syncKeepScreenOn(item != null && (ui.playing || item.isVideo));
     if (builtInVideo) {
       _maybeLockOrientationToVideo();
     }
 
-    // Keep video engine in sync with playlist cursor
-    ref.listen(playerControllerProvider, (prev, next) {
-      if (next.current?.id != prev?.current?.id) {
-        if (next.current?.isVideo == true) {
-          _loadVideo(next.current!, next.playing);
-        } else {
-          _disposeNativeVideo();
-        }
-      } else if (next.playing != prev?.playing && next.current?.isVideo == true) {
-        final v = _nVideo;
-        if (v != null && v.value.isInitialized) {
-          if (next.playing) {
-            unawaited(v.play());
-          } else {
-            unawaited(v.pause());
-          }
-        }
-      }
-    });
+    // Keep the video engine in sync with the playlist's current item.
+    ref.listen(playerControllerProvider, (_, next) => _syncNativeVideo(next));
 
     return KeepVaultUnlocked(
       child: PopScope(

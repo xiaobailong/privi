@@ -54,6 +54,11 @@ abstract final class VideoSystemUi {
     );
   }
 
+  /// Keeps the screen awake while media is on screen on this page.
+  static Future<void> setKeepScreenOn(bool enabled) {
+    return PlaybackDisplayService.instance.setKeepScreenOn(enabled);
+  }
+
   static Future<void> toggle(bool currentlyLandscape) async {
     await SystemChrome.setPreferredOrientations(
       currentlyLandscape
@@ -80,6 +85,7 @@ abstract final class VideoSystemUi {
     await unlockOrientations();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     await PlaybackDisplayService.instance.resetBrightness();
+    await PlaybackDisplayService.instance.setKeepScreenOn(false);
   }
 }
 

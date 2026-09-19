@@ -58,14 +58,19 @@ class AppDatabase extends _$AppDatabase {
           final repairedPinnedAt = await _ensureAlbumPinnedAtColumn();
           final repairedOrganizer = await _ensureAlbumOrganizerSchema();
           final repairedSourceMetadata = await _ensureSourceMetadataSchema();
+          // System albums were seeded with mangled placeholder names; repair
+          // them on every open (no schema bump required).
+          final repairedSystemNames = await _ensureSystemAlbumNames();
           if (repairedOriginalPath ||
               repairedPinnedAt ||
               repairedOrganizer ||
-              repairedSourceMetadata) {
+              repairedSourceMetadata ||
+              repairedSystemNames) {
             debugPrint(
               'Database v7 safety repair applied: '
               'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
-              'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata',
+              'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
+              'system_album_names=$repairedSystemNames',
             );
           }
           await _createPerfIndexes();
@@ -190,7 +195,7 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.all,
-        name: '????',
+        name: SystemAlbumNames.all,
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.all.storageValue),
@@ -199,7 +204,7 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.favorites,
-        name: '??',
+        name: SystemAlbumNames.favorites,
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.favorites.storageValue),
@@ -208,12 +213,40 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.recycle,
-        name: '???',
+        name: SystemAlbumNames.recycle,
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.recycle.storageValue),
       ),
     );
+  }
+
+  /// Restores the canonical names of the three system albums.
+  ///
+  /// Builds that lost the CJK literals seeded placeholder names ('????'). Only
+  /// placeholder names are rewritten, so a manually renamed album is kept.
+  Future<bool> _ensureSystemAlbumNames() async {
+    final canonical = <String, String>{
+      SystemAlbumIds.all: SystemAlbumNames.all,
+      SystemAlbumIds.favorites: SystemAlbumNames.favorites,
+      SystemAlbumIds.recycle: SystemAlbumNames.recycle,
+    };
+    final query = select(albums)..where((t) => t.isSystem.equals(true));
+    final rows = await query.get();
+    var changed = false;
+    for (final row in rows) {
+      final name = canonical[row.id];
+      if (name == null || !_isPlaceholderAlbumName(row.name)) continue;
+      await (update(albums)..where((t) => t.id.equals(row.id)))
+          .write(AlbumsCompanion(name: Value(name)));
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// True for the placeholder names written by the broken seed.
+  static bool _isPlaceholderAlbumName(String name) {
+    return name.trim().replaceAll('?', '').isEmpty;
   }
 
   // ── Media queries ──────────────────────────────────────────────
