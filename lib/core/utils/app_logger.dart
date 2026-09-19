@@ -61,7 +61,7 @@ class AppLogger {
       await dir.create(recursive: true);
     }
     await _cleanOldLogs();
-    info('AppLogger', 'Logger initialized, logDir=$_logDir');
+    i('AppLogger', 'Logger initialized, logDir=$_logDir');
   }
 
   /// Call once at shutdown to flush remaining entries.

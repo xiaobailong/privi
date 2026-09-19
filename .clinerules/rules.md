@@ -1,0 +1,5 @@
+- 处于 Act/YOLO 模式时不要请求批准，直接执行；仅在操作不可逆（删除数据、强推、改生产配置）时才停下确认。
+- 需要技术选型时自行采用推荐方案并在结尾说明理由，不要用提问工具等待确认；失败时按预设备选方案自动重试，最多 3 轮。
+- 本仓库构建入口：build.bat（全流程）、build.bat gradle（仅 Gradle，快速迭代）、build.bat fast。日志：build/build_full.log、build/build_exit.log。
+- 改完必须自测：跑构建并把失败日志尾部贴出，不要只给结论。
+- 结束前必须给出 git diff 摘要；不要自动 git commit / git push。

@@ -11,7 +11,6 @@ import '../../core/l10n.dart';
 import '../../data/services/maintenance_service.dart';
 import '../../data/services/vault_backup_service.dart';
 import '../lock/pattern_lock.dart';
-import 'app_update_tile.dart';
 import 'vault_backup_progress_dialog.dart';
 
 /// Full settings — security, display, playback, storage export/import.
@@ -328,7 +327,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
             onTap: () => _showAbout(context, ref, versionAndBuild),
           ),
-          const AppUpdateTile(),
           ListTile(
             leading: const Icon(Icons.person_outline),
             title: Text(context.l10n.author),

@@ -72,7 +72,6 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   int _height = 0;
   bool _nativePlaying = false;
 
-  StreamSubscription<dynamic>? _eventSubscription;
   Timer? _positionTimer;
 
   VoidCallback? onCompleted;
@@ -107,7 +106,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   }
 
   void _listenForEvents() {
-    _eventSubscription = _channel.setMethodCallHandler((call) {
+    _channel.setMethodCallHandler((call) async {
       if (_disposed) return;
       switch (call.method) {
         case 'initialized':
@@ -238,8 +237,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     AppLogger.i('VideoPlayer', 'Disposing player, textureId=$textureId');
     _disposed = true;
     _stopPositionTimer();
-    await _eventSubscription?.cancel();
-    _eventSubscription = null;
+    _channel.setMethodCallHandler(null);
     try {
       await _channel.invokeMethod('dispose', {'textureId': textureId});
     } catch (e) {

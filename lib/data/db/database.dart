@@ -190,7 +190,7 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.all,
-        name: 'All Media',
+        name: '????',
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.all.storageValue),
@@ -199,7 +199,7 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.favorites,
-        name: 'Favorites',
+        name: '??',
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.favorites.storageValue),
@@ -208,7 +208,7 @@ class AppDatabase extends _$AppDatabase {
     await into(albums).insert(
       AlbumsCompanion.insert(
         id: SystemAlbumIds.recycle,
-        name: 'Recycle Bin',
+        name: '???',
         isSystem: true,
         createdAt: now,
         systemKind: Value(SystemAlbumKind.recycle.storageValue),

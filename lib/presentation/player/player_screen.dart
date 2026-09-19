@@ -333,13 +333,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     // Keep video engine in sync with playlist cursor
     ref.listen(playerControllerProvider, (prev, next) {
-      if (next.current?.id != prev.current?.id) {
+      if (next.current?.id != prev?.current?.id) {
         if (next.current?.isVideo == true) {
           _loadVideo(next.current!, next.playing);
         } else {
           _disposeNativeVideo();
         }
-      } else if (next.playing != prev.playing && next.current?.isVideo == true) {
+      } else if (next.playing != prev?.playing && next.current?.isVideo == true) {
         final v = _nVideo;
         if (v != null && v.value.isInitialized) {
           if (next.playing) {

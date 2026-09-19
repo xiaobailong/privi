@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -42,7 +44,6 @@ import 'platform/vault_workflow.dart';
 import 'platform/visible_library.dart';
 import 'player/external_player_gateway.dart';
 import 'update/app_restart_service.dart';
-import 'update/app_update_service.dart';
 import 'update/external_url_launcher.dart';
 
 /// Core DI graph. Manual providers for Phase 1 (codegen can replace later).
@@ -63,10 +64,6 @@ final vaultBackupDirectoryPickerProvider = Provider<VaultBackupDirectoryPicker>(
 
 final appBuildInfoProvider = Provider<AppBuildInfo>((ref) {
   throw UnimplementedError('appBuildInfoProvider must be overridden');
-});
-
-final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
-  throw UnimplementedError('appUpdateServiceProvider must be overridden');
 });
 
 final appRestartServiceProvider = Provider<AppRestartService>((ref) {

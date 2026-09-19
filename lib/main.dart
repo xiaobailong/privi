@@ -2,22 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:pub_semver/pub_semver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
 import 'application/providers.dart';
 import 'application/settings/settings_controller.dart';
-import 'application/update/app_release_source.dart';
 import 'application/update/app_restart_service.dart';
-import 'application/update/app_update_coordinator.dart';
 import 'application/update/external_url_launcher.dart';
 import 'core/app_build_info.dart';
 import 'core/utils/app_logger.dart';
 import 'data/services/android_external_url_launcher.dart';
-import 'data/services/github_app_release_source.dart';
 import 'data/services/platform_app_restart_service.dart';
 
 Future<void> main() async {
@@ -29,13 +24,6 @@ Future<void> main() async {
 
   final packageInfo = await PackageInfo.fromPlatform();
   AppLogger.i('Main', 'Version: ${packageInfo.version}+${packageInfo.buildNumber}');
-  final currentVersion = Version.parse(packageInfo.version);
-  final AppReleaseSource releaseSource =
-      GithubAppReleaseSource(client: http.Client());
-  final appUpdateService = AppUpdateCoordinator(
-    currentVersion: currentVersion,
-    releaseSource: releaseSource,
-  );
   final AppRestartService appRestartService =
       const PlatformAppRestartService();
   final ExternalUrlLauncher externalUrlLauncher =
@@ -51,7 +39,6 @@ Future<void> main() async {
       appBuildInfoProvider.overrideWithValue(appBuildInfo),
       appRestartServiceProvider.overrideWithValue(appRestartService),
       externalUrlLauncherProvider.overrideWithValue(externalUrlLauncher),
-      appUpdateServiceProvider.overrideWithValue(appUpdateService),
     ],
   );
   container.read(databaseProvider);

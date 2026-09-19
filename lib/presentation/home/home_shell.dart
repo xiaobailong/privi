@@ -126,12 +126,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   }
 
   void _openAlbum(String id, String name, {SystemAlbumKind? systemKind}) {
-    final title = localizedAlbumTitle(
-      context.l10n,
-      name: name,
-      systemKind: systemKind,
-      albumId: id,
-    );
+    final title = name;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MediaGridScreen(albumId: id, title: title),
@@ -727,12 +722,7 @@ class _InvisibleTab extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          localizedAlbumTitle(
-                            context.l10n,
-                            name: album.name,
-                            systemKind: album.systemKind,
-                            albumId: album.id,
-                          ),
+                          album.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -1117,12 +1107,7 @@ class _InvisibleTab extends ConsumerWidget {
         builder: (_) => PlayerScreen(
           items: List.of(items),
           shuffle: true,
-          title: localizedAlbumTitle(
-            context.l10n,
-            name: album.name,
-            systemKind: album.systemKind,
-            albumId: album.id,
-          ),
+          title: album.name,
         ),
       ),
     );
@@ -1148,12 +1133,7 @@ class _InvisibleTab extends ConsumerWidget {
         content: Text(
           context.l10n.restoreAlbumBody(
             items.length,
-            localizedAlbumTitle(
-              context.l10n,
-              name: album.name,
-              systemKind: album.systemKind,
-              albumId: album.id,
-            ),
+            album.name,
           ),
         ),
         actions: [
@@ -1415,12 +1395,7 @@ class _MosaicTile extends StatelessWidget {
                         ? (cell.label ?? '')
                         : group != null
                             ? group.group.name
-                            : localizedAlbumTitle(
-                                context.l10n,
-                                name: view!.album.name,
-                                systemKind: view.album.systemKind,
-                                albumId: view.album.id,
-                              )),
+                            : view!.album.name),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -1497,12 +1472,7 @@ class _ShelfListTile extends StatelessWidget {
             ? cell.label ?? ''
             : group != null
                 ? group.group.name
-                : localizedAlbumTitle(
-                    context.l10n,
-                    name: view!.album.name,
-                    systemKind: view.album.systemKind,
-                    albumId: view.album.id,
-                  );
+                : view!.album.name;
     final hearts = view == null || view.album.rating == 0
         ? ''
         : List.filled(view.album.rating, '♥').join();

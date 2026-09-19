@@ -77,12 +77,7 @@ class AlbumCard extends StatelessWidget {
                   ],
                   Expanded(
                     child: Text(
-                      localizedAlbumTitle(
-                        context.l10n,
-                        name: album.name,
-                        systemKind: kind,
-                        albumId: album.id,
-                      ),
+                      album.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
