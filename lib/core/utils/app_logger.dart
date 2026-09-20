@@ -6,7 +6,7 @@ import 'package:path/path.dart' as p;
 
 /// Simple file-based logger for troubleshooting.
 ///
-/// Writes to `Download/Privi/logs/privi_log_YYYY-MM-DD.txt` and automatically
+/// Writes to `Download/密册/logs/密册_log_YYYY-MM-DD.txt` and automatically
 /// deletes log files older than 7 days on startup.
 ///
 /// The shared Download folder needs "all files access"; when it is not
@@ -63,7 +63,7 @@ class _LogEntry {
 class AppLogger {
   AppLogger._();
 
-  static const String _filePrefix = 'privi_log_';
+  static const String _filePrefix = '密册_log_';
 
   static final _queue = <_LogEntry>[];
   static bool _flushing = false;
@@ -123,9 +123,9 @@ class AppLogger {
     _applyConsoleSwitch();
     _sessionId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     _candidateDirs = <String>[
-      if (downloadDir.isNotEmpty) p.join(downloadDir, 'Privi', 'logs'),
+      if (downloadDir.isNotEmpty) p.join(downloadDir, '密册', 'logs'),
       for (final dir in fallbackDirs)
-        if (dir.isNotEmpty) p.join(dir, 'Privi', 'logs'),
+        if (dir.isNotEmpty) p.join(dir, '密册', 'logs'),
     ];
     _dirIndex = 0;
     _writeFailures = 0;

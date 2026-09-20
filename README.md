@@ -1,4 +1,4 @@
-# Privi
+# 密册
 
 个人使用、完全在本地的 **Android 媒体保险库**。将照片和视频从系统相册中隐藏，支持 **1–3 颗红心**评分、收藏、播放列表，以及**图案 / PIN + 生物识别**锁。仅支持深色主题。仅提供 APK 侧载安装，不使用云存储、账号或分析服务。
 
@@ -8,10 +8,10 @@
 
 ## 安装（APK）
 
-Privi 不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
+密册不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
 1. 打开最新的 **[Release](https://github.com/kcng0/privi/releases/latest)**。
-2. 下载 `privi-<version>.apk`。
+2. 下载 `密册-<version>.apk`。
 3. 如有提示，在手机上允许浏览器或文件管理器安装未知来源应用。
 4. 打开 APK 完成安装。
 
@@ -65,7 +65,7 @@ Privi 不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
 ### 导入与备份
 
-- **分享导入**：支持通过系统分享 Intent 将图片和视频导入 Privi
+- **分享导入**：支持通过系统分享 Intent 将图片和视频导入密册
 - **批量导入**：从 Visible 系统图库批量选择并隐藏媒体
 - **保险库导出**：将完整保险库（数据库 + 媒体文件）导出到本地文件夹，附带 manifest 校验
 - **保险库恢复**：从本地备份文件夹恢复保险库数据
@@ -75,7 +75,7 @@ Privi 不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
 - **孤文件扫描**：扫描保险库隐藏目录中未被数据库记录的文件
 - **日期修复**：从 EXIF / 视频元数据提取原始拍摄日期，修正排序
-- **日志诊断**：自动将运行日志写入 `/Download/Privi/logs/`，按天分卷，7 天自动清理，支持开关
+- **日志诊断**：自动将运行日志写入 `/Download/密册/logs/`，按天分卷，7 天自动清理，支持开关
 
 ### 其他
 
@@ -88,15 +88,15 @@ Privi 不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
 ## 日志与故障排查
 
-Privi 运行时会自动将关键环节的日志写入本地文件，方便排查问题。
+密册运行时会自动将关键环节的日志写入本地文件，方便排查问题。
 
 ### 日志位置
 
 ```
-/storage/emulated/0/Download/Privi/logs/
+/storage/emulated/0/Download/密册/logs/
 ```
 
-日志文件按天分卷：`privi_log_YYYY-MM-DD.txt`
+日志文件按天分卷：`密册_log_YYYY-MM-DD.txt`
 
 ### 自动清理
 
@@ -122,8 +122,8 @@ Privi 运行时会自动将关键环节的日志写入本地文件，方便排�
 
 如果内置播放器异常或连续播放中断，按以下步骤提取日志：
 
-1. 复现问题后立即用文件管理器打开 `/storage/emulated/0/Download/Privi/logs/`
-2. 打开当天 `privi_log_*.txt` 文件
+1. 复现问题后立即用文件管理器打开 `/storage/emulated/0/Download/密册/logs/`
+2. 打开当天 `密册_log_*.txt` 文件
 3. 搜索以下标签定位问题：
 
 | 搜索关键词 | 对应问题 |
@@ -131,8 +131,8 @@ Privi 运行时会自动将关键环节的日志写入本地文件，方便排�
 | `VideoPlayer` | 原生播放器创建、初始化、错误 |
 | `PlayerScreen` | UI 层视频加载、控制、文件缺失 |
 | `PlayerController` | 播放列表切换、连续播放逻辑 |
-| `PriviVideoPlayer` | Kotlin ExoPlayer 状态机、播放错误码 |
-| `PriviMain` | 原生通道创建/销毁 |
+| `密册VideoPlayer` | Kotlin ExoPlayer 状态机、播放错误码 |
+| `密册Main` | 原生通道创建/销毁 |
 
 常见问题定位示例：
 
@@ -260,7 +260,7 @@ clean.bat
 | 2 | 删除 `.dart_tool` 目录 |
 | 3 | 删除 `build` 目录 |
 | 4 | 删除 `.gradle` 缓存 |
-| 5 | 删除根路径下的 `privi-*.apk` / `*.aab` 文件 |
+| 5 | 删除根路径下的 `密册-*.apk` / `*.aab` 文件 |
 
 首次配置：打开 `clean.bat`，确保顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径与 `build.bat` 一致。
 

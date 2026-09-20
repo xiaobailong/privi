@@ -282,8 +282,8 @@ class LockController extends Notifier<VaultLockState> {
 
   /// Biometric convenience unlock (requires root credential + enabled).
   Future<bool> unlockWithBiometric({
-    String reason = 'Unlock Privi',
-    String signInTitle = 'Privi',
+    String reason = '解锁密册',
+    String signInTitle = '密册',
     String biometricHint = 'Verify identity',
     String cancelButton = 'Cancel',
   }) async {
@@ -332,7 +332,7 @@ class LockController extends Notifier<VaultLockState> {
       final ok = await bio.authenticate(
         reason: reason ?? 'Confirm to enable biometric unlock',
         biometricOnly: false,
-        signInTitle: signInTitle ?? 'Privi',
+        signInTitle: signInTitle ?? '密册',
         biometricHint: biometricHint ?? 'Verify identity',
         cancelButton: cancelButton ?? 'Cancel',
       );
@@ -373,9 +373,9 @@ class LockController extends Notifier<VaultLockState> {
       return false;
     }
     final ok = await bio.authenticate(
-      reason: reason ?? 'Confirm it is you to reset Privi pattern',
+      reason: reason ?? '确认身份以重置密册图案',
       biometricOnly: false, // allow device PIN / pattern / biometric
-      signInTitle: signInTitle ?? 'Privi',
+      signInTitle: signInTitle ?? '密册',
       biometricHint: biometricHint ?? 'Verify identity',
       cancelButton: cancelButton ?? 'Cancel',
     );

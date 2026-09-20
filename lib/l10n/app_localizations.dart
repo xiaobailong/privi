@@ -1,13 +1,13 @@
 
 
 
-/// Chinese strings for Privi.
+/// Chinese strings for 密册.
 class AppLocalizations {
   const AppLocalizations._();
 
   static const AppLocalizations current = AppLocalizations._();
 
-  String get appName => 'Privi';
+  String get appName => '密册';
 
   String get visible => '可见';
 
@@ -143,7 +143,7 @@ class AppLocalizations {
 
   String get permissionNeeded => '需要权限';
 
-  String get permissionNeededBody => 'Privi 需要权限才能从系统图库隐藏照片和视频。请在设置中允许后重试。';
+  String get permissionNeededBody => '密册需要权限才能从系统图库隐藏照片和视频。请在设置中允许后重试。';
 
   String get openSettings => '打开设置';
 
@@ -438,7 +438,7 @@ class AppLocalizations {
 
   String get diagnosticLog => '记录诊断日志';
 
-  String get diagnosticLogEnabled => '已开启 · 写入 Download/Privi/logs';
+  String get diagnosticLogEnabled => '已开启 · 写入 Download/密册/logs';
 
   String get diagnosticLogDisabled => '已关闭 · 不再写入任何日志';
 
@@ -554,7 +554,7 @@ class AppLocalizations {
 
   String get backupFolderSelectionFailed => '无法打开文件夹，请重试';
 
-  String get backupManifestMissing => '未找到 Privi 备份清单。';
+  String get backupManifestMissing => '未找到密册备份清单。';
 
   String get backupManifestMalformed => '备份清单无效。';
 
@@ -665,7 +665,7 @@ class AppLocalizations {
   String get updateDownloadRelaunchPrompt => '立即下载？重新打开后生效。';
 
   String appReleasePrompt(String version) {
-    return 'GitHub 已发布 Privi $version';
+    return 'GitHub 已发布密册 $version';
   }
 
   String get later => '稍后';
@@ -782,7 +782,7 @@ class AppLocalizations {
 
   String get verifyIdentity => '验证身份';
 
-  String get unlockPrivi => '解锁 Privi';
+  String get unlockPrivi => '解锁密册';
 
   String get biometricAvailable => '可用时使用指纹 / 面容';
 
@@ -834,7 +834,7 @@ class AppLocalizations {
 
   String get confirmBiometricEnable => '确认以启用生物识别解锁';
 
-  String get confirmResetPattern => '确认身份以重置 Privi 图案';
+  String get confirmResetPattern => '确认身份以重置密册图案';
 
   String get wrongPattern => '图案错误';
 

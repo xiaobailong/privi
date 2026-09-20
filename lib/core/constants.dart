@@ -2,17 +2,17 @@ import 'package:flutter/widgets.dart';
 
 /// Product branding (display name, author, license).
 abstract final class AppInfo {
-  static const String name = 'Privi';
-  static const String fullName = 'Privi';
+  static const String name = '密册';
+  static const String fullName = '密册';
   static const String author = 'kcng0';
   static const String authorUrl = 'https://github.com/kcng0';
   static const String tagline =
       'Personal on-device media vault — hide, rate, and play privately.';
   static const String about =
-      'Privi is a personal, on-device Android media vault. '
-      'Hide photos and videos from the system gallery, rate them with hearts, '
-      'organize into albums, and play them back with a PIN/pattern lock.\n\n'
-      'Sideload-only. Media stays on-device. No accounts or analytics.';
+      '密册是一款个人本地 Android 媒体保险库。'
+      '可从系统图库隐藏照片和视频，用爱心评分，整理到相册，'
+      '并通过 PIN/图案锁保护播放。\n\n'
+      '仅侧载安装。媒体数据保留在设备本地。无账号、无数据统计。';
   static const String licenseShort = 'MIT License';
   static const String licenseBody = 'MIT License\n\n'
       'Copyright (c) 2026 kcng0\n\n'

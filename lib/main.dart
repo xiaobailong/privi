@@ -24,10 +24,10 @@ Future<void> main() async {
   // off, the file must stay untouched from the very first line of the session.
   await _applyLogPreference();
 
-  // Initialize file logger to Download/Privi/logs/ (app-private fallback when
+  // Initialize file logger to Download/密册/logs/ (app-private fallback when
   // that folder is not writable). Never blocks startup.
   await _initLogging();
-  AppLogger.i('Main', 'Privi starting...');
+  AppLogger.i('Main', '密册 starting...');
 
   // Record uncaught Dart errors in the same log file: a playback bug reported
   // from the phone must not depend on adb logcat being available.

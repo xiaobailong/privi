@@ -15,7 +15,7 @@
 
     <!-- Retained for supported Android 10-and-earlier devices (minSdk < 30). -->
     <application
-        android:label="Privi"
+        android:label="密册"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">

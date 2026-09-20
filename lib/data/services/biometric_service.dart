@@ -57,9 +57,9 @@ class BiometricService {
   /// Returns true on success, false on cancel / failure / no hardware.
   /// Never throws for user cancel.
   Future<bool> authenticate({
-    String reason = 'Unlock Privi',
+    String reason = '解锁密册',
     bool biometricOnly = true,
-    String signInTitle = 'Privi',
+    String signInTitle = '密册',
     String biometricHint = 'Verify identity',
     String cancelButton = 'Cancel',
   }) async {
