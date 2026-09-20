@@ -34,6 +34,11 @@ set "BUILD_FAILED=0"
 set "BUMP_FAILED=0"
 set "STEP_NAME="
 set "RESUME_STEP=0"
+REM 断点续传状态文件：必须在这里定义。放在下沉的 :calc_hash_codegen 之前
+REM 会被上面的 goto 跳过（第 81 行的任务分发），导致 :save_state 重定向到空
+REM 路径，日志里就会出现 "The system cannot find the path specified."，
+REM 状态文件也一直写不出来。
+set "STATE_FILE=build\.build_state"
 
 REM ---- 环境配置（按实际路径修改） ----
 set "JAVA_HOME=D:\Tools\DevTools\Java\JDK\jdk-21.0.10-oracle"
@@ -95,40 +100,29 @@ REM ============================================
 REM  断点续传：记录/读取构建进度，跳过已完成步骤
 REM  文件: build\.build_state
 REM  格式: STEP=N  +  HASH_xxx=<md5>
+REM  注意: STATE_FILE 已在脚本开头的全局变量区定义
 REM ============================================
-set "STATE_FILE=build\.build_state"
 
 REM 计算代码生成相关文件的哈希
+REM 注意: 本机安全策略会静默拦截含正则/管道的 powershell -Command 长命令行
+REM       （表现为退出码 786、无输出），因此哈希逻辑放在 build_hash.ps1 里用 -File 调用。
 :calc_hash_codegen
 set "HASH_CODE_GEN="
-powershell -NoProfile -Command ^
-    "$files = @(Get-ChildItem 'lib' -Recurse -File -Include '*.dart','*.yaml' -ErrorAction SilentlyContinue ^| Sort FullName); " ^
-    "$hash = ($files.ForEach({ (Get-FileHash $_.FullName -Algorithm MD5).Hash }) + " ^
-             "(Get-FileHash 'pubspec.yaml' -Algorithm MD5 -ErrorAction SilentlyContinue).Hash + " ^
-             "(Get-FileHash 'pubspec.lock' -Algorithm MD5 -ErrorAction SilentlyContinue).Hash + " ^
-             "(Get-FileHash 'build.yaml' -Algorithm MD5 -ErrorAction SilentlyContinue).Hash) -join ''; " ^
-    "$bytes = [Text.Encoding]::UTF8.GetBytes($hash); " ^
-    "$md5 = [Security.Cryptography.MD5]::Create().ComputeHash($bytes); " ^
-    "Write-Output ([BitConverter]::ToString($md5) -replace '-','')" > build\_hash_codegen.tmp 2>nul
-if exist "build\_hash_codegen.tmp" (
-    set /p HASH_CODE_GEN=<build\_hash_codegen.tmp
-    del build\_hash_codegen.tmp 2>nul
+if not exist "%~dp0build_hash.ps1" (
+    echo [警告] 未找到 build_hash.ps1，无法计算代码哈希
+    goto :eof
 )
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind codegen 2^>nul`) do set "HASH_CODE_GEN=%%v"
 goto :eof
 
 REM 计算 Gradle 配置文件的哈希
 :calc_hash_gradle
 set "HASH_GRADLE="
-powershell -NoProfile -Command ^
-    "$files = @('android\build.gradle.kts','android\app\build.gradle.kts','android\settings.gradle.kts','android\gradle.properties'); " ^
-    "$hash = ($files.ForEach({ (Get-FileHash $_ -Algorithm MD5 -ErrorAction SilentlyContinue).Hash })) -join ''; " ^
-    "$bytes = [Text.Encoding]::UTF8.GetBytes($hash); " ^
-    "$md5 = [Security.Cryptography.MD5]::Create().ComputeHash($bytes); " ^
-    "Write-Output ([BitConverter]::ToString($md5) -replace '-','')" > build\_hash_gradle.tmp 2>nul
-if exist "build\_hash_gradle.tmp" (
-    set /p HASH_GRADLE=<build\_hash_gradle.tmp
-    del build\_hash_gradle.tmp 2>nul
+if not exist "%~dp0build_hash.ps1" (
+    echo [警告] 未找到 build_hash.ps1，无法计算 Gradle 哈希
+    goto :eof
 )
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind gradle 2^>nul`) do set "HASH_GRADLE=%%v"
 goto :eof
 
 REM 读取状态文件，对比哈希，确定从哪一步开始
@@ -146,6 +140,21 @@ if not defined SAVED_STEP goto :eof
 REM 计算当前哈希
 call :calc_hash_codegen
 call :calc_hash_gradle
+
+REM 哈希没算出来（build_hash.ps1 缺失 / 被安全策略拦截）→ 绝不能拿空值去比较，
+REM 否则会误判成"代码未变更"，直接跳过编译复用上一版 APK。
+if not defined HASH_CODE_GEN (
+    echo [断点续传] 无法计算代码哈希，取消续传，从头构建
+    del "%STATE_FILE%" 2>nul
+    set "RESUME_STEP=0"
+    goto :eof
+)
+if not defined HASH_GRADLE (
+    echo [断点续传] 无法计算 Gradle 哈希，取消续传，从头构建
+    del "%STATE_FILE%" 2>nul
+    set "RESUME_STEP=0"
+    goto :eof
+)
 
 REM 代码变更 → 从步骤0重新开始
 if not "%SAVED_HASH_CG%"=="%HASH_CODE_GEN%" (
@@ -165,8 +174,12 @@ if not "%SAVED_HASH_GR%"=="%HASH_GRADLE%" (
 )
 
 REM 无变更 → 从上次结束的地方继续
+REM 但续传上限只到第2步：步骤3/4/5（flutter clean → pub get → 编译APK）必须每次都跑，
+REM 否则 SAVED_STEP=6 时所有 if 判断都不成立 → 一步都不执行 → 根目录 APK 还是旧版本
+REM （或直接没有 APK），这正是切回旧提交后 APK 打包失败的根因之一。
 set "RESUME_STEP=%SAVED_STEP%"
-echo [断点续传] 上次完成到第 !RESUME_STEP! 步，继续执行
+if !RESUME_STEP! gtr 2 set "RESUME_STEP=2"
+echo [断点续传] 上次完成到第 %SAVED_STEP% 步，本次从第 !RESUME_STEP! 步继续
 goto :eof
 
 REM 保存当前步骤到状态文件
@@ -292,6 +305,13 @@ REM ---- 更新 pubspec.yaml：只替换 + 号后面的数字，不动版本名 
 REM  必须用 -File 调脚本，不能用 powershell -Command 一行式！
 REM  本机安全策略会拦截命令行里含正则 (\+)\d+ 的 -Command 调用：powershell 以退出码
 REM  786 静默退出，pubspec.yaml 不会被修改（历史版本号漂移就是这么来的）。
+if not exist "%~dp0bump_version.ps1" (
+    echo [错误] 缺少版本号更新脚本: %~dp0bump_version.ps1
+    echo        该脚本被误删过，可从 git 历史恢复:
+    echo          git checkout b71b426 -- bump_version.ps1
+    set "BUMP_FAILED=1"
+    goto :eof
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bump_version.ps1" -BuildNumber %BN% -Path "pubspec.yaml"
 set "BUMP_EXIT=%ERRORLEVEL%"
 
