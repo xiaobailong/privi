@@ -314,14 +314,14 @@ gh auth status         # 确认已登录
 
 若机器上没装 `gh`：`winget install --id GitHub.cli`。`build.bat` 会依次从 `PATH`、`%ProgramFiles%\GitHub CLI`、`%LOCALAPPDATA%\Programs\GitHub CLI`、`%USERPROFILE%\scoop\shims` 里找 `gh.exe`；也可以用环境变量 `GH_EXE` 直接指定。
 
-若 `gh` 报网络错误（例如 `github.com` 直连超时、只有代理能通），先设好代理环境变量再跑：
+若 `gh` 报网络错误（例如 `github.com` 直连超时、只有代理能通），先设好代理环境变量再跑（端口按自己用的客户端填：Clash Verge 混合端口默认 `7897`，Clash for Windows 默认 `7890`）：
 
 ```bash
-set HTTPS_PROXY=http://127.0.0.1:7890
-set HTTP_PROXY=http://127.0.0.1:7890
+set HTTPS_PROXY=http://127.0.0.1:7897
+set HTTP_PROXY=http://127.0.0.1:7897
 ```
 
-`gh` 走的是 `api.github.com`（上传资产走 `uploads.github.com`），与浏览器/系统代理是两套设置，登录能通不代表 `gh` 就能通。
+`gh` 走的是 `api.github.com`（上传资产走 `uploads.github.com`），与浏览器/系统代理是两套设置，登录能通不代表 `gh` 就能通。注意 `build.bat` 里给 Gradle/pub 用的代理检测只认 `7890`（`PROXY_AVAILABLE`），与 `gh` 的代理互不影响。
 
 **这些情况会自动跳过发布并打印原因**——发布失败不会把「已经编好的 APK」判成构建失败：
 
