@@ -10,7 +10,7 @@
 
 密册不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
-1. 打开最新的 **[Release](https://github.com/kcng0/privi/releases/latest)**。
+1. 打开最新的 **[Release](https://github.com/xiaobailong/privi/releases/latest)**。
 2. 下载 `privi-<version>.apk`。
 3. 如有提示，在手机上允许浏览器或文件管理器安装未知来源应用。
 4. 打开 APK 完成安装。
