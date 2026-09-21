@@ -30,12 +30,6 @@ enum LockStatus {
   unlocked,
 }
 
-/// Filter for Visible gallery (photo XOR video).
-enum MediaKindFilter {
-  image,
-  video,
-}
-
 /// Sort criteria for Invisible media grids (multi-select, ordered).
 enum MediaSort {
   dateAddedDesc,

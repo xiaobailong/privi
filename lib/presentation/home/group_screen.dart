@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../application/gallery/gallery_controller.dart';
 import '../../application/import/import_controller.dart';
+import '../../application/media/album_kind_preferences.dart';
 import '../../application/media/collection_view_preferences.dart';
 import '../../application/providers.dart';
 import '../../core/l10n.dart';
@@ -376,14 +376,14 @@ class _GroupContent extends ConsumerWidget {
   }
 
   Future<List<MediaItem>> _mediaForAlbum(WidgetRef ref, String albumId) async {
-    final kind = ref.read(mediaKindFilterProvider);
+    // Typed albums contribute only their own media kind; untyped albums
+    // contribute every item they hold (images + videos).
+    final kind = ref.read(albumKindPreferencesProvider).kindOf(albumId);
     final items =
         await ref.read(albumRepositoryProvider).listMediaForAlbum(albumId);
+    if (kind == null) return items;
     return items
-        .where(
-          (item) =>
-              kind == MediaKindFilter.video ? item.isVideo : !item.isVideo,
-        )
+        .where((item) => kind.matches(isVideo: item.isVideo))
         .toList(growable: false);
   }
 

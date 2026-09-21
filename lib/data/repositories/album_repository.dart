@@ -25,15 +25,10 @@ class AlbumRepository {
   /// Uses lightweight table-update notifications (not full media row streams)
   /// and debounces rapid multi-select writes.
   ///
-  /// [isVideo] filters home mosaic counts/covers to match the shared
-  /// photo XOR video mode (same as Visible). Null = all kinds.
-  ///
-  /// [typedAlbums] overrides that mode per album id (true = videos only): a
-  /// photos-only / videos-only private album must keep counting its own media
-  /// type even when the shared mode points at the other one, otherwise its
-  /// count drops to zero and the album disappears from Home.
+  /// Counts/covers include images and videos together unless [typedAlbums]
+  /// overrides a single album id (true = videos only): a photos-only /
+  /// videos-only private album must keep counting its own media type.
   Stream<List<AlbumView>> watchAlbumViewsReactive({
-    bool? isVideo,
     Map<String, bool> typedAlbums = const <String, bool>{},
   }) {
     return Stream.multi((controller) {
@@ -43,10 +38,7 @@ class AlbumRepository {
       Future<void> emitNow() async {
         if (closed) return;
         try {
-          final views = await _buildViews(
-            isVideo: isVideo,
-            typedAlbums: typedAlbums,
-          );
+          final views = await _buildViews(typedAlbums: typedAlbums);
           if (closed) return;
           controller.add(views);
         } catch (e, st) {
@@ -81,7 +73,6 @@ class AlbumRepository {
   }
 
   Future<List<AlbumView>> _buildViews({
-    bool? isVideo,
     Map<String, bool> typedAlbums = const <String, bool>{},
   }) async {
     final albums = await _db.getAllAlbums();
@@ -89,8 +80,8 @@ class AlbumRepository {
     final views = await Future.wait(
       albums.map((row) async {
         final album = _mapAlbum(row);
-        // Per-album type wins over the shared photo XOR video mode.
-        final albumIsVideo = typedAlbums[album.id] ?? isVideo;
+        // null = images + videos together; true / false = typed album.
+        final albumIsVideo = typedAlbums[album.id];
         final results = await Future.wait<Object?>([
           _countFor(album, isVideo: albumIsVideo),
           _coverFor(album, row.coverMediaId, isVideo: albumIsVideo),

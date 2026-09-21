@@ -1,7 +1,6 @@
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../data/services/import/import_models.dart';
-import '../../domain/enums.dart';
 
 /// Platform read seam for the system media library.
 ///
@@ -10,13 +9,9 @@ import '../../domain/enums.dart';
 /// as the identity of a Photos asset.
 final class VisibleLibraryCapabilities {
   const VisibleLibraryCapabilities({
-    required this.filtersAssetTypesInDart,
     required this.includesAllCollection,
     required this.showsLimitedAccessNotice,
   });
-
-  /// Whether callers must filter image/video results after a mixed query.
-  final bool filtersAssetTypesInDart;
 
   /// Whether the platform exposes a useful virtual All/Recents collection.
   final bool includesAllCollection;
@@ -34,7 +29,8 @@ abstract interface class VisibleLibrary {
 
   Future<void> openSettings();
 
-  Future<List<AssetPathEntity>> paths(MediaKindFilter filter);
+  /// Every image/video collection the platform exposes (images + videos).
+  Future<List<AssetPathEntity>> paths();
 
   Future<int> assetCount(AssetPathEntity path);
 

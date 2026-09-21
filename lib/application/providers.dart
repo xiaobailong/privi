@@ -221,19 +221,18 @@ final vaultSizeBytesProvider = FutureProvider.autoDispose<int>((ref) {
 });
 
 /// Home album cards (system + user) with live counts/covers.
-/// Respects the shared photo XOR video mode so Invisible matches Visible.
+///
+/// Every album counts the media it holds: images and videos together, except
+/// private albums typed photos-only / videos-only, which keep their own kind.
 final albumsProvider = StreamProvider<List<AlbumView>>((ref) {
-  final kind = ref.watch(mediaKindFilterProvider);
-  final isVideo = kind == MediaKindFilter.video;
-  // Typed (photos-only / videos-only) private albums ignore the shared mode so
-  // their counts/covers stay non-zero; untyped albums keep following it.
+  // Typed (photos-only / videos-only) private albums count only their own kind
+  // so their counts/covers stay non-zero; untyped albums count everything.
   final kinds = ref.watch(albumKindPreferencesProvider);
   final typedAlbums = <String, bool>{
     for (final entry in kinds.kinds.entries)
       entry.key: entry.value == AlbumKind.video,
   };
   return ref.watch(albumRepositoryProvider).watchAlbumViewsReactive(
-        isVideo: isVideo,
         typedAlbums: typedAlbums,
       );
 });

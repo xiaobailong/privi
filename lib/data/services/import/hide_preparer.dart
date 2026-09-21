@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../../repositories/album_repository.dart';
 import '../../repositories/media_repository.dart';
 import '../hide_naming.dart';
+import '../media_kinds.dart';
 import '../media_store_service.dart';
 import '../vault_storage_service.dart';
 import 'asset_gateway.dart';
@@ -222,34 +223,9 @@ class HidePreparer {
       return provided;
     }
     final visible = HideNaming.toVisiblePath(name.isNotEmpty ? name : path);
-    final extension = p.extension(visible).toLowerCase();
-    return switch (extension) {
-      '.jpg' || '.jpeg' => 'image/jpeg',
-      '.png' => 'image/png',
-      '.gif' => 'image/gif',
-      '.webp' => 'image/webp',
-      '.heic' || '.heif' => 'image/heic',
-      '.mp4' => 'video/mp4',
-      '.mov' => 'video/quicktime',
-      '.mkv' => 'video/x-matroska',
-      '.webm' => 'video/webm',
-      '.3gp' => 'video/3gpp',
-      _ => null,
-    };
+    return MediaKinds.mimeFor(visible);
   }
 
-  static String _fallbackMime(String name) {
-    const videoExtensions = {
-      '.mp4',
-      '.mov',
-      '.mkv',
-      '.webm',
-      '.3gp',
-      '.avi',
-      '.m4v',
-    };
-    return videoExtensions.contains(p.extension(name).toLowerCase())
-        ? 'video/mp4'
-        : 'image/jpeg';
-  }
+  static String _fallbackMime(String name) =>
+      MediaKinds.mimeFor(name) ?? MediaKinds.imageMime;
 }

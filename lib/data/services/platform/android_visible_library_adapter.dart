@@ -2,7 +2,6 @@ import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../../application/platform/visible_library.dart';
-import '../../../domain/enums.dart';
 import '../import/asset_gateway.dart';
 import '../import/file_system_gateway.dart';
 import '../import/import_models.dart';
@@ -27,7 +26,6 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
   @override
   VisibleLibraryCapabilities get capabilities =>
       const VisibleLibraryCapabilities(
-        filtersAssetTypesInDart: false,
         includesAllCollection: false,
         showsLimitedAccessNotice: false,
       );
@@ -45,12 +43,11 @@ final class AndroidVisibleLibraryAdapter implements VisibleLibrary {
   Future<void> openSettings() => PhotoManager.openSetting();
 
   @override
-  Future<List<AssetPathEntity>> paths(MediaKindFilter filter) {
+  Future<List<AssetPathEntity>> paths() {
     return PhotoManager.getAssetPathList(
-      type: switch (filter) {
-        MediaKindFilter.image => RequestType.image,
-        MediaKindFilter.video => RequestType.video,
-      },
+      // Images and videos together: the app no longer has a global photo /
+      // video mode, every folder shows both kinds.
+      type: RequestType.common,
       hasAll: false,
       onlyAll: false,
       filterOption: _filterOptions,

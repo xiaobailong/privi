@@ -7,7 +7,6 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../../application/platform/visible_library.dart';
 import '../../core/media_thumbnail_spec.dart';
-import '../../domain/enums.dart';
 import 'hide_naming.dart';
 import 'import/asset_gateway.dart';
 import 'import/file_system_gateway.dart';
@@ -111,7 +110,7 @@ class VisibleLibrarySnapshot {
 
 /// Single owner for Visible-library caches, exclusions, and mutations.
 class VisibleLibraryState {
-  final Map<MediaKindFilter, List<AssetPathEntity>> _pathCache = {};
+  List<AssetPathEntity>? _pathCache;
   DateTime? _pathCacheAt;
   final Set<String> _affectedPathIds = {};
   final Map<String, int> _coverEpoch = {};
@@ -119,7 +118,6 @@ class VisibleLibraryState {
   final Set<String> _hiddenOriginalKeys = {};
   bool _vaultHydrated = false;
   List<GalleryFolder> _folders = const [];
-  MediaKindFilter? _foldersFilter;
 
   final _changes = StreamController<int>.broadcast();
   int _version = 0;
@@ -138,11 +136,9 @@ class VisibleLibraryState {
         _hiddenOriginalKeys.clear();
         _vaultHydrated = false;
         _folders = const [];
-        _foldersFilter = null;
         invalidatePaths(notify: false);
       case VisibleFilterChanged() || VisiblePermissionChanged():
         _folders = const [];
-        _foldersFilter = null;
         invalidatePaths(notify: false);
     }
     _notify();
@@ -177,8 +173,7 @@ class VisibleLibraryState {
     _notify();
   }
 
-  void setFolders(MediaKindFilter filter, List<GalleryFolder> value) {
-    _foldersFilter = filter;
+  void setFolders(List<GalleryFolder> value) {
     _folders = List.unmodifiable(value);
   }
 
@@ -196,14 +191,12 @@ class VisibleLibraryState {
     _notify();
   }
 
-  VisibleLibrarySnapshot snapshot(MediaKindFilter filter) {
+  VisibleLibrarySnapshot snapshot() {
     final assetIds = Set<String>.unmodifiable(_hiddenAssetIds);
     final originalKeys = Set<String>.unmodifiable(_hiddenOriginalKeys);
     final hydrated = _vaultHydrated;
     return VisibleLibrarySnapshot(
-      folders: _foldersFilter == filter
-          ? List<GalleryFolder>.unmodifiable(_folders)
-          : const [],
+      folders: List<GalleryFolder>.unmodifiable(_folders),
       isExcluded: (asset) {
         if (assetIds.contains(asset.id) ||
             GalleryService.isHiddenAsset(asset)) {
@@ -239,7 +232,7 @@ class VisibleLibraryState {
   }
 
   void invalidatePaths({bool notify = true}) {
-    _pathCache.clear();
+    _pathCache = null;
     _pathCacheAt = null;
     if (notify) _notify();
   }
@@ -355,14 +348,12 @@ class GalleryService {
 
   void apply(VisibleMutation mutation) => _visibleState.apply(mutation);
 
-  VisibleLibrarySnapshot snapshot(MediaKindFilter filter) =>
-      _visibleState.snapshot(filter);
+  VisibleLibrarySnapshot snapshot() => _visibleState.snapshot();
 
   /// Apply an optimistic hide, then reconcile the affected folder precisely.
   Future<void> recordHidden({
     required String pathId,
     required int hiddenCount,
-    required MediaKindFilter filter,
     List<String> assetIds = const [],
     List<String> originalPaths = const [],
   }) async {
@@ -378,16 +369,13 @@ class GalleryService {
     for (final assetId in assetIds) {
       _thumbnails.evict(assetId);
     }
-    final count = await recountVisible(pathId: pathId, filter: filter);
+    final count = await recountVisible(pathId: pathId);
     _visibleState.reconcileCount(pathId, count);
   }
 
-  Future<List<AssetPathEntity>> _paths(
-    MediaKindFilter filter, {
-    bool force = false,
-  }) async {
+  Future<List<AssetPathEntity>> _paths({bool force = false}) async {
     final now = DateTime.now();
-    final cached = _visibleState._pathCache[filter];
+    final cached = _visibleState._pathCache;
     if (!force &&
         cached != null &&
         _visibleState._pathCacheAt != null &&
@@ -396,8 +384,8 @@ class GalleryService {
     }
     // Android keeps its real-folder-only query; iOS may expose a virtual All
     // collection because PhotoKit albums do not map to filesystem folders.
-    final list = await _library.paths(filter);
-    _visibleState._pathCache[filter] = list;
+    final list = await _library.paths();
+    _visibleState._pathCache = list;
     _visibleState._pathCacheAt = now;
     return list;
   }
@@ -453,8 +441,8 @@ class GalleryService {
   }
 
   /// Fast folder list based on MediaStore counts and reconciled session state.
-  Future<List<GalleryFolder>> listFolders(MediaKindFilter filter) async {
-    final paths = await _paths(filter);
+  Future<List<GalleryFolder>> listFolders() async {
+    final paths = await _paths();
     final rawCounts = await Future.wait(
       paths.map(_library.assetCount),
     );
@@ -472,9 +460,8 @@ class GalleryService {
         continue;
       }
       final raw = rawCounts[i];
-      final count = _library.capabilities.filtersAssetTypesInDart ||
-              _visibleState._affectedPathIds.contains(path.id)
-          ? await recountVisible(pathId: path.id, filter: filter)
+      final count = _visibleState._affectedPathIds.contains(path.id)
+          ? await recountVisible(pathId: path.id)
           : raw;
       if (count <= 0) continue;
       folders.add(
@@ -492,17 +479,14 @@ class GalleryService {
       if (a.isAll != b.isAll) return a.isAll ? -1 : 1;
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
-    _visibleState.setFolders(filter, folders);
+    _visibleState.setFolders(folders);
     return folders;
   }
 
   /// Optional: accurate visible count for one folder (pull-to-refresh / open).
   /// Only scans that album — not the whole library.
-  Future<int> recountVisible({
-    required String pathId,
-    required MediaKindFilter filter,
-  }) async {
-    final paths = await _paths(filter);
+  Future<int> recountVisible({required String pathId}) async {
+    final paths = await _paths();
     AssetPathEntity? path;
     for (final pth in paths) {
       if (pth.id == pathId) {
@@ -527,7 +511,7 @@ class GalleryService {
       );
       if (assets.isEmpty) break;
       for (final a in assets) {
-        if (!_isExcluded(a) && _matchesFilter(a, filter)) visible++;
+        if (!_isExcluded(a)) visible++;
       }
       seen += assets.length;
       if (assets.length < pageSize) break;
@@ -537,12 +521,9 @@ class GalleryService {
     return visible;
   }
 
-  Future<Uint8List?> folderCover({
-    required String pathId,
-    required MediaKindFilter filter,
-  }) async {
+  Future<Uint8List?> folderCover({required String pathId}) async {
     try {
-      final paths = await _paths(filter);
+      final paths = await _paths();
       AssetPathEntity? path;
       for (final pth in paths) {
         if (pth.id == pathId) {
@@ -560,7 +541,7 @@ class GalleryService {
         );
         if (assets.isEmpty) return null;
         for (final a in assets) {
-          if (_isExcluded(a) || !_matchesFilter(a, filter)) continue;
+          if (_isExcluded(a)) continue;
           final bytes = await mediaThumbnail(a.id);
           if (bytes != null) return bytes;
         }
@@ -575,11 +556,10 @@ class GalleryService {
 
   Future<List<GalleryAsset>> listAssets({
     required String pathId,
-    required MediaKindFilter filter,
     int page = 0,
     int size = 120,
   }) async {
-    final paths = await _paths(filter);
+    final paths = await _paths();
     AssetPathEntity? path;
     for (final pth in paths) {
       if (pth.id == pathId) {
@@ -589,21 +569,14 @@ class GalleryService {
     }
     if (path == null) return const [];
 
-    final assets = _library.capabilities.filtersAssetTypesInDart
-        ? await _filteredAssetPage(
-            path,
-            filter: filter,
-            page: page,
-            size: size,
-          )
-        : await _filteredAndroidAssetPage(
-            path,
-            page: page,
-            size: size,
-          );
+    final assets = await _pagedAssets(
+      path,
+      page: page,
+      size: size,
+    );
     final out = <GalleryAsset>[];
     for (final a in assets) {
-      if (_isExcluded(a) || !_matchesFilter(a, filter)) continue;
+      if (_isExcluded(a)) continue;
       final title = a.title ?? a.id;
       out.add(
         GalleryAsset(
@@ -619,37 +592,10 @@ class GalleryService {
     return out;
   }
 
-  Future<List<AssetEntity>> _filteredAssetPage(
-    AssetPathEntity path, {
-    required MediaKindFilter filter,
-    required int page,
-    required int size,
-  }) async {
-    final targetStart = page * size;
-    final out = <AssetEntity>[];
-    var matched = 0;
-    final rawPageSize = math.max(size + 40, 100);
-    for (var rawPage = 0;; rawPage++) {
-      final assets = await _library.assetPage(
-        path,
-        page: rawPage,
-        size: rawPageSize,
-      );
-      if (assets.isEmpty) break;
-      for (final asset in assets) {
-        if (_isExcluded(asset) || !_matchesFilter(asset, filter)) continue;
-        if (matched++ < targetStart) continue;
-        out.add(asset);
-        if (out.length >= size) return out;
-      }
-      if (assets.length < rawPageSize) break;
-    }
-    return out;
-  }
-
-  /// Android path: loop raw pages so [size] valid assets are always collected
-  /// without skipping items between calls, even when excluded assets are mixed in.
-  Future<List<AssetEntity>> _filteredAndroidAssetPage(
+  /// Loops raw pages so [size] valid assets are always collected without
+  /// skipping items between calls, even when excluded (hidden) assets are mixed
+  /// in and the platform cannot filter them for us.
+  Future<List<AssetEntity>> _pagedAssets(
     AssetPathEntity path, {
     required int page,
     required int size,
@@ -680,11 +626,8 @@ class GalleryService {
   ///
   /// Unlike [listAssets] which paginates with O(n²) re-scanning, this
   /// streams through all raw pages exactly once and returns every matching id.
-  Future<List<String>> listAllAssetIds({
-    required String pathId,
-    required MediaKindFilter filter,
-  }) async {
-    final paths = await _paths(filter);
+  Future<List<String>> listAllAssetIds({required String pathId}) async {
+    final paths = await _paths();
     AssetPathEntity? path;
     for (final pth in paths) {
       if (pth.id == pathId) {
@@ -704,7 +647,7 @@ class GalleryService {
       );
       if (assets.isEmpty) break;
       for (final a in assets) {
-        if (_isExcluded(a) || !_matchesFilter(a, filter)) continue;
+        if (_isExcluded(a)) continue;
         ids.add(a.id);
       }
       if (assets.length < rawPageSize) break;
@@ -741,12 +684,5 @@ class GalleryService {
       for (final source in out)
         if (source != null) source,
     ];
-  }
-
-  bool _matchesFilter(AssetEntity asset, MediaKindFilter filter) {
-    return switch (filter) {
-      MediaKindFilter.image => asset.type == AssetType.image,
-      MediaKindFilter.video => asset.type == AssetType.video,
-    };
   }
 }

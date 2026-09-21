@@ -331,6 +331,21 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Re-files a row after the file extension proved the stored kind wrong:
+  /// fixes the `isVideo` flag and normalises the mime type.
+  Future<void> updateMediaKind(
+    String id, {
+    required bool isVideo,
+    required String mimeType,
+  }) {
+    return (update(mediaItems)..where((t) => t.id.equals(id))).write(
+      MediaItemsCompanion(
+        isVideo: Value(isVideo),
+        mimeType: Value(mimeType),
+      ),
+    );
+  }
+
   /// Playback history: bumps `play_count` by one and stamps `last_played_at`.
   /// Random playback reads the counter back to weight its order, so heavily
   /// played items come up less often.
@@ -408,6 +423,12 @@ class AppDatabase extends _$AppDatabase {
   Future<List<MediaItemRow>> listRecycleBinRows() {
     return (select(mediaItems)..where((t) => t.deletedAt.isNotNull())).get();
   }
+
+  /// Every media row, active and soft-deleted.
+  ///
+  /// Launch integrity repair walks these so a mis-filed video is corrected in
+  /// the recycle bin too.
+  Future<List<MediaItemRow>> listAllMediaRows() => select(mediaItems).get();
 
   Future<void> updateMediaRatings(List<String> ids, int rating) async {
     if (ids.isEmpty) return;

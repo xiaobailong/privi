@@ -31,19 +31,12 @@ import '../import/import_result_message.dart';
 import 'folder_cover_cache.dart';
 import 'gallery_preview_screen.dart';
 
-/// Kind-filtered snapshot of the already-loaded Visible folder page(s).
+/// Snapshot of the already-loaded Visible folder page(s).
 /// Preview swipe and in-app auto-advance use this list, not the whole album.
-List<GalleryAsset> visibleFolderPreviewItems(
-  Iterable<GalleryAsset> items, {
-  required bool isVideo,
-}) {
-  return List.unmodifiable(items.where((item) => item.isVideo == isVideo));
-}
-
-List<GalleryAsset> visibleVideoPlaylist(
-  Iterable<GalleryAsset> items,
-) {
-  return visibleFolderPreviewItems(items, isVideo: true);
+///
+/// Images and videos are both kept: the grid no longer has a photo / video mode.
+List<GalleryAsset> visibleFolderPreviewItems(Iterable<GalleryAsset> items) {
+  return List.unmodifiable(items);
 }
 
 /// Visible folder browser (hide flow).
@@ -143,7 +136,6 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     setState(() => _loadingMore = true);
     try {
       final gallery = ref.read(galleryServiceProvider);
-      final filter = ref.read(mediaKindFilterProvider);
       // Hydrate vault paths once (cached until hide/unhide invalidation).
       try {
         await gallery.ensureVaultHydrated(
@@ -154,7 +146,6 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
       final page = reset ? 0 : _page;
       final batch = await gallery.listAssets(
         pathId: widget.pathId,
-        filter: filter,
         page: page,
         size: _pageSize,
       );
@@ -214,10 +205,7 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     }
 
     if (!mounted) return;
-    final previewItems = visibleFolderPreviewItems(
-      _visibleItems,
-      isVideo: a.isVideo,
-    );
+    final previewItems = visibleFolderPreviewItems(_visibleItems);
     final previewIndex = previewItems.indexWhere((item) => item.id == a.id);
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -537,7 +525,6 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
         await gallery.recordHidden(
           pathId: widget.pathId,
           hiddenCount: imported,
-          filter: ref.read(mediaKindFilterProvider),
           assetIds: ids,
           originalPaths: resolvedSources.map((source) => source.path).toList(),
         );
@@ -631,7 +618,6 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     await gallery.recordHidden(
       pathId: widget.pathId,
       hiddenCount: deleted,
-      filter: ref.read(mediaKindFilterProvider),
       assetIds: ids,
     );
     FolderCoverCache.clear(pathId: widget.pathId);
@@ -739,13 +725,8 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final filter = ref.watch(mediaKindFilterProvider);
-    // Reload when hide epoch bumps or photo/video mode changes.
+    // Reload when hide epoch bumps.
     ref.listen(galleryChangeProvider, (prev, next) {
-      // ignore: discarded_futures
-      _reload();
-    });
-    ref.listen(mediaKindFilterProvider, (prev, next) {
       // ignore: discarded_futures
       _reload();
     });
@@ -815,9 +796,7 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
               : _items.isEmpty
                   ? Center(
                       child: Text(
-                        filter == MediaKindFilter.video
-                            ? context.l10n.noVideosInFolder
-                            : context.l10n.noPhotosInFolder,
+                        context.l10n.noMediaInFolder,
                         style: const TextStyle(color: Colors.white70),
                       ),
                     )

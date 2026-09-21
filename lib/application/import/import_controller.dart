@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../../data/services/import_service.dart';
-import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../gallery/gallery_controller.dart';
 import '../providers.dart';
@@ -249,16 +248,9 @@ class ImportController extends Notifier<ImportUiState> {
 
   /// Resolve and restore a complete vault album through one controller flow.
   Future<AlbumRestoreResult> restoreAlbum(String albumId) async {
-    final kind = ref.read(mediaKindFilterProvider);
     final items =
         await ref.read(albumRepositoryProvider).listMediaForAlbum(albumId);
-    final filtered = items
-        .where(
-          (item) =>
-              kind == MediaKindFilter.video ? item.isVideo : !item.isVideo,
-        )
-        .toList(growable: false);
-    if (filtered.isEmpty) {
+    if (items.isEmpty) {
       const empty = ImportProgress(
         done: 0,
         total: 0,
@@ -266,7 +258,7 @@ class ImportController extends Notifier<ImportUiState> {
       );
       return const AlbumRestoreResult(summary: empty, wasEmpty: true);
     }
-    final summary = await runReveal(filtered, sessionAlreadyStarted: true);
+    final summary = await runReveal(items, sessionAlreadyStarted: true);
     return AlbumRestoreResult(summary: summary, wasEmpty: false);
   }
 

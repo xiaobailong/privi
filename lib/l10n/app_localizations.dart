@@ -67,10 +67,6 @@ class AppLocalizations {
 
   String get videosOnly => '仅视频';
 
-  String get photosOnlyTapVideos => '仅照片 · 点按切换视频';
-
-  String get videosOnlyTapPhotos => '仅视频 · 点按切换照片';
-
   String get newAlbum => '新建相册';
 
   String get newVaultAlbum => '新建私密相册';
@@ -165,9 +161,7 @@ class AppLocalizations {
 
   String get operationUnavailableOnPlatform => '当前平台不支持此操作';
 
-  String get noPhotoFolders => '未找到照片文件夹';
-
-  String get noVideoFolders => '未找到视频文件夹';
+  String get noMediaFolders => '未找到媒体文件夹';
 
   String couldNotLoadGallery(String error) {
     return '无法加载图库：$error';
@@ -229,9 +223,7 @@ class AppLocalizations {
 
   String get noMatches => '无匹配结果';
 
-  String get noPhotosInFolder => '此文件夹中没有照片';
-
-  String get noVideosInFolder => '此文件夹中没有视频';
+  String get noMediaInFolder => '此文件夹中没有媒体';
 
   String get playPlaylist => '播放列表';
 

@@ -10,6 +10,7 @@ import '../db/database.dart';
 import '../repositories/album_repository.dart';
 import '../repositories/media_repository.dart';
 import 'hide_naming.dart';
+import 'media_kinds.dart';
 import 'media_rename_service.dart';
 import 'media_store_service.dart';
 import 'vault_storage_service.dart';
@@ -83,6 +84,9 @@ class MaintenanceService {
     final accessible = await _vaultAccessible();
     final missing = accessible ? await _purgeMissingFiles() : 0;
     final expired = accessible ? await _purgeExpiredRecycle(retentionDays) : 0;
+    // Before the thumbnail repair: rows mis-filed as photos must already be
+    // videos, otherwise their poster is never generated in this run.
+    final fixedKinds = await _repairMediaKinds();
     final videoThumbnails = accessible && _import != null
         ? await _import.repairOutdatedVideoThumbnails()
         : 0;
@@ -91,12 +95,51 @@ class MaintenanceService {
     if (!accessible) parts.add('skipped (no storage access)');
     if (missing > 0) parts.add('removed $missing missing');
     if (expired > 0) parts.add('purged $expired expired');
+    if (fixedKinds > 0) parts.add('fixed $fixedKinds media kinds');
     if (videoThumbnails > 0) {
       parts.add('upgraded $videoThumbnails video thumbnails');
     }
     if (thumbs > 0) parts.add('cleared $thumbs orphan thumbs');
     if (parts.isEmpty) return 'ok';
     return parts.join(', ');
+  }
+
+  /// Re-files rows whose stored media kind disagrees with their file extension.
+  ///
+  /// Hides ran through a mime table that did not know every container, so some
+  /// real videos (`.ts`, `.wmv`, `.rmvb`, `.flv`, …) were stored as images and
+  /// disappeared from video lists for good. Vault files keep their extension,
+  /// so the extension can always restore the truth.
+  Future<int> _repairMediaKinds() async {
+    var fixed = 0;
+    try {
+      final rows = await _db.listAllMediaRows();
+      for (final row in rows) {
+        final mime = MediaKinds.mimeFor(row.privatePath) ??
+            MediaKinds.mimeFor(row.originalName);
+        if (mime == null) continue;
+        final isVideo = mime.startsWith('video/');
+        final mimeMatchesKind =
+            row.mimeType.contains('/') &&
+                row.mimeType.startsWith('video/') == isVideo;
+        if (row.isVideo == isVideo && mimeMatchesKind) continue;
+        await _db.updateMediaKind(
+          row.id,
+          isVideo: isVideo,
+          mimeType: mime,
+        );
+        fixed++;
+        AppLogger.i(
+          'MaintenanceService',
+          'media kind fixed: ${row.originalName} → '
+              '${isVideo ? 'video' : 'image'} ($mime)',
+        );
+      }
+    } catch (error, stackTrace) {
+      AppLogger.e('MaintenanceService',
+          'repair media kinds: $error\n$stackTrace');
+    }
+    return fixed;
   }
 
   Future<bool> _vaultAccessible() async {
@@ -500,41 +543,12 @@ class MaintenanceService {
     return out;
   }
 
-  static bool _looksLikeMedia(String name) {
-    final lower = name.toLowerCase();
-    const exts = {
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.mp4',
-      '.mov',
-      '.mkv',
-      '.webm',
-      '.3gp',
-      '.avi',
-      '.m4v',
-    };
-    for (final e in exts) {
-      if (lower.endsWith(e)) return true;
-    }
-    return HideNaming.isLegacyMarkerPath(name);
-  }
+  static bool _looksLikeMedia(String name) =>
+      MediaKinds.isKnown(name) || HideNaming.isLegacyMarkerPath(name);
 
-  static bool _isVideoName(String path) {
-    final lower = path.toLowerCase();
-    if (path.contains(HideNaming.videoMarker)) return true;
-    return lower.endsWith('.mp4') ||
-        lower.endsWith('.mkv') ||
-        lower.endsWith('.webm') ||
-        lower.endsWith('.mov') ||
-        lower.endsWith('.3gp') ||
-        lower.endsWith('.avi') ||
-        lower.endsWith('.m4v');
-  }
+  /// True for videos by container extension (or legacy `.vid.pg` marker).
+  static bool _isVideoName(String path) =>
+      path.contains(HideNaming.videoMarker) || MediaKinds.isVideoName(path);
 
   static String _norm(String path) {
     var s = path.replaceAll('\\', '/');

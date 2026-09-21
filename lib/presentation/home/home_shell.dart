@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../application/gallery/gallery_controller.dart';
 import '../../application/import/import_controller.dart';
 import '../../application/media/album_kind_preferences.dart';
 import '../../application/media/album_list_preferences.dart';
@@ -421,24 +420,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
-  void _toggleMediaFilter() {
-    ref.read(mediaKindFilterProvider.notifier).toggle();
-    // ignore: unawaited_futures
-    HapticFeedback.selectionClick();
-    final f = ref.read(mediaKindFilterProvider);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          f == MediaKindFilter.image
-              ? context.l10n.photosOnly
-              : context.l10n.videosOnly,
-        ),
-        duration: const Duration(milliseconds: 800),
-      ),
-    );
-    ref.invalidate(galleryFoldersProvider);
-  }
-
   Future<void> _toggleHomeView() async {
     final invisible = _tabs.index == 1;
     final current = invisible
@@ -458,15 +439,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     await HapticFeedback.selectionClick();
   }
 
-  IconData _filterIcon(MediaKindFilter f) {
-    return f == MediaKindFilter.image
-        ? Icons.image_outlined
-        : Icons.videocam_outlined;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final filter = ref.watch(mediaKindFilterProvider);
     final albumPreferences = ref.watch(albumListPreferencesProvider);
     final visibleFolderViewMode =
         ref.watch(visibleFolderViewPreferencesProvider);
@@ -554,23 +528,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
                         onPressed: _toggleHomeView,
                       ),
                       // Invisible: "+" creates a typed (photos-only or
-                      // videos-only) private album. Visible keeps the photo XOR
-                      // video folder mode.
+                      // videos-only) private album. Visible shows every folder
+                      // with images and videos together.
                       if (invisible)
                         IconButton(
                           tooltip: context.l10n.newVaultAlbum,
                           icon: const Icon(Icons.add, size: 22),
                           color: Colors.white70,
                           onPressed: () => _newAlbum(),
-                        )
-                      else
-                        IconButton(
-                          tooltip: filter == MediaKindFilter.image
-                              ? context.l10n.photosOnlyTapVideos
-                              : context.l10n.videosOnlyTapPhotos,
-                          icon: Icon(_filterIcon(filter), size: 22),
-                          color: Colors.white70,
-                          onPressed: _toggleMediaFilter,
                         ),
                       IconButton(
                         tooltip: context.l10n.more,
@@ -1165,18 +1130,14 @@ class _InvisibleTab extends ConsumerWidget {
   }
 
   Future<List<MediaItem>> _mediaForAlbum(WidgetRef ref, Album album) async {
-    // A typed album always plays its own media kind; untyped albums keep
-    // following the shared photo XOR video mode.
+    // A typed album plays only its own media kind; untyped albums play
+    // everything they contain (images + videos).
     final albumKind = ref.read(albumKindPreferencesProvider).kindOf(album.id);
-    final MediaKindFilter kind = albumKind == null
-        ? ref.read(mediaKindFilterProvider)
-        : (albumKind == AlbumKind.video
-            ? MediaKindFilter.video
-            : MediaKindFilter.image);
     final items =
         await ref.read(albumRepositoryProvider).listMediaForAlbum(album.id);
+    if (albumKind == null) return items;
     return items
-        .where((m) => kind == MediaKindFilter.video ? m.isVideo : !m.isVideo)
+        .where((m) => albumKind.matches(isVideo: m.isVideo))
         .toList(growable: false);
   }
 

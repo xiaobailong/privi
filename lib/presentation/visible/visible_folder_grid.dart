@@ -21,7 +21,7 @@ import 'visible_media_grid.dart';
 
 export 'folder_cover_cache.dart';
 
-/// Visible tab: system Gallery folders (photo mode XOR video mode).
+/// Visible tab: system Gallery folders (images and videos together).
 class VisibleFolderGrid extends ConsumerStatefulWidget {
   const VisibleFolderGrid({super.key});
 
@@ -74,7 +74,6 @@ class _VisibleFolderGridState extends ConsumerState<VisibleFolderGrid>
   Widget build(BuildContext context) {
     final perm = ref.watch(galleryPermissionProvider);
     final folders = ref.watch(galleryFoldersProvider);
-    final filter = ref.watch(mediaKindFilterProvider);
     final viewMode = ref.watch(visibleFolderViewPreferencesProvider);
     final visibleCapabilities = ref.watch(visibleLibraryProvider).capabilities;
     // Same Style setting as Invisible home mosaic (home ⋮ → Style).
@@ -117,9 +116,7 @@ class _VisibleFolderGridState extends ConsumerState<VisibleFolderGrid>
                 child: Padding(
                   padding: AppSpacing.screen,
                   child: Text(
-                    filter == MediaKindFilter.video
-                        ? context.l10n.noVideoFolders
-                        : context.l10n.noPhotoFolders,
+                    context.l10n.noMediaFolders,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                           color: Colors.white70,
                         ),
@@ -145,13 +142,11 @@ class _VisibleFolderGridState extends ConsumerState<VisibleFolderGrid>
                       return _FolderListTile(
                         key: ValueKey('visible-folder-list-${folder.id}'),
                         folder: folder,
-                        filter: filter,
                         onTap: () => _openFolder(folder),
                         onLongPress: () => _hideFolder(
                           context: context,
                           ref: ref,
                           folder: folder,
-                          filter: filter,
                         ),
                       );
                     },
@@ -178,13 +173,11 @@ class _VisibleFolderGridState extends ConsumerState<VisibleFolderGrid>
                       return _FolderTile(
                         key: ValueKey('visible-folder-grid-${folder.id}'),
                         folder: folder,
-                        filter: filter,
                         onTap: () => _openFolder(folder),
                         onLongPress: () => _hideFolder(
                           context: context,
                           ref: ref,
                           folder: folder,
-                          filter: filter,
                         ),
                       );
                     },
@@ -212,10 +205,7 @@ class _VisibleFolderGridState extends ConsumerState<VisibleFolderGrid>
                 final current = list;
                 for (final f in current) {
                   try {
-                    await gallery.recountVisible(
-                      pathId: f.id,
-                      filter: filter,
-                    );
+                    await gallery.recountVisible(pathId: f.id);
                   } catch (_) {}
                 }
                 ref.invalidate(galleryFoldersProvider);
@@ -253,7 +243,6 @@ Future<void> _hideFolder({
   required BuildContext context,
   required WidgetRef ref,
   required GalleryFolder folder,
-  required MediaKindFilter filter,
 }) async {
   // ignore: unawaited_futures
   HapticFeedback.mediumImpact();
@@ -356,10 +345,7 @@ Future<void> _hideFolder({
   var imported = 0;
   List<ImportSource> resolvedSources = const [];
   try {
-    final ids = await gallery.listAllAssetIds(
-      pathId: folder.id,
-      filter: filter,
-    );
+    final ids = await gallery.listAllAssetIds(pathId: folder.id);
     if (import.isCancelRequested) {
       if (context.mounted) {
         messenger.showSnackBar(
@@ -446,7 +432,6 @@ Future<void> _hideFolder({
       await gallery.recordHidden(
         pathId: folder.id,
         hiddenCount: imported,
-        filter: filter,
         originalPaths: resolvedSources.map((source) => source.path).toList(),
       );
       FolderCoverCache.clear(pathId: folder.id);
@@ -460,13 +445,11 @@ class _FolderTile extends ConsumerWidget {
   const _FolderTile({
     super.key,
     required this.folder,
-    required this.filter,
     required this.onTap,
     required this.onLongPress,
   });
 
   final GalleryFolder folder;
-  final MediaKindFilter filter;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
@@ -483,7 +466,6 @@ class _FolderTile extends ConsumerWidget {
             // Lazy cover — reloads when count or coverEpoch changes after hide.
             _LazyFolderCover(
               pathId: folder.id,
-              filter: filter,
               contentVersion: Object.hash(folder.count, folder.coverEpoch),
             ),
             const Positioned(
@@ -547,13 +529,11 @@ class _FolderListTile extends StatelessWidget {
   const _FolderListTile({
     super.key,
     required this.folder,
-    required this.filter,
     required this.onTap,
     required this.onLongPress,
   });
 
   final GalleryFolder folder;
-  final MediaKindFilter filter;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
@@ -569,7 +549,6 @@ class _FolderListTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppRadii.albumTile),
             child: _LazyFolderCover(
               pathId: folder.id,
-              filter: filter,
               contentVersion: Object.hash(folder.count, folder.coverEpoch),
             ),
           ),
@@ -595,11 +574,9 @@ class _FolderListTile extends StatelessWidget {
 class _LazyFolderCover extends ConsumerStatefulWidget {
   const _LazyFolderCover({
     required this.pathId,
-    required this.filter,
     required this.contentVersion,
   });
   final String pathId;
-  final MediaKindFilter filter;
 
   /// Folder visible count (or other stamp) — changes force a new cover load.
   final int contentVersion;
@@ -621,7 +598,6 @@ class _LazyFolderCoverState extends ConsumerState<_LazyFolderCover> {
   void didUpdateWidget(covariant _LazyFolderCover oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pathId != widget.pathId ||
-        oldWidget.filter != widget.filter ||
         oldWidget.contentVersion != widget.contentVersion) {
       // Count/version change after hide → drop stale cover for this folder.
       FolderCoverCache.clear(pathId: widget.pathId);
@@ -635,7 +611,7 @@ class _LazyFolderCoverState extends ConsumerState<_LazyFolderCover> {
 
   Future<void> _load() async {
     final version = widget.contentVersion;
-    final key = FolderCoverCache.key(widget.filter, widget.pathId);
+    final key = FolderCoverCache.key(widget.pathId);
     final cached = FolderCoverCache.get(key);
     if (cached != null) {
       if (mounted) setState(() => _image = cached);
@@ -644,7 +620,6 @@ class _LazyFolderCoverState extends ConsumerState<_LazyFolderCover> {
 
     final bytes = await ref.read(galleryServiceProvider).folderCover(
           pathId: widget.pathId,
-          filter: widget.filter,
         );
     if (!mounted || version != widget.contentVersion) return;
     if (bytes == null) {
@@ -663,10 +638,8 @@ class _LazyFolderCoverState extends ConsumerState<_LazyFolderCover> {
     }
     return ColoredBox(
       color: context.vaultColors.surfaceAlt,
-      child: Icon(
-        widget.filter == MediaKindFilter.video
-            ? Icons.videocam_outlined
-            : Icons.folder_outlined,
+      child: const Icon(
+        Icons.folder_outlined,
         color: Colors.white54,
         size: 36,
       ),
