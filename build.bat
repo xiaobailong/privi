@@ -635,6 +635,13 @@ if !ERRORLEVEL! neq 0 (
 
 call :resolve_repo_slug
 call :resolve_git_sha
+
+REM 仅允许 main 分支发布 Release，其他分支（如 dev）构建完跳过发布
+if /i not "!GIT_BRANCH!"=="main" (
+    echo       [跳过] 当前分支 !GIT_BRANCH! 不是 main，Release 仅允许从 main 分支发布
+    goto :eof
+)
+
 set "RELEASE_TAG=v!NEW_VER!"
 set "RELEASE_TITLE=密册 v!NEW_VER!"
 REM 显式指定仓库：gh 默认靠本地 git 远端自动识别，实测偶发「No default remote repository」

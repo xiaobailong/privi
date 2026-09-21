@@ -129,8 +129,11 @@ class VlcPlayerHandler(
                     try {
                         val tracks = mp.videoTracks
                         if (tracks != null && tracks.isNotEmpty()) {
-                            videoWidth = tracks[0].width
-                            videoHeight = tracks[0].height
+                            val vt = tracks[0] as? MediaPlayer.VideoTrack
+                            if (vt != null) {
+                                videoWidth = vt.width
+                                videoHeight = vt.height
+                            }
                         }
                     } catch (_: Exception) {
                         logW("Could not read video track dimensions")
