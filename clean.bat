@@ -69,6 +69,12 @@ if exist "privi-*.apk" (
 ) else (
     echo       无 privi-*.apk 文件，跳过。
 )
+if exist "privi-*.apk.sha256" (
+    del /q "privi-*.apk.sha256" 2>nul
+    echo       已删除 privi-*.apk.sha256 文件。
+) else (
+    echo       无 privi-*.apk.sha256 文件，跳过。
+)
 if exist "*.aab" (
     del /q "*.aab" 2>nul
     echo       已删除 aab 文件。
