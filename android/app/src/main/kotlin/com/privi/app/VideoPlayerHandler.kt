@@ -170,7 +170,13 @@ class VideoPlayerHandler(
 
         val dataSourceFactory = DefaultDataSource.Factory(context)
         val mediaUri = Uri.parse("file://$filePath")
-        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+        // Repairs containers whose tracks were muxed onto two different timelines:
+        // those play with a moving progress bar over a frozen picture, because the
+        // player's clock follows the displaced track while every video frame looks
+        // hours late and gets dropped. Bounded work, and a no-op on healthy files.
+        val prepared = VideoTimestampNormalizer.prepare(filePath)
+        logI("VDIAG[ts-normalizer] applied=${prepared.patch != null} ${prepared.note}")
+        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory, prepared.factory)
             .createMediaSource(MediaItem.fromUri(mediaUri))
 
         exoPlayer.setMediaSource(mediaSource)

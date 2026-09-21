@@ -749,13 +749,21 @@ call :config_gradle_proxy
 REM 内存检查：回收残留 JVM，避免 R8 压缩阶段提交内存不足
 call :reclaim_memory
 
+REM 先删掉上次构建留下的 APK：否则本次编译失败时，"产物已存在" 会被误判成构建成功
+set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
+if exist "!APK_SOURCE!" del /q "!APK_SOURCE!" 2>nul
+
 call flutter build apk --release
 set BUILD_EXIT=%ERRORLEVEL%
 
-set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
-if not exist "!APK_SOURCE!" (
+if !BUILD_EXIT! neq 0 (
     echo ============================================
     echo  [警告] 构建失败！Flutter exit code=!BUILD_EXIT!
+    echo ============================================
+    set BUILD_FAILED=1
+) else if not exist "!APK_SOURCE!" (
+    echo ============================================
+    echo  [警告] 构建失败！未找到构建产物
     echo        预期路径: !APK_SOURCE!
     echo ============================================
     set BUILD_FAILED=1
@@ -874,6 +882,15 @@ if !RESUME_STEP! lss 5 (
         echo  [警告] 构建失败！未找到构建产物
         if !BUILD_EXIT! neq 0 echo        Flutter exit code=!BUILD_EXIT!
         echo        预期路径: !APK_SOURCE!
+        echo ============================================
+        set BUILD_FAILED=1
+        goto :end
+    )
+    if !BUILD_EXIT! neq 0 (
+        echo.
+        echo ============================================
+        echo  [警告] 构建失败！Flutter exit code=!BUILD_EXIT!
+        echo        即使目录里还留着旧 APK，也按失败处理
         echo ============================================
         set BUILD_FAILED=1
         goto :end
