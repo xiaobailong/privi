@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/gallery/gallery_controller.dart';
 import '../../application/import/import_controller.dart';
+import '../../application/media/album_kind_preferences.dart';
 import '../../application/media/album_list_preferences.dart';
 import '../../application/media/visible_folder_view_preferences.dart';
 import '../../application/providers.dart';
@@ -61,7 +62,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
     super.dispose();
   }
 
-  Future<void> _newAlbum() async {
+  /// Creates a private album.
+  ///
+  /// The Invisible chrome "+" (and the ⋮ menu) asks for the album type first:
+  /// photos-only or videos-only. The type is kept in user preferences so the
+  /// album grid can separate images from videos.
+  Future<void> _newAlbum({AlbumKind? kind}) async {
+    final type = kind ?? await _pickAlbumKind();
+    if (type == null || !mounted) return;
     final controller = TextEditingController();
     final name = await showDialog<String>(
       context: context,
@@ -88,8 +96,51 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
     if (name == null || name.trim().isEmpty) return;
     final album = await ref.read(albumRepositoryProvider).createUserAlbum(name);
+    await ref
+        .read(albumKindPreferencesProvider.notifier)
+        .setKind(album.id, type);
     if (!mounted) return;
     _openAlbum(album.id, album.name);
+  }
+
+  /// Asks whether the new private album holds photos or videos.
+  Future<AlbumKind?> _pickAlbumKind() {
+    return showVaultSheet<AlbumKind>(
+      context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  context.l10n.newAlbum,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined, color: Colors.white70),
+              title: Text(context.l10n.photosOnly),
+              onTap: () => Navigator.pop(ctx, AlbumKind.image),
+            ),
+            ListTile(
+              leading:
+                  const Icon(Icons.videocam_outlined, color: Colors.white70),
+              title: Text(context.l10n.videosOnly),
+              onTap: () => Navigator.pop(ctx, AlbumKind.video),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _newGroup() async {
@@ -130,6 +181,22 @@ class _HomeShellState extends ConsumerState<HomeShell>
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MediaGridScreen(albumId: id, title: title),
+      ),
+    );
+  }
+
+  /// Global filename search over every unlocked vault item (images + videos).
+  ///
+  /// Reuses the album grid in search mode against the 全部媒体 system album, so
+  /// global and per-album search share one implementation.
+  void _openGlobalSearch() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MediaGridScreen(
+          albumId: SystemAlbumIds.all,
+          title: context.l10n.search,
+          startSearching: true,
+        ),
       ),
     );
   }
@@ -202,6 +269,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
             ),
             if (invisible)
               ListTile(
+                leading: const Icon(Icons.search, color: Colors.white70),
+                title: Text(
+                  context.l10n.search,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  context.l10n.searchNameHint,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                onTap: () => Navigator.pop(ctx, 'search_media'),
+              ),
+            if (invisible)
+              ListTile(
                 leading: const Icon(
                   Icons.layers_outlined,
                   color: Colors.white70,
@@ -238,6 +318,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await _newAlbum();
       case 'new_group':
         await _newGroup();
+      case 'search_media':
+        _openGlobalSearch();
       case 'settings':
         _openSettings();
     }
@@ -471,15 +553,25 @@ class _HomeShellState extends ConsumerState<HomeShell>
                         color: Colors.white70,
                         onPressed: _toggleHomeView,
                       ),
-                      // Photo XOR video mode — same control on Visible & Invisible.
-                      IconButton(
-                        tooltip: filter == MediaKindFilter.image
-                            ? context.l10n.photosOnlyTapVideos
-                            : context.l10n.videosOnlyTapPhotos,
-                        icon: Icon(_filterIcon(filter), size: 22),
-                        color: Colors.white70,
-                        onPressed: _toggleMediaFilter,
-                      ),
+                      // Invisible: "+" creates a typed (photos-only or
+                      // videos-only) private album. Visible keeps the photo XOR
+                      // video folder mode.
+                      if (invisible)
+                        IconButton(
+                          tooltip: context.l10n.newVaultAlbum,
+                          icon: const Icon(Icons.add, size: 22),
+                          color: Colors.white70,
+                          onPressed: () => _newAlbum(),
+                        )
+                      else
+                        IconButton(
+                          tooltip: filter == MediaKindFilter.image
+                              ? context.l10n.photosOnlyTapVideos
+                              : context.l10n.videosOnlyTapPhotos,
+                          icon: Icon(_filterIcon(filter), size: 22),
+                          color: Colors.white70,
+                          onPressed: _toggleMediaFilter,
+                        ),
                       IconButton(
                         tooltip: context.l10n.more,
                         icon: const Icon(Icons.more_vert, size: 22),
@@ -497,10 +589,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 controller: _tabs,
                 children: [
                   const VisibleFolderGrid(),
-                  _InvisibleTab(
-                    onOpenAlbum: _openAlbum,
-                    onNewAlbum: _newAlbum,
-                  ),
+                  _InvisibleTab(onOpenAlbum: _openAlbum),
                 ],
               ),
             ),
@@ -512,21 +601,17 @@ class _HomeShellState extends ConsumerState<HomeShell>
 }
 
 class _InvisibleTab extends ConsumerWidget {
-  const _InvisibleTab({
-    required this.onOpenAlbum,
-    required this.onNewAlbum,
-  });
+  const _InvisibleTab({required this.onOpenAlbum});
 
   final void Function(String id, String name, {SystemAlbumKind? systemKind})
       onOpenAlbum;
-  final VoidCallback onNewAlbum;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final shelfAsync = ref.watch(albumShelfProvider);
     final cols = ref.watch(settingsControllerProvider).albumColumns;
     final preferences = ref.watch(albumListPreferencesProvider);
-    final kind = ref.watch(mediaKindFilterProvider);
+    final kinds = ref.watch(albumKindPreferencesProvider);
 
     return shelfAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -565,17 +650,13 @@ class _InvisibleTab extends ConsumerWidget {
               accent: true,
               preferCover: true,
             ),
-          // User albums first; "+ New" sits just above Recycle Bin (second last).
+          // User albums carry their photos-only / videos-only type as a badge.
           ...shelf.entries.map(
             (entry) => switch (entry) {
-              AlbumEntry(:final view) => _Cell.album(view),
+              AlbumEntry(:final view) =>
+                _Cell.album(view, kind: kinds.kindOf(view.album.id)),
               GroupEntry(:final view) => _Cell.group(view),
             },
-          ),
-          _Cell.action(
-            label: context.l10n.newAlbum,
-            icon: Icons.add,
-            onTap: onNewAlbum,
           ),
           if (recycle != null)
             _Cell.special(view: recycle, icon: Icons.delete_outline),
@@ -649,7 +730,7 @@ class _InvisibleTab extends ConsumerWidget {
                   final tileKey = v == null && c.group == null
                       ? ValueKey('action-${c.label}')
                       : ValueKey(
-                          '${c.id}-${kind.name}-${v?.album.isPinned}-${v?.album.rating}-${v?.count}-${c.group?.totalCount}-${v?.cover?.displayPath ?? c.group?.cover?.cover?.displayPath ?? ''}',
+                          '${c.id}-${c.kind?.name ?? "mixed"}-${v?.album.isPinned}-${v?.album.rating}-${v?.count}-${c.group?.totalCount}-${v?.cover?.displayPath ?? c.group?.cover?.cover?.displayPath ?? ''}',
                         );
                   return _MosaicTile(
                     key: tileKey,
@@ -910,6 +991,9 @@ class _InvisibleTab extends ConsumerWidget {
         }
       case 'delete':
         await ref.read(albumRepositoryProvider).deleteUserAlbum(album.id);
+        // Album ids are never reused, but the stored type map would otherwise
+        // keep a dead entry for every album the user ever deletes.
+        await ref.read(albumKindPreferencesProvider.notifier).forget(album.id);
     }
   }
 
@@ -1081,7 +1165,14 @@ class _InvisibleTab extends ConsumerWidget {
   }
 
   Future<List<MediaItem>> _mediaForAlbum(WidgetRef ref, Album album) async {
-    final kind = ref.read(mediaKindFilterProvider);
+    // A typed album always plays its own media kind; untyped albums keep
+    // following the shared photo XOR video mode.
+    final albumKind = ref.read(albumKindPreferencesProvider).kindOf(album.id);
+    final MediaKindFilter kind = albumKind == null
+        ? ref.read(mediaKindFilterProvider)
+        : (albumKind == AlbumKind.video
+            ? MediaKindFilter.video
+            : MediaKindFilter.image);
     final items =
         await ref.read(albumRepositoryProvider).listMediaForAlbum(album.id);
     return items
@@ -1228,12 +1319,14 @@ class _Cell {
     this.icon,
     this.accent = false,
     this.preferCover = false,
+    this.kind,
     this.action = false,
     this.label,
     this.onTap,
   });
 
-  factory _Cell.album(AlbumView view) => _Cell._(view: view);
+  factory _Cell.album(AlbumView view, {AlbumKind? kind}) =>
+      _Cell._(view: view, kind: kind);
 
   factory _Cell.group(GroupView group) => _Cell._(group: group);
 
@@ -1250,18 +1343,14 @@ class _Cell {
         preferCover: preferCover,
       );
 
-  factory _Cell.action({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) =>
-      _Cell._(action: true, label: label, icon: icon, onTap: onTap);
-
   final AlbumView? view;
   final GroupView? group;
   final IconData? icon;
   final bool accent;
   final bool preferCover;
+
+  /// Photos-only / videos-only type of a user album (null = system or untyped).
+  final AlbumKind? kind;
   final bool action;
   final String? label;
   final VoidCallback? onTap;
@@ -1365,6 +1454,12 @@ class _MosaicTile extends StatelessWidget {
                 right: 6,
                 bottom: (cell.icon != null && !useCover) ? null : 6,
                 child: _Badge('${group?.members.length ?? view?.count ?? 0}'),
+              ),
+            if (cell.kind != null)
+              Positioned(
+                top: 6,
+                left: view?.album.isPinned == true ? 26 : 6,
+                child: _KindBadge(kind: cell.kind!),
               ),
             if (view != null && view.album.rating > 0)
               Positioned(
@@ -1476,6 +1571,19 @@ class _ShelfListTile extends StatelessWidget {
     final hearts = view == null || view.album.rating == 0
         ? ''
         : List.filled(view.album.rating, '♥').join();
+    final kindLabel = switch (cell.kind) {
+      null => '',
+      AlbumKind.image => context.l10n.photosOnly,
+      AlbumKind.video => context.l10n.videosOnly,
+    };
+    final subtitle = [
+      if (hearts.isNotEmpty) hearts,
+      if (kindLabel.isNotEmpty) kindLabel,
+      if (group != null)
+        context.l10n.albumsCount(group.members.length)
+      else
+        context.l10n.itemsCount(view?.count ?? 0),
+    ].join('  ');
     return Material(
       color: Colors.transparent,
       child: ListTile(
@@ -1501,11 +1609,7 @@ class _ShelfListTile extends StatelessWidget {
           style: const TextStyle(color: Colors.white),
         ),
         subtitle: Text(
-          group != null
-              ? context.l10n.albumsCount(group.members.length)
-              : hearts.isEmpty
-                  ? context.l10n.itemsCount(view?.count ?? 0)
-                  : '$hearts  ${context.l10n.itemsCount(view?.count ?? 0)}',
+          subtitle,
           style: TextStyle(color: context.vaultColors.heart),
         ),
         trailing: view == null && group == null
@@ -1576,3 +1680,29 @@ class _Badge extends StatelessWidget {
     );
   }
 }
+
+/// Photos-only / videos-only marker on a private album tile.
+class _KindBadge extends StatelessWidget {
+  const _KindBadge({required this.kind});
+
+  final AlbumKind kind;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(
+        kind == AlbumKind.video
+            ? Icons.videocam_outlined
+            : Icons.image_outlined,
+        size: 12,
+        color: Colors.white,
+      ),
+    );
+  }
+}
+

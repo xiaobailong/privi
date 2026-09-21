@@ -27,7 +27,15 @@ class AlbumRepository {
   ///
   /// [isVideo] filters home mosaic counts/covers to match the shared
   /// photo XOR video mode (same as Visible). Null = all kinds.
-  Stream<List<AlbumView>> watchAlbumViewsReactive({bool? isVideo}) {
+  ///
+  /// [typedAlbums] overrides that mode per album id (true = videos only): a
+  /// photos-only / videos-only private album must keep counting its own media
+  /// type even when the shared mode points at the other one, otherwise its
+  /// count drops to zero and the album disappears from Home.
+  Stream<List<AlbumView>> watchAlbumViewsReactive({
+    bool? isVideo,
+    Map<String, bool> typedAlbums = const <String, bool>{},
+  }) {
     return Stream.multi((controller) {
       var closed = false;
       Timer? debounce;
@@ -35,7 +43,10 @@ class AlbumRepository {
       Future<void> emitNow() async {
         if (closed) return;
         try {
-          final views = await _buildViews(isVideo: isVideo);
+          final views = await _buildViews(
+            isVideo: isVideo,
+            typedAlbums: typedAlbums,
+          );
           if (closed) return;
           controller.add(views);
         } catch (e, st) {
@@ -69,15 +80,20 @@ class AlbumRepository {
     });
   }
 
-  Future<List<AlbumView>> _buildViews({bool? isVideo}) async {
+  Future<List<AlbumView>> _buildViews({
+    bool? isVideo,
+    Map<String, bool> typedAlbums = const <String, bool>{},
+  }) async {
     final albums = await _db.getAllAlbums();
     _groupSnapshot = List.unmodifiable(await listGroups());
     final views = await Future.wait(
       albums.map((row) async {
         final album = _mapAlbum(row);
+        // Per-album type wins over the shared photo XOR video mode.
+        final albumIsVideo = typedAlbums[album.id] ?? isVideo;
         final results = await Future.wait<Object?>([
-          _countFor(album, isVideo: isVideo),
-          _coverFor(album, row.coverMediaId, isVideo: isVideo),
+          _countFor(album, isVideo: albumIsVideo),
+          _coverFor(album, row.coverMediaId, isVideo: albumIsVideo),
         ]);
         return AlbumView(
           album: album,

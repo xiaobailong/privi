@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/gallery/gallery_controller.dart';
 import '../../application/import/import_controller.dart';
+import '../../application/media/album_kind_preferences.dart';
 import '../../application/media/album_list_preferences.dart';
 import '../../application/media/media_view_preferences.dart';
 import '../../application/media/rating_controller.dart';
@@ -46,10 +47,15 @@ class MediaGridScreen extends ConsumerStatefulWidget {
     super.key,
     required this.albumId,
     required this.title,
+    this.startSearching = false,
   });
 
   final String albumId;
   final String title;
+
+  /// Opens with the file-name search field already focused and filtered by
+  /// name (Home ⋮ → 搜索).
+  final bool startSearching;
 
   @override
   ConsumerState<MediaGridScreen> createState() => _MediaGridScreenState();
@@ -65,7 +71,7 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
   bool get _canSetCover => _isUserAlbum || _isFavorites;
   MediaViewScope get _viewScope => MediaViewScope.vaultAlbum(widget.albumId);
 
-  bool _searchOpen = false;
+  late bool _searchOpen = widget.startSearching;
   final _searchCtrl = TextEditingController();
   final GlobalKey _overflowKey = GlobalKey();
   final GlobalKey _heartsChipKey = GlobalKey();
@@ -76,15 +82,28 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     super.dispose();
   }
 
+  /// Type a selection of media can be filed into, or null when it is mixed.
+  AlbumKind? _selectionKind(List<MediaItem> items) {
+    if (items.isEmpty) return null;
+    final videos = items.where((item) => item.isVideo).length;
+    if (videos == 0) return AlbumKind.image;
+    if (videos == items.length) return AlbumKind.video;
+    return null;
+  }
+
+  /// [kind] null = images and videos together (untyped album in search mode).
   List<MediaItem> _applyQuery(
     List<MediaItem> items, {
-    required MediaKindFilter kind,
+    required MediaKindFilter? kind,
     required MediaViewPreferences preferences,
   }) {
-    // Shared Visible/Invisible photo XOR video preference.
-    final kindFiltered = items.where((m) {
-      return kind == MediaKindFilter.video ? m.isVideo : !m.isVideo;
-    }).toList(growable: false);
+    // Shared Visible/Invisible photo XOR video preference, overridden by the
+    // album's own photos-only / videos-only type.
+    final kindFiltered = kind == null
+        ? items
+        : items.where((m) {
+            return kind == MediaKindFilter.video ? m.isVideo : !m.isVideo;
+          }).toList(growable: false);
 
     if (_isRecycle) {
       return MediaQueryUtils.apply(
@@ -249,11 +268,32 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     final ids = ref.read(selectionControllerProvider).toList();
     if (ids.isEmpty) return;
     final allAlbums = await ref.read(albumRepositoryProvider).listUserAlbums();
-    final albums = _isUserAlbum
-        ? allAlbums
-            .where((album) => album.id != widget.albumId)
-            .toList(growable: false)
-        : allAlbums;
+    // Typed albums only ever hold one media kind, so hide the incompatible
+    // targets instead of silently filing the wrong media into them.
+    final mediaById = <String, MediaItem>{
+      for (final item in ref
+              .read(albumMediaProvider(widget.albumId))
+              .asData
+              ?.value ??
+          const <MediaItem>[])
+        item.id: item,
+    };
+    final selectedItems = ids
+        .map((id) => mediaById[id])
+        .whereType<MediaItem>()
+        .toList(growable: false);
+    final selectionKind = _selectionKind(selectedItems);
+    final albumKinds = ref.read(albumKindPreferencesProvider);
+    final albums = allAlbums
+        .where((album) => !_isUserAlbum || album.id != widget.albumId)
+        .where((album) {
+          final kind = albumKinds.kindOf(album.id);
+          // Untyped albums accept anything.
+          if (kind == null) return true;
+          // A typed album needs a selection of exactly its own kind.
+          return selectionKind != null && kind == selectionKind;
+        })
+        .toList(growable: false);
     if (!mounted) return;
     if (albums.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -745,7 +785,17 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
       albumListPreferencesProvider
           .select((preferences) => preferences.viewMode),
     );
-    final kind = ref.watch(mediaKindFilterProvider);
+    final preferredKind = ref.watch(mediaKindFilterProvider);
+    final albumKind =
+        ref.watch(albumKindPreferencesProvider).kindOf(widget.albumId);
+    // Typed private albums only ever show their own media type; untyped albums
+    // follow the shared photo XOR video preference, except in search mode where
+    // a file name must be found no matter which media type it is.
+    final MediaKindFilter? kind = switch (albumKind) {
+      AlbumKind.image => MediaKindFilter.image,
+      AlbumKind.video => MediaKindFilter.video,
+      null => _searchOpen ? null : preferredKind,
+    };
     final bottomPad = GridDefaults.bottomClearance +
         MediaQuery.paddingOf(context).bottom +
         (selecting ? GridDefaults.selectionCapsuleClearance : 0);
@@ -801,7 +851,10 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
                     : () => _playAlbum(
                           _applyQuery(
                             items,
-                            kind: kind,
+                            // Search mode shows both media kinds, but a
+                            // playlist must stay homogeneous: fall back to the
+                            // shared photo XOR video preference.
+                            kind: kind ?? preferredKind,
                             preferences: viewPreferences,
                           ),
                         ),

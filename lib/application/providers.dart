@@ -36,6 +36,7 @@ import '../domain/models/group_view.dart';
 import '../domain/models/media_item.dart';
 import '../domain/models/shelf_entry.dart';
 import 'gallery/gallery_controller.dart';
+import 'media/album_kind_preferences.dart';
 import 'media/album_list_preferences.dart';
 import 'platform/privacy_shield.dart';
 import 'platform/share_source_stager.dart';
@@ -224,9 +225,17 @@ final vaultSizeBytesProvider = FutureProvider.autoDispose<int>((ref) {
 final albumsProvider = StreamProvider<List<AlbumView>>((ref) {
   final kind = ref.watch(mediaKindFilterProvider);
   final isVideo = kind == MediaKindFilter.video;
-  return ref
-      .watch(albumRepositoryProvider)
-      .watchAlbumViewsReactive(isVideo: isVideo);
+  // Typed (photos-only / videos-only) private albums ignore the shared mode so
+  // their counts/covers stay non-zero; untyped albums keep following it.
+  final kinds = ref.watch(albumKindPreferencesProvider);
+  final typedAlbums = <String, bool>{
+    for (final entry in kinds.kinds.entries)
+      entry.key: entry.value == AlbumKind.video,
+  };
+  return ref.watch(albumRepositoryProvider).watchAlbumViewsReactive(
+        isVideo: isVideo,
+        typedAlbums: typedAlbums,
+      );
 });
 
 /// Home shelf derived from album facts and global album-list preferences.
