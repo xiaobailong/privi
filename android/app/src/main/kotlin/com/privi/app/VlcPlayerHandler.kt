@@ -45,8 +45,6 @@ class VlcPlayerHandler(
     private var libVlc: LibVLC? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var textureBufferWidth = 0
-    private var textureBufferHeight = 0
 
     private var durationMs = 0L
     private var videoWidth = 0
@@ -124,30 +122,13 @@ class VlcPlayerHandler(
                 if (!isReady) {
                     isReady = true
                     durationMs = mp.length.coerceAtLeast(0L)
-                    videoWidth = 0
-                    videoHeight = 0
-                    try {
-                        val tracks = mp.videoTracks
-                        if (tracks != null && tracks.isNotEmpty()) {
-                            val vt = tracks[0] as? MediaPlayer.VideoTrack
-                            if (vt != null) {
-                                videoWidth = vt.width
-                                videoHeight = vt.height
-                            }
-                        }
-                    } catch (_: Exception) {
-                        logW("Could not read video track dimensions")
-                    }
-                    if (videoWidth > 0 && videoHeight > 0) {
-                        applyTextureBufferSize(videoWidth, videoHeight)
-                    }
                     logI("STATE_READY: textureId=$textureId, " +
-                        "duration=${durationMs}ms, size=${videoWidth}x${videoHeight}")
+                        "duration=${durationMs}ms")
                     eventSink("initialized", mapOf(
                         "textureId" to textureId,
                         "duration" to durationMs,
-                        "width" to videoWidth,
-                        "height" to videoHeight
+                        "width" to 0,
+                        "height" to 0
                     ))
                 }
                 eventSink("playingChanged", mapOf(
@@ -201,20 +182,6 @@ class VlcPlayerHandler(
                 "readable=${file.canRead()}, modified=${file.lastModified()}")
         } catch (e: Exception) {
             logW("source file probe failed for $filePath: ${e.message}")
-        }
-    }
-
-    private fun applyTextureBufferSize(width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        if (width == textureBufferWidth && height == textureBufferHeight) return
-        textureBufferWidth = width
-        textureBufferHeight = height
-        try {
-            textureEntry.surfaceTexture().setDefaultBufferSize(width, height)
-            logI("texture buffer size set to ${width}x$height, textureId=$textureId")
-        } catch (e: Exception) {
-            logW("setDefaultBufferSize(${width}x$height) failed for " +
-                "textureId=$textureId: ${e.message}")
         }
     }
 
@@ -319,8 +286,6 @@ class VlcPlayerHandler(
         durationMs = 0L
         videoWidth = 0
         videoHeight = 0
-        textureBufferWidth = 0
-        textureBufferHeight = 0
 
         val mp = mediaPlayer
         val media = mediaRef
