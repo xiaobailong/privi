@@ -13,6 +13,7 @@ class AppSettings {
     this.albumColumns = 3,
     this.autoLockSeconds = 30,
     this.playerExternal = true,
+    this.playerEngine = PlayerEngine.exoPlayer,
     this.playerSeekSeconds = 3,
     this.playerPlaybackSpeed = 1,
     this.slideshowSeconds = 3,
@@ -29,6 +30,7 @@ class AppSettings {
   final int albumColumns; // 3–4
   final int autoLockSeconds; // 0 = immediately
   final bool playerExternal;
+  final PlayerEngine playerEngine;
   final int playerSeekSeconds;
   final double playerPlaybackSpeed;
   final int slideshowSeconds;
@@ -56,6 +58,7 @@ class AppSettings {
     int? albumColumns,
     int? autoLockSeconds,
     bool? playerExternal,
+    PlayerEngine? playerEngine,
     int? playerSeekSeconds,
     double? playerPlaybackSpeed,
     int? slideshowSeconds,
@@ -72,6 +75,7 @@ class AppSettings {
       albumColumns: albumColumns ?? this.albumColumns,
       autoLockSeconds: autoLockSeconds ?? this.autoLockSeconds,
       playerExternal: playerExternal ?? this.playerExternal,
+      playerEngine: playerEngine ?? this.playerEngine,
       playerSeekSeconds: playerSeekSeconds ?? this.playerSeekSeconds,
       playerPlaybackSpeed: playerPlaybackSpeed ?? this.playerPlaybackSpeed,
       slideshowSeconds: slideshowSeconds ?? this.slideshowSeconds,
@@ -91,6 +95,7 @@ class SettingsController extends Notifier<AppSettings> {
   static const _kAlbum = 'album_columns';
   static const _kAutoLock = 'auto_lock_seconds';
   static const _kPlayer = 'player_external';
+  static const _kPlayerEngine = 'player_engine';
   static const _kPlayerSeek = 'player_seek_seconds';
   static const _kPlayerSpeed = 'player_playback_speed';
   static const _kSlideshow = 'slideshow_seconds';
@@ -114,6 +119,7 @@ class SettingsController extends Notifier<AppSettings> {
       albumColumns: p.getInt(_kAlbum) ?? 3,
       autoLockSeconds: p.getInt(_kAutoLock) ?? 30,
       playerExternal: p.getBool(_kPlayer) ?? true,
+      playerEngine: PlayerEngine.fromStorage(p.getString(_kPlayerEngine)),
       playerSeekSeconds: p.getInt(_kPlayerSeek) ?? 3,
       playerPlaybackSpeed: p.getDouble(_kPlayerSpeed) ?? 1,
       slideshowSeconds: p.getInt(_kSlideshow) ?? 3,
@@ -147,6 +153,11 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setPlayerExternal(bool v) async {
     state = state.copyWith(playerExternal: v);
     await _prefs.setBool(_kPlayer, v);
+  }
+
+  Future<void> setPlayerEngine(PlayerEngine engine) async {
+    state = state.copyWith(playerEngine: engine);
+    await _prefs.setString(_kPlayerEngine, engine.name);
   }
 
   Future<void> setPlayerSeekSeconds(int seconds) async {

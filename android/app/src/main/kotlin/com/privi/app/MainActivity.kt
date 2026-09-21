@@ -25,7 +25,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val ioExecutor = Executors.newFixedThreadPool(3)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var externalPlayer: ExternalPlayerHandler? = null
-    private val videoPlayers = mutableMapOf<Long, VideoPlayerHandler>()
+    private val videoPlayers = mutableMapOf<Long, PlayerHandler>()
     private var videoChannel: MethodChannel? = null
 
     private fun <T> runIo(result: MethodChannel.Result, block: () -> T) {
@@ -291,20 +291,36 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("bad_args", "filePath is required", null)
                         return@setMethodCallHandler
                     }
+                    val engine = call.argument<String>("playerEngine") ?: "exoPlayer"
+                    var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
+                    var handler: PlayerHandler? = null
                     try {
-                        logToDart(videoChannel, "Creating video player: $filePath")
-                        val textureEntry = textures.createSurfaceTexture()
-                        val handler = VideoPlayerHandler(
-                            this,
-                            textureEntry,
-                        ) { event, data ->
-                            mainHandler.post {
-                                try {
-                                    videoChannel.invokeMethod(event, data)
-                                } catch (e: Exception) {
-                                    // A torn-down engine must not crash the app
-                                    // while the last events are still queued.
-                                    Log.w("PriviMain", "event $event dropped: ${e.message}")
+                        logToDart(videoChannel, "Creating video player: $filePath, engine=$engine")
+                        textureEntry = textures.createSurfaceTexture()
+                        handler = if (engine == "vlc") {
+                            VlcPlayerHandler(
+                                this,
+                                textureEntry,
+                            ) { event, data ->
+                                mainHandler.post {
+                                    try {
+                                        videoChannel.invokeMethod(event, data)
+                                    } catch (e: Exception) {
+                                        Log.w("PriviMain", "event $event dropped: ${e.message}")
+                                    }
+                                }
+                            }
+                        } else {
+                            VideoPlayerHandler(
+                                this,
+                                textureEntry,
+                            ) { event, data ->
+                                mainHandler.post {
+                                    try {
+                                        videoChannel.invokeMethod(event, data)
+                                    } catch (e: Exception) {
+                                        Log.w("PriviMain", "event $event dropped: ${e.message}")
+                                    }
                                 }
                             }
                         }
@@ -312,10 +328,24 @@ class MainActivity : FlutterFragmentActivity() {
                         videoPlayers[textureEntry.id()] = handler
                         logToDart(
                             videoChannel,
-                            "Video player created: textureId=${textureEntry.id()}",
+                            "Video player created: textureId=${textureEntry.id()}, " +
+                                "engine=$engine",
                         )
                         result.success(textureEntry.id())
                     } catch (e: Exception) {
+                        if (handler != null) {
+                            try {
+                                handler.release()
+                            } catch (re: Exception) {
+                                Log.w("PriviMain", "handler.release failed: ${re.message}")
+                            }
+                        } else {
+                            try {
+                                textureEntry?.release()
+                            } catch (re: Exception) {
+                                Log.w("PriviMain", "textureEntry.release failed: ${re.message}")
+                            }
+                        }
                         logToDart(
                             videoChannel,
                             "Video player create error: ${e.message}",
@@ -396,6 +426,7 @@ class MainActivity : FlutterFragmentActivity() {
         externalPlayer = null
         videoPlayers.values.forEach { it.release() }
         videoPlayers.clear()
+        VlcPlayerHandler.releaseLibVlc()
         videoChannel = null
         ioExecutor.shutdown()
         super.onDestroy()

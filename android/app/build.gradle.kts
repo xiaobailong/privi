@@ -77,4 +77,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-datasource:1.5.1")
     implementation("androidx.media3:media3-common:1.5.1")
+
+    // libVLC: FFmpeg-based fallback engine for broad format support.
+    implementation("org.videolan.android:libvlc-all:3.6.4")
 }

@@ -102,3 +102,19 @@ enum ShufflePlayCountMode {
 /// Play counts offered as the "stop appearing" threshold for
 /// [ShufflePlayCountMode.skip].
 const shuffleSkipThresholdOptions = <int>[3, 5, 10, 20];
+
+/// Video playback engine.
+enum PlayerEngine {
+  /// Media3 ExoPlayer using platform MediaCodec decoders.
+  exoPlayer,
+
+  /// libVLC with FFmpeg-based decoding for broad format support.
+  vlc;
+
+  static PlayerEngine fromStorage(String? value) {
+    for (final engine in PlayerEngine.values) {
+      if (engine.name == value) return engine;
+    }
+    return PlayerEngine.exoPlayer;
+  }
+}

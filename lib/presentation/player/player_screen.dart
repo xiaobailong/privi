@@ -11,6 +11,7 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../common/keep_vault_unlocked.dart';
 import 'video_player_controls.dart';
@@ -476,7 +477,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
 
     try {
-      final controller = await NativeVideoController.create(item.privatePath);
+      final settings = ref.read(settingsControllerProvider);
+      final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
+      final controller = await NativeVideoController.create(
+        item.privatePath,
+        playerEngine: engine,
+      );
       if (_isStaleLoad(request, item)) {
         AppLogger.d('PlayerScreen', 'Stale video load, disposing: ${item.id}');
         await controller.dispose();

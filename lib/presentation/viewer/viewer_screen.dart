@@ -12,6 +12,7 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
 import '../common/keep_vault_unlocked.dart';
@@ -157,7 +158,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     final file = File(item.privatePath);
     if (!file.existsSync()) return;
     if (!mounted || request != _videoRequest) return;
-    final c = await NativeVideoController.create(file.path);
+    final settings = ref.read(settingsControllerProvider);
+    final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
+    final c = await NativeVideoController.create(file.path, playerEngine: engine);
     if (!mounted || request != _videoRequest || _current.id != item.id) {
       await c.dispose();
       return;

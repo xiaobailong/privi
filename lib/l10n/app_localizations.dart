@@ -476,6 +476,12 @@ class AppLocalizations {
 
   String get externalPlaybackUnsupported => '外部播放不可用';
 
+  String get playerEngine => '播放引擎';
+
+  String get playerEngineExoPlayer => 'ExoPlayer（系统解码器）';
+
+  String get playerEngineVlc => 'libVLC（FFmpeg 解码，格式更全）';
+
   String get shuffleByDefault => '默认随机播放';
 
   /// 随机播放与播放记录（去重）——顶部标签。

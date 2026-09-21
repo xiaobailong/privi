@@ -215,8 +215,12 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     required this.filePath,
   }) : super(const NativeVideoValue());
 
-  static Future<NativeVideoController> create(String filePath) async {
-    AppLogger.i('VideoPlayer', 'Creating native player for: $filePath');
+  static Future<NativeVideoController> create(
+    String filePath, {
+    String playerEngine = 'exoPlayer',
+  }) async {
+    AppLogger.i('VideoPlayer',
+        'Creating native player for: $filePath, engine=$playerEngine');
     AppLogger.i(
         'VideoPlayer', 'Source file: ${await describeSourceFile(filePath)}');
     // Install the inbound handler first: STATE_READY can fire before the
@@ -226,6 +230,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     try {
       final textureId = await _channel.invokeMethod<int>('create', {
         'filePath': filePath,
+        'playerEngine': playerEngine,
       });
       stopwatch.stop();
       if (textureId == null) {

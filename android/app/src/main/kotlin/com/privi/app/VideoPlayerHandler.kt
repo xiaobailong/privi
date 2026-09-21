@@ -20,7 +20,7 @@ class VideoPlayerHandler(
     private val context: Context,
     private val textureEntry: TextureRegistry.SurfaceTextureEntry,
     private val eventSink: (String, Map<String, Any?>?) -> Unit
-) {
+) : PlayerHandler {
     companion object {
         private const val TAG = "PriviVideoPlayer"
 
@@ -102,7 +102,7 @@ class VideoPlayerHandler(
         }
     }
 
-    val textureId: Long get() = textureEntry.id()
+    override val textureId: Long get() = textureEntry.id()
 
     /**
      * Mirrors one line to logcat and to the app's log file.
@@ -137,7 +137,7 @@ class VideoPlayerHandler(
     private fun logE(message: String, error: Throwable? = null) =
         log("e", message, error)
 
-    fun initialize(filePath: String) {
+    override fun initialize(filePath: String) {
         logI("initialize: textureId=$textureId, path=$filePath")
         logSourceFile(filePath)
         resetPlayer()
@@ -342,7 +342,7 @@ class VideoPlayerHandler(
         }
     }
 
-    fun play() {
+    override fun play() {
         val current = player
         if (current == null) {
             // A released/half-built player silently ignoring play() is one way
@@ -355,7 +355,7 @@ class VideoPlayerHandler(
             "position=${current.currentPosition}")
     }
 
-    fun pause() {
+    override fun pause() {
         val current = player
         if (current == null) {
             logW("pause ignored: no player for textureId=$textureId")
@@ -366,7 +366,7 @@ class VideoPlayerHandler(
             "position=${current.currentPosition}")
     }
 
-    fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long) {
         val current = player
         if (current == null) {
             logW("seekTo ignored: no player for textureId=$textureId")
@@ -376,7 +376,7 @@ class VideoPlayerHandler(
         logD("seekTo: textureId=$textureId, positionMs=$positionMs")
     }
 
-    fun setVolume(volume: Double) {
+    override fun setVolume(volume: Double) {
         val current = player
         if (current == null) {
             logW("setVolume ignored: no player for textureId=$textureId")
@@ -386,7 +386,7 @@ class VideoPlayerHandler(
         logD("setVolume: textureId=$textureId, volume=${current.volume}")
     }
 
-    fun setPlaybackSpeed(speed: Double) {
+    override fun setPlaybackSpeed(speed: Double) {
         val current = player
         if (current == null) {
             logW("setPlaybackSpeed ignored: no player for textureId=$textureId")
@@ -396,15 +396,15 @@ class VideoPlayerHandler(
         logD("setPlaybackSpeed: textureId=$textureId, speed=$speed")
     }
 
-    fun getPosition(): Long {
+    override fun getPosition(): Long {
         return player?.currentPosition ?: 0L
     }
 
-    fun getDuration(): Long {
+    override fun getDuration(): Long {
         return player?.duration?.let { if (it < 0) 0L else it } ?: 0L
     }
 
-    fun isPlaying(): Boolean {
+    override fun isPlaying(): Boolean {
         return player?.isPlaying == true
     }
 
@@ -413,7 +413,7 @@ class VideoPlayerHandler(
      * one-shot `initialized` event was missed, so the UI cannot stay on a
      * spinner while the player is actually ready.
      */
-    fun status(): Map<String, Any?> {
+    override fun status(): Map<String, Any?> {
         val current = player
         if (current == null) {
             logW("getStatus: no player for textureId=$textureId")
@@ -470,7 +470,7 @@ class VideoPlayerHandler(
     /**
      * Full disposal: player, surface and the GL texture entry.
      */
-    fun release() {
+    override fun release() {
         logI("release: textureId=$textureId")
         resetPlayer()
         try {

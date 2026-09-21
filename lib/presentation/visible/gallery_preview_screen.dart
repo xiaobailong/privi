@@ -9,6 +9,7 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../data/services/gallery_service.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../domain/enums.dart';
 import '../common/keep_vault_unlocked.dart';
 import '../common/zoomable_media_image.dart';
 import '../player/video_player_controls.dart';
@@ -100,7 +101,9 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
         return;
       }
       if (item.isVideo) {
-        final c = await NativeVideoController.create(file.path);
+        final settings = ref.read(settingsControllerProvider);
+        final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
+        final c = await NativeVideoController.create(file.path, playerEngine: engine);
         if (!mounted || request != _loadRequest) {
           await c.dispose();
           return;

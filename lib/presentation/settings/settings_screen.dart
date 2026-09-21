@@ -190,6 +190,23 @@ class SettingsScreen extends ConsumerWidget {
               subtitle: Text(context.l10n.externalPlaybackUnsupported),
             ),
           ListTile(
+            leading: const Icon(Icons.videocam_outlined),
+            title: Text(context.l10n.playerEngine),
+            subtitle: Text(_playerEngineLabel(context, s.playerEngine)),
+            onTap: () async {
+              final v = await _pick<PlayerEngine>(
+                context,
+                title: context.l10n.playerEngine,
+                options: {
+                  context.l10n.playerEngineExoPlayer: PlayerEngine.exoPlayer,
+                  context.l10n.playerEngineVlc: PlayerEngine.vlc,
+                },
+                current: s.playerEngine,
+              );
+              if (v != null) await notifier.setPlayerEngine(v);
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.slideshow_outlined),
             title: Text(context.l10n.slideshowDelay),
             subtitle: Text('${s.slideshowSeconds}s'),
@@ -1054,6 +1071,14 @@ class SettingsScreen extends ConsumerWidget {
     if (s < 60) return l10n.autoLockSeconds(s);
     final m = s ~/ 60;
     return m == 1 ? l10n.autoLockMinutes(m) : l10n.autoLockMinutesPlural(m);
+  }
+
+  String _playerEngineLabel(BuildContext context, PlayerEngine engine) {
+    final l10n = context.l10n;
+    return switch (engine) {
+      PlayerEngine.exoPlayer => l10n.playerEngineExoPlayer,
+      PlayerEngine.vlc => l10n.playerEngineVlc,
+    };
   }
 
   Future<T?> _pick<T>(
