@@ -11,14 +11,20 @@
 #  USAGE
 #    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind codegen
 #    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind gradle
+#    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind file -Path privi-1.0.29+44.apk
 #
 #  OUTPUT (stdout, 单行)
-#    32 位大写十六进制哈希，exit code 0
+#    codegen / gradle : 32 位大写十六进制 MD5，exit code 0
+#    file             : 64 位小写十六进制 SHA-256（与上游 Release 的
+#                       privi-<版本>.apk.sha256 内容格式一致，sha256sum 风格），exit code 0
 #    （失败时 stdout 为空，错误写到 stderr，exit code != 0）
 # =============================================================================
 param(
-    [ValidateSet('codegen', 'gradle')]
-    [string]$Kind = 'codegen'
+    [ValidateSet('codegen', 'gradle', 'file')]
+    [string]$Kind = 'codegen',
+
+    # -Kind file 时必填：要计算 SHA-256 的文件路径
+    [string]$Path = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +55,7 @@ try {
                   (Get-FileHashOrEmpty 'pubspec.lock') +
                   (Get-FileHashOrEmpty 'build.yaml')
     }
-    else {
+    elseif ($Kind -eq 'gradle') {
         # Gradle 配置相关：任一文件变更都会让 APK 需要重新编译
         $paths = @(
             'android\build.gradle.kts',
@@ -58,6 +64,15 @@ try {
             'android\gradle.properties'
         )
         $joined = ($paths.ForEach({ Get-FileHashOrEmpty $_ }) -join '')
+    }
+    else {
+        # 单个文件的 SHA-256，供 build.bat 发布 Release 时生成校验和资产
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            throw '-Kind file 必须提供 -Path'
+        }
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        Write-Output ((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant())
+        exit 0
     }
 
     Write-Output (Get-Md5Hex $joined)

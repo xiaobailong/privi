@@ -22,11 +22,15 @@ title Privi Build
 
 REM ============================================
 REM  Privi 一键构建脚本
-REM  用法: 双击运行            (完整构建 + 递增版本)
+REM  用法: 双击运行            (完整构建 + 递增版本 + 自动发布 Release)
 REM        build codegen       (仅代码生成)
 REM        build clean         (清理构建产物)
 REM        build fast          (构建但跳过代码生成)
-REM        build gradle        (仅 Gradle 编译，调试用)
+REM        build gradle        (仅 Gradle 编译，调试用，不发布 Release)
+REM        build release       (不重新构建，直接把根目录已有 APK 发布到 Release)
+REM        build fast norelease / build norelease
+REM                            (构建但不自动发布 Release；等价于 set SKIP_RELEASE=1)
+REM  环境变量: GH_EXE           (可选，指定 gh 可执行文件；默认自动探测)
 REM ============================================
 
 REM ---- 全局状态变量 ----
@@ -39,6 +43,15 @@ REM 会被上面的 goto 跳过（第 81 行的任务分发），导致 :save_st
 REM 路径，日志里就会出现 "The system cannot find the path specified."，
 REM 状态文件也一直写不出来。
 set "STATE_FILE=build\.build_state"
+
+REM ---- Release 发布（gh CLI）状态 ----
+REM SKIP_RELEASE 允许外部预置（build.bat norelease，或 set SKIP_RELEASE=1 后运行）
+REM GH_EXE 同样允许外部预置（本机 gh 不在 PATH 时，或构建脚本自测用假 gh 时）；
+REM 预置路径不存在时 :resolve_gh 会清空它，发布环节只是跳过、不会让构建失败。
+if not defined SKIP_RELEASE set "SKIP_RELEASE=0"
+set "RELEASE_TAG="
+set "RELEASE_SLUG="
+set "APK_SHA="
 
 REM ---- 环境配置（按实际路径修改） ----
 set "JAVA_HOME=D:\Tools\DevTools\Java\JDK\jdk-21.0.10-oracle"
@@ -83,6 +96,9 @@ if /i "%~1"=="codegen" call :codegen && goto :end
 if /i "%~1"=="clean"   goto :clean
 if /i "%~1"=="fast"    goto :fast
 if /i "%~1"=="gradle"  goto :gradle_only
+REM norelease 可以写在任意位置: build.bat norelease / build.bat fast norelease / build.bat release norelease
+if not "%~1"=="" for %%a in (%*) do if /i "%%a"=="norelease" set "SKIP_RELEASE=1"
+if /i "%~1"=="release" goto :release_only
 goto :build
 
 REM ============================================
@@ -400,6 +416,7 @@ echo  清理构建产物...
 echo ============================================
 call flutter clean 2>nul
 if exist "privi-*.apk" del /q "privi-*.apk" 2>nul
+if exist "privi-*.apk.sha256" del /q "privi-*.apk.sha256" 2>nul
 if exist "*.aab" del /q "*.aab" 2>nul
 rmdir /s /q ".dart_tool" 2>nul
 rmdir /s /q "build" 2>nul
@@ -497,6 +514,209 @@ if not "%MEM_EXIT%"=="0" (
 goto :eof
 
 REM ============================================
+REM  定位 gh CLI（GitHub Release 发布用）
+REM  优先使用外部预置的 GH_EXE（本机 gh 不在 PATH、或自测用假 gh 时），
+REM  否则依次查 PATH / Program Files / 用户级安装目录。
+REM  找不到时 GH_EXE 留空，由调用方决定是跳过还是报错（构建流程里是跳过）。
+REM ============================================
+:resolve_gh
+if defined GH_EXE (
+    if exist "!GH_EXE!" goto :eof
+)
+set "GH_EXE="
+for /f "delims=" %%g in ('where gh 2^>nul') do if not defined GH_EXE set "GH_EXE=%%g"
+if not defined GH_EXE if exist "%ProgramFiles%\GitHub CLI\gh.exe" set "GH_EXE=%ProgramFiles%\GitHub CLI\gh.exe"
+if not defined GH_EXE if exist "%ProgramFiles(x86)%\GitHub CLI\gh.exe" set "GH_EXE=%ProgramFiles(x86)%\GitHub CLI\gh.exe"
+if not defined GH_EXE if exist "%LOCALAPPDATA%\Programs\GitHub CLI\gh.exe" set "GH_EXE=%LOCALAPPDATA%\Programs\GitHub CLI\gh.exe"
+if not defined GH_EXE if exist "%USERPROFILE%\scoop\shims\gh.exe" set "GH_EXE=%USERPROFILE%\scoop\shims\gh.exe"
+goto :eof
+
+REM ============================================
+REM  从 origin 远端地址解析 owner/repo（仅用于打印 Release 链接）
+REM  支持 git@github.com:owner/repo.git 与 https://github.com/owner/repo.git
+REM ============================================
+:resolve_repo_slug
+set "RELEASE_SLUG="
+set "REMOTE_URL="
+for /f "delims=" %%u in ('git config --get remote.origin.url 2^>nul') do set "REMOTE_URL=%%u"
+if not defined REMOTE_URL goto :eof
+set "REMOTE_TAIL=!REMOTE_URL:*github.com:=!"
+if "!REMOTE_TAIL!"=="!REMOTE_URL!" set "REMOTE_TAIL=!REMOTE_URL:*github.com/=!"
+set "REMOTE_TAIL=!REMOTE_TAIL:.git=!"
+for /f "tokens=1,2 delims=/" %%a in ("!REMOTE_TAIL!") do if not "%%b"=="" set "RELEASE_SLUG=%%a/%%b"
+goto :eof
+
+REM ============================================
+REM  读取当前提交信息（Release 说明与 tag 目标用）
+REM  注意: 不要用带 %%s 之类的 --format 串——写进 .bat 容易被 cmd 当变量展开；
+REM        git log -1 --oneline 正好给出「短 sha + 标题」。
+REM ============================================
+:resolve_git_sha
+set "GIT_SHA="
+set "GIT_SHA_SHORT="
+set "GIT_DESC="
+set "GIT_BRANCH="
+for /f "delims=" %%c in ('git rev-parse HEAD 2^>nul') do set "GIT_SHA=%%c"
+for /f "delims=" %%c in ('git rev-parse --short HEAD 2^>nul') do set "GIT_SHA_SHORT=%%c"
+for /f "delims=" %%c in ('git log -1 --oneline 2^>nul') do set "GIT_DESC=%%c"
+for /f "delims=" %%c in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "GIT_BRANCH=%%c"
+goto :eof
+
+REM ============================================
+REM  仅发布 Release（补发/重发：不重新构建，把根目录已有 APK 推到 GitHub Release）
+REM  用法: build.bat release
+REM ============================================
+:release_only
+echo.
+echo ============================================
+echo  发布 Release - %date% %time%
+echo ============================================
+
+set "NEW_VER="
+if not exist "pubspec.yaml" (
+    echo [错误] 未找到 pubspec.yaml，无法确定版本号
+    set BUILD_FAILED=1
+    goto :end
+)
+for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "NEW_VER=%%v"
+if not defined NEW_VER (
+    echo [错误] 无法从 pubspec.yaml 解析 version 行
+    set BUILD_FAILED=1
+    goto :end
+)
+set "APK_DEST=privi-!NEW_VER!.apk"
+if not exist "!APK_DEST!" (
+    echo [错误] 未找到 !APK_DEST! ^(pubspec 当前版本: !NEW_VER!^)
+    echo        先构建一次再补发: build.bat 或 build.bat fast
+    echo        根目录现有 APK:
+    dir /b "privi-*.apk" 2>nul
+    set BUILD_FAILED=1
+    goto :end
+)
+call :publish_release
+goto :end
+
+REM ============================================
+REM  发布 GitHub Release（gh CLI）
+REM  APK 已在项目根目录时调用。缺少 gh / 未登录 / 显式跳过时只打印原因并返回，
+REM  不改变 BUILD_FAILED——发布失败不该把「已经编好的 APK」变成构建失败。
+REM ============================================
+:publish_release
+echo.
+echo ============================================
+echo  发布 GitHub Release
+echo ============================================
+set "STEP_NAME=发布 GitHub Release"
+
+if "!SKIP_RELEASE!"=="1" (
+    echo       [跳过] 已通过 norelease 或 SKIP_RELEASE=1 关闭自动发布
+    goto :eof
+)
+if not exist "!APK_DEST!" (
+    echo       [跳过] 未找到待发布文件: !APK_DEST!
+    goto :eof
+)
+
+call :resolve_gh
+if not defined GH_EXE (
+    echo       [跳过] 未找到 gh CLI，无法自动发布。安装方式:
+    echo              winget install --id GitHub.cli
+    echo        装好后执行 build.bat release 即可补发，无需重新编译。
+    goto :eof
+)
+echo       gh: !GH_EXE!
+
+call "%GH_EXE%" auth status >nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo       [跳过] gh 未登录，无法自动发布。先登录一次:
+    echo              gh auth login
+    goto :eof
+)
+
+call :resolve_repo_slug
+call :resolve_git_sha
+set "RELEASE_TAG=v!NEW_VER!"
+set "RELEASE_TITLE=密册 v!NEW_VER!"
+
+REM ---- SHA-256 校验和资产（与上游 Release 的 privi-<版本>.apk.sha256 同名）----
+REM 哈希逻辑放在 build_hash.ps1 里用 -File 调用，原因见该脚本头注释。
+set "APK_SHA="
+for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
+if not defined APK_SHA (
+    echo       [跳过] 计算 SHA-256 失败；为保证产物可校验，本次不发布
+    goto :eof
+)
+> "!APK_DEST!.sha256" echo !APK_SHA!
+echo       校验和: !APK_SHA!
+
+REM ---- Release 说明：可选的项目根 release_notes.md + 自动追加的元信息 ----
+set "NOTES_FILE=build\release_notes_!NEW_VER!.md"
+if exist "%~dp0release_notes.md" (
+    copy /y "%~dp0release_notes.md" "!NOTES_FILE!" >nul 2>&1
+    echo       说明文件: release_notes.md + 自动元信息
+) else (
+    > "!NOTES_FILE!" echo # 密册 v!NEW_VER!
+)
+
+REM 提交标题里的 < > & | 在 bat 的 echo 块里是特殊字符，先替换掉（完整提交信息在 GitHub 上可查）
+set "GIT_DESC=!GIT_DESC:<=!"
+set "GIT_DESC=!GIT_DESC:>=!"
+set "GIT_DESC=!GIT_DESC:&=!"
+set "GIT_DESC=!GIT_DESC:|=!"
+
+set "SIGN_NOTE=release 密钥"
+if not exist "android\key.properties" set "SIGN_NOTE=debug 密钥——本机没有 android/key.properties，与官方 Release 签名不同，覆盖安装会报签名冲突"
+for %%f in ("!APK_DEST!") do set "APK_SIZE=%%~zf"
+(
+    echo.
+    echo ---
+    echo.
+    echo - 版本: !NEW_VER!
+    echo - 构建时间: %DATE% %TIME%
+    echo - 提交: !GIT_DESC!
+    echo - 分支: !GIT_BRANCH!
+    echo - 产物: !APK_DEST! ^(!APK_SIZE! 字节^)
+    echo - SHA-256: !APK_SHA!
+    echo - 签名: !SIGN_NOTE!
+    echo.
+    echo 安装: 下载 !APK_DEST! 侧载安装，系统要求 Android 8.0+。
+    echo 校验: 同一 Release 里的 !APK_DEST!.sha256 给出该 APK 的 SHA-256。
+    echo 校验命令 ^(PowerShell^): Get-FileHash -Algorithm SHA256 .\!APK_DEST!
+) >> "!NOTES_FILE!"
+
+REM ---- 同版本已发过则更新资产与说明，否则新建 Release ----
+set "REL_EXISTS=0"
+call "%GH_EXE%" release view "!RELEASE_TAG!" >nul 2>&1
+if !ERRORLEVEL! equ 0 set "REL_EXISTS=1"
+
+if "!REL_EXISTS!"=="1" (
+    echo       已存在 !RELEASE_TAG!，更新 APK 与说明...
+    call "%GH_EXE%" release upload "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --clobber
+    set "REL_EXIT=!ERRORLEVEL!"
+    if "!REL_EXIT!"=="0" call "%GH_EXE%" release edit "!RELEASE_TAG!" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest
+) else (
+    echo       创建 Release !RELEASE_TAG! ^(tag 指向 !GIT_SHA_SHORT!^)...
+    call "%GH_EXE%" release create "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest --target !GIT_SHA!
+    set "REL_EXIT=!ERRORLEVEL!"
+)
+
+if "!REL_EXIT!"=="0" (
+    echo.
+    echo ============================================
+    echo  Release 已发布: !RELEASE_TAG!
+    if defined RELEASE_SLUG echo        页面: https://github.com/!RELEASE_SLUG!/releases/tag/!RELEASE_TAG!
+    if defined RELEASE_SLUG echo        最新: https://github.com/!RELEASE_SLUG!/releases/latest
+    echo ============================================
+) else (
+    echo.
+    echo [警告] Release 发布失败 ^(exit=!REL_EXIT!^)，APK 仍在本地: !APK_DEST!
+    echo        - 提交还没 git push 时新建 tag 会失败: 先 git push，再 build.bat release
+    echo        - 权限不足时确认 gh auth status 的 token 有 repo scope
+    echo        - 同版本重发走 upload --clobber，不会因 tag 已存在而失败
+)
+goto :eof
+
+REM ============================================
 REM  快速构建（跳过代码生成）
 REM ============================================
 :fast
@@ -555,8 +775,8 @@ echo  Privi 构建 - %date% %time%
 echo ============================================
 
 if !RESUME_STEP! leq 0 (
-    echo [1/6] 代码生成...
-    set "STEP_NAME=[1/6] 代码生成"
+    echo [1/7] 代码生成...
+    set "STEP_NAME=[1/7] 代码生成"
     call :codegen
     if "%BUILD_FAILED%"=="1" (
         echo [警告] 代码生成阶段出现问题，但尝试继续后续步骤...
@@ -578,8 +798,8 @@ REM 可用内存快照（崩溃后可以和 hs_err_pid*.log 对照排查）
 call :reclaim_memory
 
 REM 步骤2: 递增版本号（每次构建都需要）
-echo [2/6] 递增版本号...
-set "STEP_NAME=[2/6] 递增版本号"
+echo [2/7] 递增版本号...
+set "STEP_NAME=[2/7] 递增版本号"
 call :increment_version
 if "!BUMP_FAILED!"=="1" (
     set "BUILD_FAILED=1"
@@ -590,8 +810,8 @@ if "%BUILD_FAILED%"=="0" call :save_state 2
 REM 步骤3: flutter clean
 if !RESUME_STEP! lss 3 (
     echo.
-    echo [3/6] flutter clean...
-    set "STEP_NAME=[3/6] flutter clean"
+    echo [3/7] flutter clean...
+    set "STEP_NAME=[3/7] flutter clean"
     call flutter clean 2>nul
     if %ERRORLEVEL% neq 0 (
         echo [警告] flutter clean 未完全成功，继续...
@@ -608,11 +828,11 @@ if not exist "build" mkdir "build" 2>nul
 REM 步骤4: flutter pub get
 if !RESUME_STEP! lss 4 (
     echo.
-    echo [4/6] flutter pub get ^(verbose^)...
+    echo [4/7] flutter pub get ^(verbose^)...
     echo       日志输出到: build\pub_get_build.log
     echo       [提示] 如果 codegen 阶段已成功，这步会很快...
     echo.
-    set "STEP_NAME=[4/6] flutter pub get"
+    set "STEP_NAME=[4/7] flutter pub get"
     call flutter pub get --verbose > build\pub_get_build.log 2>&1
     set PUB_EXIT=%ERRORLEVEL%
     if !PUB_EXIT! neq 0 (
@@ -631,8 +851,8 @@ if !RESUME_STEP! lss 4 (
 REM 步骤5: flutter build apk
 if !RESUME_STEP! lss 5 (
     echo.
-    echo [5/6] 编译 Release APK（请耐心等待，首次约 5-10 分钟）...
-    set "STEP_NAME=[5/6] flutter build apk"
+    echo [5/7] 编译 Release APK（请耐心等待，首次约 5-10 分钟）...
+    set "STEP_NAME=[5/7] flutter build apk"
 
     call :ensure_sdk
     call :config_gradle_proxy
@@ -665,9 +885,10 @@ echo ============================================
 echo  构建成功！
 echo ============================================
 
-echo [6/6] 复制 APK 到项目根目录...
-set "STEP_NAME=[6/6] 复制 APK"
+echo [6/7] 复制 APK 到项目根目录...
+set "STEP_NAME=[6/7] 复制 APK"
 if exist "privi-*.apk" del /q "privi-*.apk" 2>nul
+if exist "privi-*.apk.sha256" del /q "privi-*.apk.sha256" 2>nul
 set "APK_DEST=privi-%NEW_VER%.apk"
 copy /y "!APK_SOURCE!" "!APK_DEST!" > nul 2>&1
 for %%f in ("!APK_DEST!") do echo  APK: %%~nxf  (%%~zf bytes)
@@ -675,6 +896,13 @@ for %%f in ("!APK_DEST!") do echo  APK: %%~nxf  (%%~zf bytes)
 echo.
 echo  APK 已复制到项目根目录。
 call :save_state 6
+
+REM 步骤7: 发布 GitHub Release（gh CLI）
+REM 缺少 gh / gh 未登录 / 指定 norelease 时，:publish_release 内部只打印原因并跳过，
+REM 不会把已经编好的 APK 判成构建失败。
+echo.
+echo [7/7] 发布 GitHub Release...
+call :publish_release
 goto :end
 
 REM ============================================

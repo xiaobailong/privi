@@ -11,7 +11,7 @@
 密册不上架 Google Play。从 GitHub Release 下载 APK 侧载安装：
 
 1. 打开最新的 **[Release](https://github.com/kcng0/privi/releases/latest)**。
-2. 下载 `密册-<version>.apk`。
+2. 下载 `privi-<version>.apk`。
 3. 如有提示，在手机上允许浏览器或文件管理器安装未知来源应用。
 4. 打开 APK 完成安装。
 
@@ -206,7 +206,7 @@ flutter build apk --release
 
 ### 一键构建（build.bat）
 
-项目根目录提供了 `build.bat` 一键构建脚本，自动完成版本递增、代码生成、依赖安装和 APK 编译：
+项目根目录提供了 `build.bat` 一键构建脚本，自动完成版本递增、代码生成、依赖安装、APK 编译和 Release 发布：
 
 ```bash
 # 完整构建（递增版本号 → 代码生成 → 编译 → 输出带版本名的 APK）
@@ -221,6 +221,12 @@ build.bat gradle
 # 仅运行代码生成（l10n + Drift）
 build.bat codegen
 
+# 发布 Release（不重新构建，把根目录已有 APK 推到 GitHub Release）
+build.bat release
+
+# 构建但不发布 Release（也可写成 build.bat fast norelease）
+build.bat norelease
+
 # 清理所有构建产物
 build.bat clean
 ```
@@ -230,7 +236,7 @@ build.bat clean
 每次执行 `build.bat` 或 `build.bat fast` 都会**自动递增 `pubspec.yaml` 中的 build number**：
 
 ```
-version: 1.0.29+43   →   version: 1.0.29+44
+version: 1.0.29+44   →   version: 1.0.29+45
              ↑                              ↑
         build name                    build code 自动 +1
 ```
@@ -238,7 +244,7 @@ version: 1.0.29+43   →   version: 1.0.29+44
 构建成功后输出的 APK 文件名包含完整版本号：
 
 ```
-privi-1.0.29+44.apk
+privi-1.0.29+45.apk
 ```
 
 #### 首次配置
@@ -274,8 +280,71 @@ privi-1.0.29+44.apk
 | 4 | 安装依赖：`flutter pub get` |
 | 5 | 编译：`flutter build apk --release`（R8 全模式压缩前再回收一次内存） |
 | 6 | 将 APK 复制到项目根目录 |
+| 7 | 发布 GitHub Release：用 `gh` 推送 APK 与 `.sha256` 校验和（未安装 / 未登录 `gh` 时自动跳过，见下） |
 
-构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-<版本号>.apk`（如 `privi-1.0.29+44.apk`）。
+构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-<版本号>.apk`（如 `privi-1.0.29+45.apk`）；日志里每一步都带 `[N/7]` 前缀，最后一步会直接把 Release 链接打出来。
+
+> 根目录的 `privi-*.apk` 与 `privi-*.apk.sha256` 是**本地构建产物，已在 `.gitignore` 里忽略**——APK 只通过 Release 分发，不提交进仓库。
+
+#### 发布 Release（构建成功后自动，gh CLI）
+
+完整构建（`build.bat` / `build.bat fast`）的最后一步就是**自动发布 GitHub Release**，不需要再手动上网页传包。改了说明文字想重发时，用下面这条（不重新编译）：
+
+```bash
+build.bat release          # 把根目录已有的 privi-<版本号>.apk 直接推到 Release
+```
+
+> **先 push 再发布**：新建 tag 用的是当前 `HEAD` 提交，`git push` 之前发布，tag 会指向远端还不存在的提交而失败。正常顺序是「改代码 → `git push` → `build.bat release`」。
+
+| 项目 | 取值 |
+|------|------|
+| 目标仓库 | `origin` 远程（当前是公开 fork `xiaobailong/privi`） |
+| tag | `v<完整版本号>`，如 `v1.0.29+45`——**带 build number**，所以每次构建都是一个独立 Release，不会互相覆盖 |
+| 标题 | `密册 v<完整版本号>` |
+| 资产 | `privi-<完整版本号>.apk`、`privi-<完整版本号>.apk.sha256`（一行 64 位小写十六进制 SHA-256，格式与上游 Release 一致） |
+| 说明 | 项目根可选的 `release_notes.md`（有就用它当正文）＋ 自动追加的元信息：版本 / 构建时间 / 提交 / 分支 / 字节数 / SHA-256 / 本次签名方式 |
+| 标记 | `--latest`，所以 `/releases/latest` 永远指向最新一次构建 |
+
+首次准备（每台机器只需一次）：
+
+```bash
+gh auth login          # 浏览器授权；gh 自带的 token 已含 repo scope
+gh auth status         # 确认已登录
+```
+
+若机器上没装 `gh`：`winget install --id GitHub.cli`。`build.bat` 会依次从 `PATH`、`%ProgramFiles%\GitHub CLI`、`%LOCALAPPDATA%\Programs\GitHub CLI`、`%USERPROFILE%\scoop\shims` 里找 `gh.exe`；也可以用环境变量 `GH_EXE` 直接指定。
+
+若 `gh` 报网络错误（例如 `github.com` 直连超时、只有代理能通），先设好代理环境变量再跑：
+
+```bash
+set HTTPS_PROXY=http://127.0.0.1:7890
+set HTTP_PROXY=http://127.0.0.1:7890
+```
+
+`gh` 走的是 `api.github.com`（上传资产走 `uploads.github.com`），与浏览器/系统代理是两套设置，登录能通不代表 `gh` 就能通。
+
+**这些情况会自动跳过发布并打印原因**——发布失败不会把「已经编好的 APK」判成构建失败：
+
+| 情况 | 脚本行为 |
+|------|---------|
+| 没装 `gh` | 提示 `winget install --id GitHub.cli`，跳过 |
+| `gh` 未登录 | 提示 `gh auth login`，跳过 |
+| `build.bat norelease`，或先 `set SKIP_RELEASE=1` | 直接跳过 |
+| 计算 SHA-256 失败 | 跳过（产物必须可校验，宁可不发） |
+| 提交还没 `git push` | 新建 tag 会失败并提示「先 git push，再 build.bat release」 |
+| 同一版本发第二次 | 走 `gh release upload --clobber` + `gh release edit`，替换资产与说明，不报 tag 冲突 |
+
+发布结果可以直接核对：
+
+```bash
+gh release list                                # 本仓库所有 Release
+gh release view v1.0.29+45                     # 某个 Release 的资产与说明
+gh release download v1.0.29+45 -p "*.sha256"   # 只下校验和
+```
+
+> **签名提醒**：本机没有 `android/key.properties` 时，Release APK 用 **debug 密钥**签名（`android/app/build.gradle.kts` 在缺少 `key.properties` 时回落到 `signingConfigs.debug`）。这种 APK **不能覆盖安装**官方 Release 版本（签名不同），需要先卸载；对外分发前应当在 `android/key.properties` 配好正式签名密钥，届时自动生成的说明里「签名」一行会改成 `release 密钥`。
+
+> **与上游的关系**：官方 Release 在上游作者仓库 [`kcng0/privi`](https://github.com/kcng0/privi/releases)（永久签名密钥，各版本签名一致）。本仓库是 fork，自动发布只用于自测与内部分发，`gh` 只会往 `origin` 推，不会也不能往上游推。
 
 #### 内存配置与 R8（不要把这些堆大小调回去）
 
