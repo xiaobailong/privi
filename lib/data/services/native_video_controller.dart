@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
 
 // `Uint8List`（下面文件事实探针里用到）由这一行提供：flutter/foundation.dart
 // 已经 re-export 了 dart:typed_data，所以**不需要**再 import 'dart:typed_data'。
@@ -170,6 +169,36 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   int _height = 0;
   bool _nativePlaying = false;
   bool _positionPollLogged = false;
+
+  /// Leading gap between the native media timeline and the clip's content.
+  ///
+  /// Media3 reports `currentPosition` on the *media timeline* while `duration`
+  /// is the length of the *content*, so a clip whose first sample carries a
+  /// large timestamp starts playback at a position far beyond its duration.
+  /// A 32-bit 90 kHz PTS wrap is 47,721,859 ms (see
+  /// docs/HANDOFF-视频播放诊断日志.md), which is what `202392473501.mp4` does.
+  ///
+  /// Reported as-is, such a clip looks like it finished instantly: the progress
+  /// bar sits at the far right, resuming after a pause jumps back to 0, and the
+  /// playlist treats it as completed and skips on. The offset is therefore
+  /// measured once - from the first position that lands past the duration - and
+  /// subtracted from every position this controller reports.
+  int _timelineOffsetMs = 0;
+
+  /// Whether `seekTo` takes media-timeline coordinates (offset included) or
+  /// content coordinates. Both are documented as "milliseconds in the current
+  /// media item", so the axis is probed once for clips with an offset; see
+  /// [_probeSeekAxis]. Clips without an offset are unaffected either way.
+  bool _seekNeedsTimelineOffset = true;
+  bool _seekAxisProbed = false;
+
+  /// Forward nudge used by [_probeSeekAxis]; small enough to be invisible
+  /// during playback.
+  static const int _kSeekAxisProbeNudgeMs = 300;
+
+  /// Media-timeline position that maps onto content position 0, or 0 when the
+  /// clip has no leading offset.
+  int get timelineOffsetMs => _timelineOffsetMs;
 
   /// Position-stall detection: `isPlaying` can be true while nothing decodes.
   int _lastPolledPositionMs = -1;
@@ -378,16 +407,22 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   }
 
   Future<void> _pollPosition() async {
+    final posMs = await _rawPositionMs();
+    if (!_disposed && posMs != null) {
+      final contentMs = _contentPositionMs(posMs);
+      value = value.copyWith(
+        position: Duration(milliseconds: contentMs),
+      );
+      _trackPositionProgress(contentMs);
+    }
+  }
+
+  /// Raw media-timeline position, or null when the bridge is unavailable.
+  Future<int?> _rawPositionMs() async {
     try {
-      final posMs = await _channel.invokeMethod<int>('getPosition', {
+      return await _channel.invokeMethod<int>('getPosition', {
         'textureId': textureId,
       });
-      if (!_disposed && posMs != null) {
-        value = value.copyWith(
-          position: Duration(milliseconds: posMs),
-        );
-        _trackPositionProgress(posMs);
-      }
     } catch (error) {
       // Logged once: this runs 4 times per second.
       if (!_positionPollLogged) {
@@ -395,7 +430,77 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         AppLogger.w('VideoPlayer',
             'getPosition failed, textureId=$textureId: $error');
       }
+      return null;
     }
+  }
+
+  /// Content-relative equivalent of the raw media-timeline [rawMs].
+  ///
+  /// Latches [_timelineOffsetMs] the first time a raw position shows up past
+  /// the duration. Until that happens the value passes through unchanged, so a
+  /// normal clip is never adjusted and the mapping stays a no-op.
+  int _contentPositionMs(int rawMs, {int? durationMs}) {
+    if (rawMs <= 0) return 0;
+    final duration = durationMs ?? _durationMs;
+    if (duration <= 0) return rawMs;
+    if (_timelineOffsetMs == 0 && rawMs > duration) {
+      _timelineOffsetMs = rawMs;
+      AppLogger.w(
+        'VideoPlayer.diag',
+        'VDIAG[timeline-offset] native position ${rawMs}ms is past duration '
+        '${duration}ms: treating ${rawMs}ms as the clip start '
+        '(leading edit / 32-bit PTS wrap), textureId=$textureId',
+      );
+      unawaited(_probeSeekAxis());
+    }
+    final adjusted = _timelineOffsetMs > 0 ? rawMs - _timelineOffsetMs : rawMs;
+    if (adjusted <= 0) return 0;
+    return adjusted > duration ? duration : adjusted;
+  }
+
+  /// Measures once whether `seekTo` is interpreted on the media timeline (offset
+  /// included) or on the content timeline.
+  ///
+  /// Media3 documents the argument only as milliseconds, and for a clip with a
+  /// leading offset the two readings differ by ~13 hours, so getting it wrong
+  /// makes every seek jump to the end of the clip. The probe nudges playback
+  /// 0.3s forward *on the content axis* - a position the player is already at
+  /// under either reading, so the probe is invisible - then reads back which
+  /// axis the player actually moved on.
+  Future<void> _probeSeekAxis() async {
+    if (_seekAxisProbed || _disposed || _timelineOffsetMs <= 0) return;
+    _seekAxisProbed = true;
+    final offset = _timelineOffsetMs;
+    final raw = await _rawPositionMs();
+    if (raw == null || _disposed) return;
+    final contentNow = raw - offset <= 0 ? 0 : raw - offset;
+    final target = contentNow + _kSeekAxisProbeNudgeMs;
+    try {
+      await _channel.invokeMethod('seekTo', {
+        'textureId': textureId,
+        'positionMs': target,
+      });
+    } catch (error) {
+      AppLogger.w('VideoPlayer',
+          'seek-axis probe seek failed, textureId=$textureId: $error');
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (_disposed) return;
+    final back = await _rawPositionMs();
+    if (back == null) return;
+    final matchesTimeline = (back - offset - target).abs() <= 1000;
+    final matchesContent = (back - target).abs() <= 1000;
+    if (matchesContent && !matchesTimeline) {
+      _seekNeedsTimelineOffset = false;
+    }
+    AppLogger.i(
+      'VideoPlayer.diag',
+      'VDIAG[seek-axis] content=${target}ms offset=${offset}ms '
+      'readback=${back}ms -> seekTo takes '
+      '${_seekNeedsTimelineOffset ? 'timeline' : 'content'} coordinates, '
+      'textureId=$textureId',
+    );
   }
 
   /// Flags "isPlaying is true, but the position no longer moves".
@@ -453,6 +558,8 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
       'playing=${value.isPlaying} completed=${value.isCompleted} '
       'hasError=${value.hasError} duration=${_durationMs}ms '
       'position=${value.position.inMilliseconds}ms size=${_width}x$_height '
+      'timelineOffset=$_timelineOffsetMs ms seekNeedsTimelineOffset='
+      '$_seekNeedsTimelineOffset '
       '(${value.errorDescription ?? 'no error text'}) | $native',
     );
   }
@@ -507,11 +614,15 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         source: 'status-fallback',
       );
     }
+    final contentMs = _contentPositionMs(
+      status.position.inMilliseconds,
+      durationMs: status.duration.inMilliseconds,
+    );
     value = value.copyWith(
-      position: status.position,
+      position: Duration(milliseconds: contentMs),
       isPlaying: status.isPlaying,
       isCompleted: status.duration > Duration.zero &&
-          status.position >= status.duration,
+          contentMs >= status.duration.inMilliseconds,
     );
     return true;
   }
@@ -533,13 +644,23 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   }
 
   Future<void> seekTo(Duration position) async {
-    AppLogger.d('VideoPlayer',
-        'seekTo(${position.inMilliseconds}ms) -> textureId=$textureId');
+    var contentMs = position.inMilliseconds;
+    if (contentMs < 0) contentMs = 0;
+    final durationMs = _durationMs;
+    if (durationMs > 0 && contentMs > durationMs) contentMs = durationMs;
+    // Clips with a leading timeline offset may need the offset added back;
+    // _probeSeekAxis() decides which axis the native side uses.
+    final timelineMs =
+        contentMs + (_seekNeedsTimelineOffset ? _timelineOffsetMs : 0);
+    AppLogger.d(
+        'VideoPlayer',
+        'seekTo(content=${contentMs}ms, native=${timelineMs}ms, '
+        'timelineOffset=$_timelineOffsetMs ms) -> textureId=$textureId');
     await _channel.invokeMethod('seekTo', {
       'textureId': textureId,
-      'positionMs': position.inMilliseconds,
+      'positionMs': timelineMs,
     });
-    value = value.copyWith(position: position);
+    value = value.copyWith(position: Duration(milliseconds: contentMs));
   }
 
   Future<void> setVolume(double volume) async {

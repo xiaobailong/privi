@@ -26,6 +26,7 @@ import '../common/grid_app_menu.dart';
 import '../common/media_grid_scaffold.dart';
 import '../common/vault_sheet.dart';
 import '../common/video_duration_badge.dart';
+import '../common/video_open_target_sheet.dart';
 import '../import/import_progress_sheet.dart';
 import '../import/import_result_message.dart';
 import 'folder_cover_cache.dart';
@@ -179,28 +180,68 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     }
   }
 
-  Future<void> _openPreview(GalleryAsset a) async {
-    final preferExternal = ref.read(settingsControllerProvider).playerExternal;
-
+  /// Long-press on a video: pick external playback, in-app playback, or
+  /// selection. Non-video items keep the plain selection behaviour.
+  Future<void> _chooseVideoTarget(GalleryAsset asset) async {
     final external = ref.read(externalPlayerCoordinatorProvider);
-    if (a.isVideo && preferExternal && external.supported) {
-      final couldNotOpen = context.l10n.couldNotOpenExternally;
-      // Resolve a real path for external players / chooser.
-      final sources = await ref
-          .read(galleryServiceProvider)
-          .resolveForHide([a.id], sourceFolderName: widget.title);
-      if (sources.isNotEmpty) {
-        final ok = await external.open(
-          filePath: sources.first.path,
-          mimeType:
-              sources.first.mimeType ?? (a.isVideo ? 'video/*' : 'image/*'),
-        );
-        if (ok) return;
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(couldNotOpen)),
-        );
+    final target = await showVideoOpenTargetSheet(
+      context,
+      externalSupported: external.supported,
+    );
+    if (!mounted || target == null) return;
+    if (target == VideoOpenTarget.external) {
+      await _openExternalPreview(asset);
+      return;
+    }
+    if (target == VideoOpenTarget.internal) {
+      await _openPreview(asset, forceInternal: true);
+      return;
+    }
+    _enterSelect(asset.id);
+  }
+
+  /// Hands [a] over to the system chooser / external player app.
+  ///
+  /// Returns whether an external app took it over. Reports the failure with a
+  /// snack bar otherwise, so the caller can fall back to in-app playback.
+  Future<bool> _openExternalPreview(GalleryAsset a) async {
+    final external = ref.read(externalPlayerCoordinatorProvider);
+    if (!external.supported) return false;
+    final couldNotOpen = context.l10n.couldNotOpenExternally;
+    // Resolve a real path for external players / chooser.
+    final sources = await ref
+        .read(galleryServiceProvider)
+        .resolveForHide([a.id], sourceFolderName: widget.title);
+    if (sources.isNotEmpty) {
+      final ok = await external.open(
+        filePath: sources.first.path,
+        mimeType:
+            sources.first.mimeType ?? (a.isVideo ? 'video/*' : 'image/*'),
+      );
+      if (ok) return true;
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(couldNotOpen)),
+      );
+    }
+    return false;
+  }
+
+  Future<void> _openPreview(
+    GalleryAsset a, {
+    bool forceInternal = false,
+  }) async {
+    // The long-press chooser passes forceInternal to bypass the setting.
+    if (!forceInternal) {
+      final preferExternal =
+          ref.read(settingsControllerProvider).playerExternal;
+
+      final external = ref.read(externalPlayerCoordinatorProvider);
+      if (a.isVideo && preferExternal && external.supported) {
+        final opened = await _openExternalPreview(a);
+        if (opened) return;
+        if (!mounted) return;
       }
     }
 
@@ -680,6 +721,8 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
         onLongPress: () {
           if (_selecting) {
             _toggle(asset.id);
+          } else if (asset.isVideo) {
+            unawaited(_chooseVideoTarget(asset));
           } else {
             _enterSelect(asset.id);
           }

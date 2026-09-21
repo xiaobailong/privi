@@ -29,6 +29,7 @@ import '../common/media_grid_scaffold.dart';
 import '../common/quick_rating_sheet.dart';
 import '../common/rating_filter_bar.dart';
 import '../common/vault_sheet.dart';
+import '../common/video_open_target_sheet.dart';
 import '../import/import_progress_sheet.dart';
 import '../player/player_screen.dart';
 import '../viewer/viewer_screen.dart';
@@ -122,24 +123,24 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     );
   }
 
-  Future<void> _openViewer(List<MediaItem> items, int index) async {
+  Future<void> _openViewer(
+    List<MediaItem> items,
+    int index, {
+    bool forceInternal = false,
+  }) async {
     if (items.isEmpty) return;
     final item = items[index];
     final preferExternal = ref.read(settingsControllerProvider).playerExternal;
 
     // Videos: prefer system app chooser when setting is on (default true).
+    // The long-press chooser passes forceInternal to bypass the setting.
     final external = ref.read(externalPlayerCoordinatorProvider);
-    if (item.isVideo && preferExternal && external.supported) {
-      final ok = await external.open(
-        filePath: item.privatePath,
-        mimeType: item.mimeType,
-      );
+    if (!forceInternal &&
+        item.isVideo &&
+        preferExternal &&
+        external.supported) {
+      final ok = await _openExternally(item);
       if (ok) return;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.noExternalPlayer)),
-        );
-      }
     }
 
     if (!mounted) return;
@@ -149,6 +150,50 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
             ViewerScreen(items: List.of(items), initialIndex: index),
       ),
     );
+  }
+
+  /// Hands [item] over to the system chooser / external player app.
+  ///
+  /// Returns whether an external app took it over. Reports the failure with a
+  /// snack bar otherwise, so the caller can fall back to in-app playback.
+  Future<bool> _openExternally(MediaItem item) async {
+    final external = ref.read(externalPlayerCoordinatorProvider);
+    if (!external.supported) return false;
+    final ok = await external.open(
+      filePath: item.privatePath,
+      mimeType: item.mimeType,
+    );
+    if (ok) return true;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.noExternalPlayer)),
+      );
+    }
+    return false;
+  }
+
+  /// Long-press on a video: pick external playback, in-app playback, or
+  /// selection. Non-video items keep the plain selection behaviour.
+  Future<void> _chooseVideoTarget(
+    MediaItem item,
+    List<MediaItem> items,
+    int index,
+  ) async {
+    final external = ref.read(externalPlayerCoordinatorProvider);
+    final target = await showVideoOpenTargetSheet(
+      context,
+      externalSupported: external.supported,
+    );
+    if (!mounted || target == null) return;
+    if (target == VideoOpenTarget.external) {
+      await _openExternally(item);
+      return;
+    }
+    if (target == VideoOpenTarget.internal) {
+      await _openViewer(items, index, forceInternal: true);
+      return;
+    }
+    ref.read(selectionControllerProvider.notifier).enter(item.id);
   }
 
   Future<void> _playAlbum(List<MediaItem> items) async {
@@ -725,6 +770,8 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
           final selection = ref.read(selectionControllerProvider.notifier);
           if (selecting) {
             selection.toggle(item.id);
+          } else if (item.isVideo) {
+            unawaited(_chooseVideoTarget(item, items, index));
           } else {
             selection.enter(item.id);
           }
