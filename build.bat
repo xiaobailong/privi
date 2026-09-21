@@ -637,6 +637,10 @@ call :resolve_repo_slug
 call :resolve_git_sha
 set "RELEASE_TAG=v!NEW_VER!"
 set "RELEASE_TITLE=密册 v!NEW_VER!"
+REM 显式指定仓库：gh 默认靠本地 git 远端自动识别，实测偶发「No default remote repository」
+REM 解析不出 slug 时留空，退回 gh 自动识别，行为与之前一致
+set "REL_REPO_ARG="
+if defined RELEASE_SLUG set "REL_REPO_ARG=--repo !RELEASE_SLUG!"
 
 REM ---- SHA-256 校验和资产（与上游 Release 的 privi-<版本>.apk.sha256 同名）----
 REM 哈希逻辑放在 build_hash.ps1 里用 -File 调用，原因见该脚本头注释。
@@ -686,17 +690,17 @@ for %%f in ("!APK_DEST!") do set "APK_SIZE=%%~zf"
 
 REM ---- 同版本已发过则更新资产与说明，否则新建 Release ----
 set "REL_EXISTS=0"
-call "%GH_EXE%" release view "!RELEASE_TAG!" >nul 2>&1
+call "%GH_EXE%" release view "!RELEASE_TAG!" !REL_REPO_ARG! >nul 2>&1
 if !ERRORLEVEL! equ 0 set "REL_EXISTS=1"
 
 if "!REL_EXISTS!"=="1" (
     echo       已存在 !RELEASE_TAG!，更新 APK 与说明...
-    call "%GH_EXE%" release upload "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --clobber
+    call "%GH_EXE%" release upload "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --clobber !REL_REPO_ARG!
     set "REL_EXIT=!ERRORLEVEL!"
-    if "!REL_EXIT!"=="0" call "%GH_EXE%" release edit "!RELEASE_TAG!" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest
+    if "!REL_EXIT!"=="0" call "%GH_EXE%" release edit "!RELEASE_TAG!" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest !REL_REPO_ARG!
 ) else (
     echo       创建 Release !RELEASE_TAG! ^(tag 指向 !GIT_SHA_SHORT!^)...
-    call "%GH_EXE%" release create "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest --target !GIT_SHA!
+    call "%GH_EXE%" release create "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest --target !GIT_SHA! !REL_REPO_ARG!
     set "REL_EXIT=!ERRORLEVEL!"
 )
 
