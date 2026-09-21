@@ -20,6 +20,8 @@ class MediaItem {
     this.sourcePlatformId,
     this.sourceRemovalPending = false,
     this.contentDigest,
+    this.playCount = 0,
+    this.lastPlayedAt,
   });
 
   final String id;
@@ -50,6 +52,12 @@ class MediaItem {
 
   /// SHA-256 digest of the verified vault bytes, when available.
   final String? contentDigest;
+
+  /// Playback history: how often the item was played, and when it last was.
+  /// Random playback weights its order by it, so heavily played items show up
+  /// less often (and, in `ShufflePlayCountMode.skip`, not at all).
+  final int playCount;
+  final DateTime? lastPlayedAt;
 
   bool get isDeleted => deletedAt != null;
   bool get isFavorite => rating >= 1;
@@ -83,6 +91,8 @@ class MediaItem {
     String? sourcePlatformId,
     bool? sourceRemovalPending,
     String? contentDigest,
+    int? playCount,
+    DateTime? lastPlayedAt,
     bool clearDeletedAt = false,
   }) {
     return MediaItem(
@@ -104,6 +114,8 @@ class MediaItem {
       sourcePlatformId: sourcePlatformId ?? this.sourcePlatformId,
       sourceRemovalPending: sourceRemovalPending ?? this.sourceRemovalPending,
       contentDigest: contentDigest ?? this.contentDigest,
+      playCount: playCount ?? this.playCount,
+      lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
     );
   }
 }

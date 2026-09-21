@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.memory() : super(NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -48,6 +48,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 7) {
             await _ensureSourceMetadataSchema();
           }
+          if (from < 8) {
+            await _ensurePlayCountSchema();
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -58,6 +61,7 @@ class AppDatabase extends _$AppDatabase {
           final repairedPinnedAt = await _ensureAlbumPinnedAtColumn();
           final repairedOrganizer = await _ensureAlbumOrganizerSchema();
           final repairedSourceMetadata = await _ensureSourceMetadataSchema();
+          final repairedPlayCount = await _ensurePlayCountSchema();
           // System albums were seeded with mangled placeholder names; repair
           // them on every open (no schema bump required).
           final repairedSystemNames = await _ensureSystemAlbumNames();
@@ -65,12 +69,14 @@ class AppDatabase extends _$AppDatabase {
               repairedPinnedAt ||
               repairedOrganizer ||
               repairedSourceMetadata ||
+              repairedPlayCount ||
               repairedSystemNames) {
             AppLogger.d(
               'Database',
-              'Database v7 safety repair applied: '
+              'Database v8 safety repair applied: '
                   'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
                   'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
+                  'play_count=$repairedPlayCount, '
                   'system_album_names=$repairedSystemNames',
             );
           }
@@ -148,6 +154,27 @@ class AppDatabase extends _$AppDatabase {
     if (!names.contains('content_digest')) {
       await customStatement(
         'ALTER TABLE media_items ADD COLUMN content_digest TEXT NULL',
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// v8: playback history (`play_count` / `last_played_at`) that random
+  /// playback weights its order by.
+  Future<bool> _ensurePlayCountSchema() async {
+    var changed = false;
+    final names = await _columnNames('media_items');
+    if (!names.contains('play_count')) {
+      await customStatement(
+        'ALTER TABLE media_items '
+        'ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0',
+      );
+      changed = true;
+    }
+    if (!names.contains('last_played_at')) {
+      await customStatement(
+        'ALTER TABLE media_items ADD COLUMN last_played_at INTEGER NULL',
       );
       changed = true;
     }
@@ -301,6 +328,41 @@ class AppDatabase extends _$AppDatabase {
   Future<void> updateMediaRating(String id, int rating) {
     return (update(mediaItems)..where((t) => t.id.equals(id))).write(
       MediaItemsCompanion(rating: Value(rating.clamp(0, 3))),
+    );
+  }
+
+  /// Playback history: bumps `play_count` by one and stamps `last_played_at`.
+  /// Random playback reads the counter back to weight its order, so heavily
+  /// played items come up less often.
+  Future<void> recordMediaPlay(String id, DateTime playedAt) async {
+    if (id.isEmpty) return;
+    await transaction(() async {
+      final row = await getMediaById(id);
+      if (row == null) return;
+      await (update(mediaItems)..where((t) => t.id.equals(id))).write(
+        MediaItemsCompanion(
+          playCount: Value(row.playCount + 1),
+          lastPlayedAt: Value(playedAt),
+        ),
+      );
+    });
+  }
+
+  /// Clears the playback history for [ids], or for every row when [ids] is
+  /// null. Returns the number of updated rows.
+  Future<int> resetMediaPlayCounts({List<String>? ids}) {
+    if (ids == null) {
+      return customUpdate(
+        'UPDATE media_items SET play_count = 0, last_played_at = NULL',
+        updates: {mediaItems},
+      );
+    }
+    if (ids.isEmpty) return Future<int>.value(0);
+    return (update(mediaItems)..where((t) => t.id.isIn(ids))).write(
+      MediaItemsCompanion(
+        playCount: const Value(0),
+        lastPlayedAt: const Value(null),
+      ),
     );
   }
 

@@ -54,12 +54,19 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   String? _orientationLockedItemId;
   bool _orientationOverridden = false;
 
+  /// Media already written into the playback history by this viewer session;
+  /// swipe back and forth must not inflate a counter.
+  final Set<String> _countedPlayIds = <String>{};
+
   @override
   void initState() {
     super.initState();
     _playbackSpeed = ref.read(settingsControllerProvider).playerPlaybackSpeed;
     _index = widget.initialIndex.clamp(0, widget.items.length - 1);
     _page = PageController(initialPage: _index);
+    // Images count as played as soon as they are on screen; a video bumps its
+    // counter once the native player really started (see [_syncVideoBody]).
+    if (!_current.isVideo) _recordPlay(_current);
     unawaited(VideoSystemUi.apply(false));
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => unawaited(_syncVideo()),
@@ -124,6 +131,13 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     unawaited(VideoSystemUi.unlockOrientations());
   }
 
+  /// Viewer playback history: one bump per item per viewer session. Random
+  /// playback reads it back to avoid replaying the same items.
+  void _recordPlay(MediaItem item) {
+    if (!_countedPlayIds.add(item.id)) return;
+    unawaited(ref.read(mediaRepositoryProvider).recordPlay(item.id));
+  }
+
   Future<void> _syncVideo() {
     final item = _current;
     final request = ++_videoRequest;
@@ -165,6 +179,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       _videoId = item.id;
       _completedForId = null;
     });
+    _recordPlay(item);
   }
 
   void _markUserSeek() {
@@ -238,6 +253,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       _index = index;
       _imageZoomed = false;
     });
+    if (!widget.items[index].isVideo) _recordPlay(widget.items[index]);
     await _syncVideo();
   }
 

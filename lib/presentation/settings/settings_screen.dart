@@ -10,6 +10,7 @@ import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../data/services/maintenance_service.dart';
 import '../../data/services/vault_backup_service.dart';
+import '../../domain/enums.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
 import '../../core/utils/app_logger.dart';
@@ -213,6 +214,56 @@ class SettingsScreen extends ConsumerWidget {
             value: s.shuffleDefault,
             onChanged: notifier.setShuffleDefault,
           ),
+          ListTile(
+            key: const ValueKey('settings-shuffle-play-count'),
+            leading: const Icon(Icons.history_outlined),
+            title: Text(context.l10n.shufflePlayCount),
+            subtitle: Text(
+              _shufflePlayCountLabel(context, s.shufflePlayCountMode),
+            ),
+            onTap: () async {
+              final v = await _pick<ShufflePlayCountMode>(
+                context,
+                title: context.l10n.shufflePlayCount,
+                options: {
+                  context.l10n.shufflePlayCountOff: ShufflePlayCountMode.off,
+                  context.l10n.shufflePlayCountSoften:
+                      ShufflePlayCountMode.soften,
+                  context.l10n.shufflePlayCountSkip: ShufflePlayCountMode.skip,
+                },
+                current: s.shufflePlayCountMode,
+              );
+              if (v != null) await notifier.setShufflePlayCountMode(v);
+            },
+          ),
+          if (s.shufflePlayCountMode == ShufflePlayCountMode.skip)
+            ListTile(
+              key: const ValueKey('settings-shuffle-skip-threshold'),
+              leading: const Icon(Icons.filter_alt_off_outlined),
+              title: Text(context.l10n.shuffleSkipThreshold),
+              subtitle: Text(
+                context.l10n.shuffleSkipAtLeast(s.shuffleSkipThreshold),
+              ),
+              onTap: () async {
+                final v = await _pick<int>(
+                  context,
+                  title: context.l10n.shuffleSkipThreshold,
+                  options: {
+                    for (final plays in shuffleSkipThresholdOptions)
+                      context.l10n.shuffleSkipAtLeast(plays): plays,
+                  },
+                  current: s.shuffleSkipThreshold,
+                );
+                if (v != null) await notifier.setShuffleSkipThreshold(v);
+              },
+            ),
+          ListTile(
+            key: const ValueKey('settings-clear-play-history'),
+            leading: const Icon(Icons.restart_alt),
+            title: Text(context.l10n.clearPlayHistory),
+            subtitle: Text(context.l10n.clearPlayHistorySubtitle),
+            onTap: () => _clearPlayHistory(context, ref),
+          ),
           _SectionHeader(context.l10n.sectionStorage),
           Consumer(
             builder: (context, ref, _) {
@@ -373,6 +424,42 @@ class SettingsScreen extends ConsumerWidget {
           SnackBar(content: Text(context.l10n.couldNotOpenBrowser)),
         );
       }
+    }
+  }
+
+  /// Wipes the per-item play counter that random playback weights its order
+  /// by, so every media item starts from an equal chance again.
+  Future<void> _clearPlayHistory(BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.l10n.clearPlayHistory),
+        content: Text(context.l10n.clearPlayHistorySubtitle),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(context.l10n.clear),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final cleared = await ref.read(mediaRepositoryProvider).resetPlayCounts();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.playHistoryCleared(cleared))),
+      );
+    } catch (e, stackTrace) {
+      AppLogger.e('SettingsScreen', 'clear play history: $e\n$stackTrace');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.errorWithDetails('$e'))),
+      );
     }
   }
 
@@ -946,6 +1033,18 @@ class SettingsScreen extends ConsumerWidget {
       'zh_CN' => l10n.languageZhCn,
       'zh_HK' => l10n.languageZhHk,
       _ => l10n.languageSystem,
+    };
+  }
+
+  String _shufflePlayCountLabel(
+    BuildContext context,
+    ShufflePlayCountMode mode,
+  ) {
+    final l10n = context.l10n;
+    return switch (mode) {
+      ShufflePlayCountMode.off => l10n.shufflePlayCountOff,
+      ShufflePlayCountMode.soften => l10n.shufflePlayCountSoften,
+      ShufflePlayCountMode.skip => l10n.shufflePlayCountSkip,
     };
   }
 

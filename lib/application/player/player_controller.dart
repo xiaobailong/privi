@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/utils/app_logger.dart';
+import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../../domain/models/playlist.dart';
+import '../providers.dart';
 import '../settings/settings_controller.dart';
 import 'external_player_coordinator.dart';
 import 'external_player_gateway.dart';
@@ -38,6 +40,10 @@ class PlayerUiState {
 class PlayerController extends Notifier<PlayerUiState> {
   Timer? _slideTimer;
 
+  /// Last item that was written into the playback history. Resuming a paused
+  /// item must not inflate its own play counter.
+  String? _countedItemId;
+
   @override
   PlayerUiState build() {
     ref.onDispose(() => _slideTimer?.cancel());
@@ -53,13 +59,34 @@ class PlayerController extends Notifier<PlayerUiState> {
       AppLogger.w('PlayerController', 'start() ignored: empty item list');
       return;
     }
-    final useShuffle =
-        shuffle ?? ref.read(settingsControllerProvider).shuffleDefault;
+    final settings = ref.read(settingsControllerProvider);
+    final useShuffle = shuffle ?? settings.shuffleDefault;
+    // Random playback prefers items that had their turn less often, so the
+    // play counters travel with the queue. `off` passes nothing, which keeps
+    // the plain uniform shuffle.
+    final playCounts = <String, int>{};
+    var skipThreshold = 0;
+    if (settings.shufflePlayCountMode != ShufflePlayCountMode.off) {
+      for (final item in items) {
+        playCounts[item.id] = item.playCount;
+      }
+      if (settings.shufflePlayCountMode == ShufflePlayCountMode.skip) {
+        skipThreshold = settings.shuffleSkipThreshold;
+      }
+    }
     AppLogger.i('PlayerController',
-        'Starting playlist: ${items.length} items, shuffle=$useShuffle');
+        'Starting playlist: ${items.length} items, shuffle=$useShuffle, '
+        'playCountMode=${settings.shufflePlayCountMode.name}, '
+        'skipThreshold=$skipThreshold');
     // The queue order is what a failed autoplay transition is compared against.
     AppLogger.i('PlayerController', 'Queue: ${_describeQueue(items)}');
-    final pl = Playlist(items: items, shuffle: useShuffle);
+    _countedItemId = null;
+    final pl = Playlist(
+      items: items,
+      shuffle: useShuffle,
+      playCounts: playCounts,
+      skipThreshold: skipThreshold,
+    );
     if (startItemId != null) pl.jumpToItemId(startItemId);
     AppLogger.i('PlayerController',
         'Playlist started at ${pl.current?.id} '
@@ -84,6 +111,7 @@ class PlayerController extends Notifier<PlayerUiState> {
 
   void stop() {
     _slideTimer?.cancel();
+    _countedItemId = null;
     final pl = state.playlist;
     AppLogger.i('PlayerController',
         'Stopping playlist at ${pl?.current?.id ?? '-'} '
@@ -222,6 +250,13 @@ class PlayerController extends Notifier<PlayerUiState> {
       AppLogger.d('PlayerController',
           '_onItemEntered: ${item.id} skipped, playlist is paused');
       return;
+    }
+
+    // Playback history for the shuffle weighting: one bump per entry, so
+    // pausing and resuming the same item does not count twice.
+    if (_countedItemId != item.id) {
+      _countedItemId = item.id;
+      unawaited(ref.read(mediaRepositoryProvider).recordPlay(item.id));
     }
 
     final settings = ref.read(settingsControllerProvider);

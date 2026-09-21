@@ -34,6 +34,12 @@ Future<void> showMediaDetailsSheet(BuildContext context, MediaItem item) {
               if (item.width != null && item.height != null)
                 _row('Dimensions', '${item.width} × ${item.height}'),
               _row(context.l10n.ratingLabel, '${item.rating} / 3 hearts'),
+              _row(context.l10n.playCountLabel, '${item.playCount}'),
+              if (item.lastPlayedAt != null)
+                _row(
+                  context.l10n.lastPlayedLabel,
+                  fmt.format(item.lastPlayedAt!.toLocal()),
+                ),
               _row('Added', fmt.format(item.dateAdded.toLocal())),
               if (item.dateTaken != null)
                 _row('Taken', fmt.format(item.dateTaken!.toLocal())),

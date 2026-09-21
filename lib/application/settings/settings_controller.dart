@@ -17,6 +17,8 @@ class AppSettings {
     this.playerPlaybackSpeed = 1,
     this.slideshowSeconds = 3,
     this.shuffleDefault = false,
+    this.shufflePlayCountMode = ShufflePlayCountMode.soften,
+    this.shuffleSkipThreshold = 5,
     this.recycleRetentionDays = 7,
     this.flagSecure = true,
     this.logEnabled = true,
@@ -32,6 +34,13 @@ class AppSettings {
   final double playerPlaybackSpeed;
   final int slideshowSeconds;
   final bool shuffleDefault;
+
+  /// How random playback uses the per-item play counter.
+  final ShufflePlayCountMode shufflePlayCountMode;
+
+  /// Play count at which items stop appearing in random playback
+  /// ([ShufflePlayCountMode.skip]); one of [shuffleSkipThresholdOptions].
+  final int shuffleSkipThreshold;
   final int recycleRetentionDays;
   final bool flagSecure;
 
@@ -55,6 +64,8 @@ class AppSettings {
     double? playerPlaybackSpeed,
     int? slideshowSeconds,
     bool? shuffleDefault,
+    ShufflePlayCountMode? shufflePlayCountMode,
+    int? shuffleSkipThreshold,
     int? recycleRetentionDays,
     bool? flagSecure,
     bool? logEnabled,
@@ -70,6 +81,8 @@ class AppSettings {
       playerPlaybackSpeed: playerPlaybackSpeed ?? this.playerPlaybackSpeed,
       slideshowSeconds: slideshowSeconds ?? this.slideshowSeconds,
       shuffleDefault: shuffleDefault ?? this.shuffleDefault,
+      shufflePlayCountMode: shufflePlayCountMode ?? this.shufflePlayCountMode,
+      shuffleSkipThreshold: shuffleSkipThreshold ?? this.shuffleSkipThreshold,
       recycleRetentionDays: recycleRetentionDays ?? this.recycleRetentionDays,
       flagSecure: flagSecure ?? this.flagSecure,
       logEnabled: logEnabled ?? this.logEnabled,
@@ -88,6 +101,8 @@ class SettingsController extends Notifier<AppSettings> {
   static const _kPlayerSpeed = 'player_playback_speed';
   static const _kSlideshow = 'slideshow_seconds';
   static const _kShuffle = 'shuffle_default';
+  static const _kShuffleMode = 'shuffle_play_count_mode';
+  static const _kShuffleSkip = 'shuffle_skip_threshold';
   static const _kRecycle = 'recycle_retention_days';
   static const _kFlagSecure = 'flag_secure';
 
@@ -113,6 +128,10 @@ class SettingsController extends Notifier<AppSettings> {
       playerPlaybackSpeed: p.getDouble(_kPlayerSpeed) ?? 1,
       slideshowSeconds: p.getInt(_kSlideshow) ?? 3,
       shuffleDefault: p.getBool(_kShuffle) ?? false,
+      shufflePlayCountMode:
+          ShufflePlayCountMode.fromStorage(p.getString(_kShuffleMode)),
+      shuffleSkipThreshold:
+          p.getInt(_kShuffleSkip) ?? shuffleSkipThresholdOptions.last,
       recycleRetentionDays: p.getInt(_kRecycle) ?? 7,
       flagSecure: p.getBool(_kFlagSecure) ?? true,
       logEnabled: p.getBool(logEnabledKey) ?? true,
@@ -167,6 +186,20 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setShuffleDefault(bool v) async {
     state = state.copyWith(shuffleDefault: v);
     await _prefs.setBool(_kShuffle, v);
+  }
+
+  Future<void> setShufflePlayCountMode(ShufflePlayCountMode mode) async {
+    if (mode == state.shufflePlayCountMode) return;
+    state = state.copyWith(shufflePlayCountMode: mode);
+    await _prefs.setString(_kShuffleMode, mode.name);
+  }
+
+  Future<void> setShuffleSkipThreshold(int plays) async {
+    if (!shuffleSkipThresholdOptions.contains(plays)) {
+      throw ArgumentError.value(plays, 'plays');
+    }
+    state = state.copyWith(shuffleSkipThreshold: plays);
+    await _prefs.setInt(_kShuffleSkip, plays);
   }
 
   Future<void> setRecycleRetentionDays(int d) async {

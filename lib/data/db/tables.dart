@@ -31,6 +31,13 @@ class MediaItems extends Table {
   /// SHA-256 of the verified private media bytes.
   TextColumn get contentDigest => text().nullable()();
 
+  /// How often the item was played. Random playback reads this back and lowers
+  /// the odds of replaying items that already had their turn.
+  IntColumn get playCount => integer().withDefault(const Constant(0))();
+
+  /// Last playback time; null when the item was never played.
+  DateTimeColumn get lastPlayedAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

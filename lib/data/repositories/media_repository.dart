@@ -66,6 +66,8 @@ class MediaRepository {
       sourcePlatformId: Value(item.sourcePlatformId),
       sourceRemovalPending: Value(item.sourceRemovalPending),
       contentDigest: Value(item.contentDigest),
+      playCount: Value(item.playCount),
+      lastPlayedAt: Value(item.lastPlayedAt),
     );
   }
 
@@ -97,6 +99,15 @@ class MediaRepository {
     required DateTime dateAdded,
   }) =>
       _db.updateMediaDates(id, dateTaken: dateTaken, dateAdded: dateAdded);
+
+  /// Playback history: one bump per play. Random playback weights its order by
+  /// the counter, so the items that already had their turn come up less often.
+  Future<void> recordPlay(String id) =>
+      _db.recordMediaPlay(id, DateTime.now().toUtc());
+
+  /// Clears the play counter for [ids], or for every item when [ids] is null.
+  Future<int> resetPlayCounts({List<String>? ids}) =>
+      _db.resetMediaPlayCounts(ids: ids);
 
   Future<List<MediaItem>> listActive() async {
     final rows = await _db.listActiveMediaRows();
@@ -200,6 +211,8 @@ class MediaRepository {
         sourcePlatformId: r.sourcePlatformId,
         sourceRemovalPending: r.sourceRemovalPending,
         contentDigest: r.contentDigest,
+        playCount: r.playCount,
+        lastPlayedAt: r.lastPlayedAt,
       );
 
   List<MediaItem> _mapList(List<MediaItemRow> rows) =>

@@ -486,6 +486,37 @@ class AppLocalizations {
 
   String get shuffleByDefault => '默认随机播放';
 
+  /// 随机播放与播放记录（去重）——顶部标签。
+  String get shufflePlayCount => '按播放次数随机';
+
+  String get shufflePlayCountOff => '关闭（完全随机）';
+
+  String get shufflePlayCountSoften => '播放越多，概率越低';
+
+  String get shufflePlayCountSkip => '达到次数后基本不出现';
+
+  String get shuffleSkipThreshold => '不出现的播放次数';
+
+  String shuffleSkipAtLeast(int count) {
+    return '播放满 $count 次后';
+  }
+
+  String playCountTimes(int count) {
+    return '已播放 $count 次';
+  }
+
+  String get clearPlayHistory => '清除播放记录';
+
+  String get clearPlayHistorySubtitle => '所有媒体重新回到等概率随机';
+
+  String playHistoryCleared(int count) {
+    return count > 0 ? '已清除 $count 项播放记录' : '没有可清除的播放记录';
+  }
+
+  String get playCountLabel => '播放次数';
+
+  String get lastPlayedLabel => '最近播放';
+
   String get slideshowDelay => '幻灯片间隔';
 
   String get recycleRetention => '回收站保留时间';
