@@ -473,6 +473,30 @@ if "%PROXY_AVAILABLE%"=="1" (
 goto :eof
 
 REM ============================================
+REM  构建前内存检查：回收残留 JVM + 打印可用内存
+REM ============================================
+:reclaim_memory
+if not exist "%~dp0build_mem.ps1" (
+    echo [内存] 未找到 build_mem.ps1，跳过内存检查
+    goto :eof
+)
+echo.
+echo [内存] 回收残留 JVM 并检查可用内存...
+REM 为什么需要这步：R8 全模式压缩（app/build.gradle.kts 里 isMinifyEnabled=true）时
+REM JVM 申请的是"物理内存 + 页面文件"的提交内存，崩溃日志 android/hs_err_pid58400.log
+REM 里那句 "TotalPageFile size 54340M (AvailPageFile size 23M)" 就是提交内存被榨干，
+REM JVM 连 Chunk::new 的 1.5MB 都申请不到，Gradle 守护进程直接消失。
+REM build_mem.ps1 用 kernel32!GlobalMemoryStatusEx 取内存（本机 WMI/jps/Get-Counter
+REM 都会挂死，详见脚本头注释），-StopDaemons 只结束本机 JDK(%JAVA_HOME%) 启动、
+REM 且启动超过 120 秒的 java 进程，不会动 VS Code / Android Studio 的 JVM。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_mem.ps1" -JavaHome "%JAVA_HOME%" -StopDaemons
+set "MEM_EXIT=%ERRORLEVEL%"
+if not "%MEM_EXIT%"=="0" (
+    echo [内存] 检查未完全成功 ^(exit=%MEM_EXIT%^)，继续构建...
+)
+goto :eof
+
+REM ============================================
 REM  快速构建（跳过代码生成）
 REM ============================================
 :fast
@@ -497,6 +521,9 @@ call :ensure_sdk
 
 REM 配置 Gradle 代理
 call :config_gradle_proxy
+
+REM 内存检查：回收残留 JVM，避免 R8 压缩阶段提交内存不足
+call :reclaim_memory
 
 call flutter build apk --release
 set BUILD_EXIT=%ERRORLEVEL%
@@ -545,6 +572,10 @@ echo.
 echo ============================================
 echo  Privi 构建 - %date% %time%
 echo ============================================
+
+REM 内存检查放在最前面：既回收上次崩溃留下的守护进程，也让日志留下构建起点的
+REM 可用内存快照（崩溃后可以和 hs_err_pid*.log 对照排查）
+call :reclaim_memory
 
 REM 步骤2: 递增版本号（每次构建都需要）
 echo [2/6] 递增版本号...
@@ -605,6 +636,9 @@ if !RESUME_STEP! lss 5 (
 
     call :ensure_sdk
     call :config_gradle_proxy
+
+    REM R8 压缩是整条流水线里内存峰值最高的一步，编译前再回收一次残留 JVM
+    call :reclaim_memory
 
     call flutter build apk --release
     set BUILD_EXIT=%ERRORLEVEL%

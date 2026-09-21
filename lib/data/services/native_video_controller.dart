@@ -1,6 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
+// `Uint8List`（下面文件事实探针里用到）由这一行提供：flutter/foundation.dart
+// 已经 re-export 了 dart:typed_data，所以**不需要**再 import 'dart:typed_data'。
+// 实测：加上那一行会让 `dart analyze` 报 `unnecessary_import`；
+// 复核探针见 build\_u8_probe2.dart。
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -166,6 +171,11 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   bool _nativePlaying = false;
   bool _positionPollLogged = false;
 
+  /// Position-stall detection: `isPlaying` can be true while nothing decodes.
+  int _lastPolledPositionMs = -1;
+  DateTime? _positionStalledSince;
+  bool _positionStallLogged = false;
+
   Timer? _positionTimer;
 
   VoidCallback? onCompleted;
@@ -178,6 +188,8 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
 
   static Future<NativeVideoController> create(String filePath) async {
     AppLogger.i('VideoPlayer', 'Creating native player for: $filePath');
+    AppLogger.i(
+        'VideoPlayer', 'Source file: ${await describeSourceFile(filePath)}');
     // Install the inbound handler first: STATE_READY can fire before the
     // `create` call returns, and that event carries the initialized metadata.
     _installHandler();
@@ -212,6 +224,68 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     }
   }
 
+  /// One-line description of the clip, written before the native player opens
+  /// it.
+  ///
+  /// A file that plays on one phone and not on another is usually decided by
+  /// facts that never reach the log otherwise: the real byte size (a truncated
+  /// download, an empty vault entry), the container brand in the first bytes,
+  /// and whether the MP4 index (`moov`) sits at the end of the file. All of
+  /// them are read here - 8 KB at most - so a failing clip can be identified
+  /// from the log alone, without the file itself.
+  static Future<String> describeSourceFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      final stat = await file.stat();
+      if (stat.type == FileSystemEntityType.notFound) {
+        return 'path=$filePath MISSING (file not found)';
+      }
+      final size = stat.size;
+      final head = await _readBytes(file, 0, 64);
+      final tailStart = size > 65536 ? size - 8192 : 0;
+      final tail = await _readBytes(file, tailStart, 8192);
+      return 'path=$filePath size=${size}B '
+          'mtime=${stat.modified.toIso8601String()} '
+          'head=${_hex(head)} '
+          'moovInTail=${_containsAscii(tail, 'moov')} '
+          'mdatInTail=${_containsAscii(tail, 'mdat')}';
+    } catch (error) {
+      return 'path=$filePath probe failed: $error';
+    }
+  }
+
+  static Future<Uint8List> _readBytes(File file, int start, int length) async {
+    final raf = await file.open();
+    try {
+      await raf.setPosition(start);
+      return await raf.read(length);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  static String _hex(Uint8List bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  /// Whether [bytes] contains [needle] as plain ASCII.
+  ///
+  /// MP4 box names are plain ASCII, so a substring search is enough to tell
+  /// whether the sample table (`moov`) is inside the window that was read.
+  static bool _containsAscii(Uint8List bytes, String needle) {
+    final pattern = needle.codeUnits;
+    for (var i = 0; i + pattern.length <= bytes.length; i++) {
+      var matched = true;
+      for (var j = 0; j < pattern.length; j++) {
+        if (bytes[i + j] != pattern[j]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) return true;
+    }
+    return false;
+  }
+
   /// Applies the player metadata the UI derives its layout from.
   void _applyInitialized({
     required int durationMs,
@@ -238,6 +312,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     switch (call.method) {
         case 'initialized':
           final data = call.arguments as Map?;
+          _logNativeDiagnostics('initialized', data);
           _applyInitialized(
             durationMs: data?['duration'] as int? ?? 0,
             width: data?['width'] as int? ?? 0,
@@ -260,12 +335,14 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           final msg = data?['message'] as String? ?? 'Unknown playback error';
           AppLogger.e('VideoPlayer',
               'Playback error: $msg, code=${data?['code']}, textureId=$textureId');
+          _logNativeDiagnostics('error', data);
           value = value.copyWith(
             hasError: true,
             isPlaying: false,
             errorDescription: msg,
           );
           _stopPositionTimer();
+          unawaited(_logDiagnostics('playback-error'));
           onError?.call();
           break;
         case 'playingChanged':
@@ -309,6 +386,7 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         value = value.copyWith(
           position: Duration(milliseconds: posMs),
         );
+        _trackPositionProgress(posMs);
       }
     } catch (error) {
       // Logged once: this runs 4 times per second.
@@ -318,6 +396,65 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
             'getPosition failed, textureId=$textureId: $error');
       }
     }
+  }
+
+  /// Flags "isPlaying is true, but the position no longer moves".
+  ///
+  /// Dart-side twin of the native first-frame watchdog. A clip whose renderer
+  /// produces nothing can still report a perfectly healthy player, and without
+  /// this line such a session looks like a normal playback in the log.
+  void _trackPositionProgress(int posMs) {
+    if (posMs != _lastPolledPositionMs) {
+      _lastPolledPositionMs = posMs;
+      _positionStalledSince = DateTime.now();
+      _positionStallLogged = false;
+      return;
+    }
+    if (!_nativePlaying || _positionStallLogged) return;
+    final since = _positionStalledSince ??= DateTime.now();
+    if (DateTime.now().difference(since) < const Duration(seconds: 3)) return;
+    _positionStallLogged = true;
+    AppLogger.w(
+      'VideoPlayer.diag',
+      'VDIAG[dart-position-stall] position stuck at ${posMs}ms while '
+      'isPlaying=true, textureId=$textureId',
+    );
+    unawaited(_logDiagnostics('dart-position-stall'));
+  }
+
+  /// Mirrors a native `VDIAG` line that arrived inside an event payload.
+  void _logNativeDiagnostics(String source, Map? data) {
+    final diag = data?['diag'];
+    if (diag is String && diag.isNotEmpty) {
+      AppLogger.i('VideoPlayer.diag', '$diag (via $source event)');
+    }
+  }
+
+  /// Writes one consolidated line with everything the Dart side knows.
+  ///
+  /// Called exactly when something already looks wrong, so the file has to be
+  /// readable by someone who receives only the log and no device.
+  Future<void> _logDiagnostics(String reason) async {
+    var native = 'getStatus unavailable';
+    try {
+      final status = await fetchStatus();
+      native = status == null
+          ? 'getStatus returned null'
+          : 'native ready=${status.isReady} playing=${status.isPlaying} '
+              'position=${status.position.inMilliseconds}ms '
+              'duration=${status.duration.inMilliseconds}ms '
+              'size=${status.size.width.toInt()}x${status.size.height.toInt()}';
+    } catch (error) {
+      native = 'getStatus failed: $error';
+    }
+    AppLogger.w(
+      'VideoPlayer.diag',
+      'VDIAG[$reason] textureId=$textureId initialized=${value.isInitialized} '
+      'playing=${value.isPlaying} completed=${value.isCompleted} '
+      'hasError=${value.hasError} duration=${_durationMs}ms '
+      'position=${value.position.inMilliseconds}ms size=${_width}x$_height '
+      '(${value.errorDescription ?? 'no error text'}) | $native',
+    );
   }
 
   /// Pulls the native player state. Safety net for a missed one-shot
@@ -330,6 +467,16 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
         {'textureId': textureId},
       );
       if (raw == null) return null;
+      AppLogger.d(
+        'VideoPlayer',
+        'getStatus: ready=${raw['isReady']} playing=${raw['isPlaying']} '
+        'renderedFirstFrame=${raw['renderedFirstFrame']} '
+        'videoDecoder=${raw['videoDecoder']}',
+      );
+      final nativeDiag = raw['diag'];
+      if (nativeDiag is String && nativeDiag.isNotEmpty) {
+        AppLogger.i('VideoPlayer.diag', '$nativeDiag (via getStatus)');
+      }
       final width = (raw['width'] as num?)?.toInt() ?? 0;
       final height = (raw['height'] as num?)?.toInt() ?? 0;
       return NativeVideoStatus(

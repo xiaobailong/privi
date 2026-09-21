@@ -60,6 +60,7 @@
 - **快进/快退**：可配置跳跃步长（3 / 5 / 10 / 15 秒）
 - **静音 / 循环播放**：内置播放器支持静音切换，Viewer 支持单视频循环
 - **播放时屏幕常亮**：播放视频和幻灯片时保持屏幕唤醒
+- **画面卡住自愈**：若「已在播放但一帧都没上屏」（典型故障：拖进度条有图、正常播放画面不动），看门狗按 **4 秒 / 8 秒 / 12 秒** 三档补救——重挂 Surface → 微 seek（当前位置 +100ms）→ 放弃并记录日志；每档最多各触发一次，且只在「完全没出过帧」时动作，正常播放、暂停、缓冲期间不受影响
 
 ### 安全
 
@@ -81,7 +82,7 @@
 - **孤文件扫描**：扫描保险库隐藏目录中未被数据库记录的文件
 - **日期修复**：从 EXIF / 视频元数据提取原始拍摄日期，修正排序
 - **媒体类型修复**：启动维护时逐条核对记录的图片 / 视频类型与扩展名是否一致，自动更正历史误判（含回收站中的媒体）
-- **日志诊断**：自动将运行日志写入 `/Download/密册/logs/`，按天分卷，7 天自动清理，支持开关
+- **日志诊断**：自动将运行日志写入 `/Download/密册/logs/`，按天分卷，7 天自动清理，支持开关；视频播放会额外输出一行式 `VDIAG[...]` 诊断（容器 / 编码 / 实际解码器 / 色彩位深 / 是否出过第一帧 / 丢帧数），用于只凭用户日志定位「黑屏」「画面不动」
 - **播放记录管理**：设置页可一键清除全部播放次数与最近播放时间，清除后所有媒体重新回到等概率随机
 
 ### 其他
@@ -122,6 +123,7 @@
 
 - **应用生命周期**：启动、版本号、关闭
 - **视频播放器**：`PlayerScreen` 和 `VideoPlayer` 标签详细记录加载、播放、暂停、完成、错误，以及原生 ExoPlayer 的状态变化；`PlayerController` 记录播放列表切换和连续播放逻辑
+- **视频播放诊断（VDIAG）**：以单行 `VDIAG[...]` 汇总视频轨事实——容器与编码（`avc1` / `hvc1` / `av01` / `mp4v` 等）、实际选中的解码器（硬件/软件）与初始化耗时、色彩位深与 HDR、视频轨是否被设备支持、`firstFrameRendered`（第一帧是否真的上屏）、`renderedFrames` / `droppedFrames`；打开文件前还会记录一行文件事实 `Source file: ...`（大小 / mtime / 前 64 字节 / `moov` 是否在文件尾）
 - **导入流程**：开始导入、每批传输结果、最终统计（成功/跳过/失败）
 - **原生层**：Android Kotlin 侧的 ExoPlayer 初始化、准备、缓冲区、错误码、释放等完整状态机
 
@@ -140,6 +142,9 @@
 | `PlayerController` | 播放列表切换、连续播放逻辑 |
 | `密册VideoPlayer` | Kotlin ExoPlayer 状态机、播放错误码 |
 | `密册Main` | 原生通道创建/销毁 |
+| `VDIAG` | 视频轨与解码事实汇总（容器/编码/解码器/首帧/丢帧） |
+| `Source file:` | 打开视频前的文件事实（大小 / mtime / 头部字节 / `moov` 位置） |
+| `VDIAG[dart-position-stall]` | Dart 侧检测到播放位置 3 秒不动 |
 
 常见问题定位示例：
 
@@ -147,6 +152,23 @@
 - **连播中断**：搜索 `Item completed` + `Next item` → 检查是否正常切换到下一首
 - **视频加载失败**：搜索 `Video load failed` + `Video file not found` → 确认文件路径
 - **随机播放总重复同一批媒体**：搜索 `playCountMode` + `skipThreshold` → 确认「按播放次数随机」的模式与阈值是否生效，必要时在设置中清除播放记录
+- **画面不动但声音正常 / 拖进度条才有图**：搜索 `VDIAG` → 按下表判断是片源问题还是渲染问题
+
+### 画面不动 / 黑屏：只用 `VDIAG` 就能定性
+
+复现一次（正常播放 10 秒 → 拖一次进度条 → 退出），然后搜 `VDIAG`，对照下表：
+
+| 日志里看到 | 说明 | 处理方向 |
+|-----------|------|---------|
+| `vTrackSupported=false` | **设备不支持这条视频轨**：音频照放、画面永远黑、且不会有任何 error | 片源问题，需转码（如 H.264 High → Main，10bit → 8bit） |
+| `bitDepth=10/10`、`hdr=true` | 10bit / HDR（PQ、HLG）片源，硬解常拒绝或只能软解 | 同上 |
+| `vDecoder=... (software)` 且 `droppedFrames` 暴涨 | 落在软解上、跟不上播放速度 | 同上 |
+| `firstFrameRendered=false@-1ms`、`renderedFrames=0` | 解码可能在做，但**一帧都没上屏**（就是「拖进度条才有图」） | 渲染/帧投放问题：看有没有 `VDIAG[stall-4s/8s/12s]`，以及自愈后是否出现 `VDIAG[first-frame]` |
+| `fps` 异常（0、几百、几万） | 时间戳/采样率表坏了，帧会被当迟到帧全部丢掉 | 片源问题 |
+| `decoderInits` 反复增长 | 解码器反复重建（格式反复变化 / 解码器崩溃重启） | 片源或解码器问题 |
+| `loadErrors` 增长、`Source file: size=0` | 文件读取层面出错（权限、下载被截断） | 文件问题，与播放器无关 |
+
+自愈动作会留下对应日志：`VDIAG[stall-4s]`（重挂 Surface）、`VDIAG[stall-8s]`（微 seek +100ms）、`VDIAG[stall-12s]`（放弃恢复，只保留证据）。正常播放则不该出现这三个标签。
 
 ---
 
@@ -208,7 +230,7 @@ build.bat clean
 每次执行 `build.bat` 或 `build.bat fast` 都会**自动递增 `pubspec.yaml` 中的 build number**：
 
 ```
-version: 1.0.25+30   →   version: 1.0.25+31
+version: 1.0.29+43   →   version: 1.0.29+44
              ↑                              ↑
         build name                    build code 自动 +1
 ```
@@ -216,7 +238,7 @@ version: 1.0.25+30   →   version: 1.0.25+31
 构建成功后输出的 APK 文件名包含完整版本号：
 
 ```
-privi-1.0.25+31.apk
+privi-1.0.29+44.apk
 ```
 
 #### 首次配置
@@ -245,14 +267,32 @@ privi-1.0.25+31.apk
 
 | 步骤 | 操作 |
 |------|------|
-| 1 | 环境检查（Java / Flutter / Android SDK） |
-| 2 | 代码生成：`flutter gen-l10n` + `build_runner build` |
+| 0 | 内存回收：`build_mem.ps1` 结束残留的 JVM（Gradle / Kotlin 守护进程）并打印可用内存快照 |
+| 1 | 代码生成：`flutter gen-l10n` + `build_runner build` |
+| 2 | 递增版本号：`pubspec.yaml` 的 build number +1 |
 | 3 | 清理：`flutter clean` |
 | 4 | 安装依赖：`flutter pub get` |
-| 5 | 编译：`flutter build apk --release` |
+| 5 | 编译：`flutter build apk --release`（R8 全模式压缩前再回收一次内存） |
 | 6 | 将 APK 复制到项目根目录 |
 
-构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-<版本号>.apk`（如 `privi-1.0.25+31.apk`）。
+构建成功后，APK 文件会出现在项目根目录，文件名格式为 `privi-<版本号>.apk`（如 `privi-1.0.29+44.apk`）。
+
+#### 内存配置与 R8（不要把这些堆大小调回去）
+
+Release 走 R8 全模式压缩（`app/build.gradle.kts` 里 `isMinifyEnabled=true`），JVM 申请的是「物理内存 + 页面文件」的**提交内存**。旧配置 `-Xmx8G -XX:MaxMetaspaceSize=4G` 会把提交上限榨干——JVM 连 `Chunk::new` 的 1.5MB 都申请不到，Gradle 守护进程直接消失，日志里只留下：
+
+```
+The message received from the daemon indicates that the daemon has disappeared.
+JVM crash log found: ... android/hs_err_pid*.log
+```
+
+（崩溃日志中的证据：`arena.cpp:168` OOM + `TotalPageFile size 54340M (AvailPageFile size 23M)`——是系统提交内存耗尽，不是堆溢出。）
+
+因此：
+
+- `android/gradle.properties` 把 Gradle 守护进程固定为 `-Xmx4G -XX:MaxMetaspaceSize=1G`，Kotlin 编译守护进程（独立 JVM，默认堆上限跟随物理内存且常驻数小时）另限 `-Xmx2G`；堆转储路径指向 `build/`，避免崩溃日志散落在 `android/`。
+- `build.bat` 在构建开始、以及 R8 压缩前各调一次 `build_mem.ps1 -StopDaemons`：只结束由 `%JAVA_HOME%` 启动、且已运行超过 120 秒的 `java` 进程，不会误杀 VS Code / Android Studio 的 JVM；同时打印构建起点的可用内存，便于和崩溃日志对照。
+- `build_mem.ps1` 用 `kernel32!GlobalMemoryStatusEx` 取内存（本机 WMI / `jps` / `Get-Counter` 都可能静默挂死），因此它比常规手段更可靠。
 
 #### 清理构建产物（clean.bat）
 
