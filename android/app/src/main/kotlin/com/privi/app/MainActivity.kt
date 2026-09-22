@@ -301,6 +301,9 @@ class MainActivity : FlutterFragmentActivity() {
                             VlcPlayerHandler(
                                 this,
                                 textureEntry,
+                                // 只给 VlcPlayerHandler 用来把 media.parse() 挪出
+                                // 主线程；onDestroy 里 ioExecutor.shutdown() 收尾。
+                                ioExecutor,
                             ) { event, data ->
                                 mainHandler.post {
                                     try {
