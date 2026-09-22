@@ -54,6 +54,7 @@
 | 视频点开「秒完」、自动跳到下一项 | `ISSUE-009` |
 | VLC 引擎下 viewer / 可见库预览**永远转圈**（`PlayerScreen` 正常） | `ISSUE-014`、`ADR-017` |
 | `flutter analyze` / `dart analyze` 好像卡住、读不到结果 | `PIT-020`、`PIT-018`、`PIT-014` |
+| 等待/轮询命令被提前掐断、状态文件没生成 | `PIT-021`、`PIT-009` |
 | 某些视频在应用里永远是图片 / 打不开 | `ISSUE-010` |
 | `powershell -Command` 无输出、退出码 786 | `PIT-001` |
 | `.ps1` 中文乱码 / 语法错误 | `PIT-002` |
