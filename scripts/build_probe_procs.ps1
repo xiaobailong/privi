@@ -1,6 +1,6 @@
 ﻿# =============================================================================
 #  build_probe_procs.ps1 - 进程/锁文件快照（排查 flutter pub get 卡死用）
-#  用法: powershell -NoProfile -ExecutionPolicy Bypass -File build_probe_procs.ps1
+#  用法: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_probe_procs.ps1
 #  输出: build\procs_probe.txt
 # =============================================================================
 param(

@@ -14,8 +14,8 @@
 #  任何一步超时都能在 2 分钟内出结论, 而不是让构建永远挂着。
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_probe_toolchain.ps1
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_probe_toolchain.ps1 -FlutterTimeoutSec 300
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_probe_toolchain.ps1
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_probe_toolchain.ps1 -FlutterTimeoutSec 300
 #
 #  OUTPUT (stdout, 单行, 供 cmd 用 for /f 读取；刻意避开 & | < > ( ) ! % 等 cmd 特殊字符)
 #    OK: flutter=Flutter 3.32.0 channel stable dart=Dart SDK version 3.9.2

@@ -10,8 +10,8 @@
 #  file through -File is not affected, which is why this helper exists.
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File bump_version.ps1 -BuildNumber 34
-#    powershell -NoProfile -ExecutionPolicy Bypass -File bump_version.ps1 -BuildNumber 34 -VersionName 1.0.29
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1 -BuildNumber 34
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1 -BuildNumber 34 -VersionName 1.0.29
 #
 #  OUTPUT (stdout, single line)
 #    OK=<version>      file updated, exit code 0

@@ -113,7 +113,7 @@ flutter build apk --release               # 构建 Release APK
 
 ### 一键构建
 
-项目根目录 `build.bat` 自动完成版本递增、代码生成、编译与 Release 发布：
+项目根目录 `build.bat` 自动完成版本递增、代码生成、编译与 Release 发布（其依赖的 PowerShell 辅助脚本统一放在 `scripts/` 目录）：
 
 ```bash
 build.bat           # 完整构建（递增版本 → 代码生成 → 编译 → 发布 Release）
@@ -143,6 +143,7 @@ build.bat clean     # 清理所有构建产物
 │   └── presentation/     # UI 页面和组件
 ├── assets/branding/      # 应用图标
 ├── drift_schemas/        # 数据库迁移 Schema
+├── memory-bank/          # 跨会话知识库：已排查问题 / 踩坑记录 / 技术决策（见 memory-bank/README.md）
 └── pubspec.yaml
 ```
 

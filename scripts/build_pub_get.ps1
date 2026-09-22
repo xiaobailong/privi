@@ -11,7 +11,7 @@
 #    Windows 上 Dart 用 COM/WMI 查平台信息（Platform.operatingSystemVersion
 #    -> Win32_OperatingSystem），该调用没有超时。当 winmgmt 服务"显示 RUNNING
 #    但不回 Win32_OperatingSystem"时，flutter.bat 每次启动都在这里静默阻塞。
-#    所以真正的前置拦截放在 build_wmi_guard.ps1（由 :checkenv 调用），
+#    所以真正的前置拦截放在 scripts\build_wmi_guard.ps1（由 :checkenv 调用），
 #    本脚本的看门狗是第二道保险：不管什么原因，日志静止就砍。
 #
 #  本脚本把命令放进子进程, 持续监视日志文件:
@@ -20,11 +20,11 @@
 #  这样最坏情况下 build.bat 几分钟内就能给出结论和排查建议，而不是永远不动。
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_pub_get.ps1
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_pub_get.ps1 -IdleTimeoutSec 600
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_pub_get.ps1 `
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_pub_get.ps1
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_pub_get.ps1 -IdleTimeoutSec 600
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_pub_get.ps1 `
 #        -Log "build\pub_get_build.log" -IdleTimeoutSec 300
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_pub_get.ps1 `
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_pub_get.ps1 `
 #        -Command "cmd /c ping -n 60 127.0.0.1" -IdleTimeoutSec 6 -HeartbeatSec 2   # 自测用
 #
 #  OUTPUT (stdout)
@@ -120,7 +120,7 @@ try {
             Get-Content -LiteralPath $logFull -Tail 15 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Line ("[pub] " + $_) }
         } else {
             Write-Line "[pub] 日志为空: 说明 flutter/dart 在写出任何东西之前就被拦住了（不是网络/依赖问题）"
-            Write-Line "[pub] 提示: 先跑 build_wmi_guard.ps1 确认 WMI 是否正常（Dart 查 OS 版本走 WMI 且无超时）"
+            Write-Line "[pub] 提示: 先跑 scripts\build_wmi_guard.ps1 确认 WMI 是否正常（Dart 查 OS 版本走 WMI 且无超时）"
         }
         exit 124
     }

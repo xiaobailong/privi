@@ -7,11 +7,12 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
+import '../../core/utils/app_logger.dart';
 import '../../data/services/gallery_service.dart';
 import '../../data/services/native_video_controller.dart';
-import '../../domain/enums.dart';
 import '../common/keep_vault_unlocked.dart';
 import '../common/zoomable_media_image.dart';
+import '../player/engine_fallback.dart';
 import '../player/video_player_controls.dart';
 import '../player/video_player_surface.dart';
 
@@ -40,7 +41,8 @@ class GalleryPreviewScreen extends ConsumerStatefulWidget {
       _GalleryPreviewScreenState();
 }
 
-class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
+class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
+    with VideoEngineFallbackState<GalleryPreviewScreen> {
   late final PageController _page;
   NativeVideoController? _video;
   File? _file;
@@ -101,9 +103,12 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
         return;
       }
       if (item.isVideo) {
-        final settings = ref.read(settingsControllerProvider);
-        final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
-        final c = await NativeVideoController.create(file.path, playerEngine: engine);
+        // 引擎必须经 engineFor() 取：VLC 下拿不到帧的 asset 会在这里被换成默认引擎。
+        final engine = engineFor(item.id);
+        final c = await NativeVideoController.create(
+          file.path,
+          playerEngine: engine,
+        );
         if (!mounted || request != _loadRequest) {
           await c.dispose();
           return;
@@ -126,6 +131,12 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
           _loading = false;
           _completedForId = null;
         });
+        // 兜底：15s 还没 ready 就「换引擎 → 错误态」，否则这里会永远 _loading=true
+        //（历史问题：无看门狗、无引擎回退）。
+        armLoadWatchdog(
+          item.id,
+          onTimeout: (id) => _retryVideoLoad(item, request),
+        );
       } else {
         if (!mounted || request != _loadRequest) return;
         _clearOrientationLock();
@@ -141,6 +152,42 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// 15s 看门狗超时后的处置：先试「换回默认引擎重建一次」，再失败就落到已有的
+  /// `_error` 状态（原来是静默卡死：`_loading` 永远为 true）。
+  ///
+  /// 请求序号校验必须带上：重试是异步的，中途用户可能已经滑到别的 asset。
+  Future<void> _retryVideoLoad(GalleryAsset item, int request) async {
+    if (!mounted) return;
+    if (request != _loadRequest || _current.id != item.id) return;
+    final video = _video;
+    if (video != null && (video.value.isInitialized || video.value.hasError)) {
+      return;
+    }
+
+    final retried = await fallbackToDefaultEngineIfPossible(
+      item.id,
+      reload: () async {
+        if (!mounted) return;
+        await _stopVideo();
+        if (!mounted) return;
+        await _loadCurrent();
+      },
+    );
+    if (retried) return;
+
+    AppLogger.e(
+      'GalleryPreviewScreen',
+      'Video did not start within 15s, giving up '
+      '(engine=${engineFor(item.id)}): ${item.id}',
+    );
+    await _stopVideo();
+    if (!mounted) return;
+    setState(() {
+      _error = 'Video failed to start: ${item.title}';
+      _loading = false;
+    });
   }
 
   Future<void> _showItem(int index) async {

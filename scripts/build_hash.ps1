@@ -9,9 +9,9 @@
 #  调用就不受影响。
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind codegen
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind gradle
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_hash.ps1 -Kind file -Path privi-1.0.29+44.apk
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_hash.ps1 -Kind codegen
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_hash.ps1 -Kind gradle
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_hash.ps1 -Kind file -Path privi-1.0.29+44.apk
 #
 #  OUTPUT (stdout, 单行)
 #    codegen / gradle : 32 位大写十六进制 MD5，exit code 0

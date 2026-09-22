@@ -15,8 +15,8 @@
 #  超时 → 退出码 5，build.bat 立刻报"WMI 无响应"，不用再等 5 分钟看门狗。
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1 -TimeoutSec 5
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_wmi_guard.ps1
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_wmi_guard.ps1 -TimeoutSec 5
 #
 #  OUTPUT (stdout, 单行, 已 Sanitize 成纯 ASCII, 可安全被 cmd 的 for /f 抓取)
 #    OK: WMI 正常 (operatingSystemVersion 在 N 秒内返回)

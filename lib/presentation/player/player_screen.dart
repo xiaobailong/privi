@@ -11,9 +11,9 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
-import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../common/keep_vault_unlocked.dart';
+import 'engine_fallback.dart';
 import 'video_player_controls.dart';
 import 'video_player_surface.dart';
 
@@ -41,7 +41,8 @@ class PlayerScreen extends ConsumerStatefulWidget {
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends ConsumerState<PlayerScreen> {
+class _PlayerScreenState extends ConsumerState<PlayerScreen>
+    with VideoEngineFallbackState<PlayerScreen> {
   NativeVideoController? _nVideo;
   String? _nVideoItemId;
   String? _videoError;
@@ -49,7 +50,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   String? _completedForId;
   int _videoRequest = 0;
   String? _loadingItemId;
-  Timer? _loadWatchdog;
   bool? _nativeInitialized;
   bool _reconcileScheduled = false;
   /// De-duplication keys for the diagnostic lines written from build(): a
@@ -60,6 +60,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   String? _loggedSpinnerKey;
   String? _loggedSurfaceKey;
   final Set<String> _autoRetriedItemIds = <String>{};
+  // 引擎回退集合（VLC 下拿不到画面的 item）现在由 VideoEngineFallbackState 持有。
   bool _chrome = true;
   bool _programmaticPopAllowed = false;
   VideoFitMode _fitMode = VideoFitMode.fit;
@@ -303,35 +304,68 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   /// Fails the endless-spinner case: when the native side never reports
   /// initialized for the item we handed it, retry once and then show an error.
+  ///
+  /// 计时器本体在 [VideoEngineFallbackState]（三处入口共用），这里只保留本屏的
+  /// 判定与处置，语义与拆分前一致。
   void _startLoadWatchdog(MediaItem item, int request) {
-    _cancelLoadWatchdog();
-    _loadWatchdog = Timer(const Duration(seconds: 15), () {
-      _loadWatchdog = null;
-      if (!mounted) return;
-      if (_isStaleLoad(request, item)) return;
-      if (_videoErrorItemId == item.id) return;
-      final video = _nVideo;
-      final showing = video != null && _nVideoItemId == item.id;
-      if (showing && (video.value.isInitialized || video.value.hasError)) return;
-      // A load that never even published a controller (hung create/dispose)
-      // must be retried too, otherwise the spinner stays on screen forever.
-      AppLogger.w(
-        'PlayerScreen',
-        'Video did not initialize within 15s '
-        '(controller=${showing ? 'published' : 'missing'}): ${item.id}',
-      );
-      unawaited(_retryLoad(item));
-    });
+    armLoadWatchdog(
+      item.id,
+      onTimeout: (id) async {
+        if (_isStaleLoad(request, item)) return;
+        if (_videoErrorItemId == item.id) return;
+        final video = _nVideo;
+        final showing = video != null && _nVideoItemId == item.id;
+        if (showing && (video.value.isInitialized || video.value.hasError)) {
+          return;
+        }
+        // A load that never even published a controller (hung create/dispose)
+        // must be retried too, otherwise the spinner stays on screen forever.
+        AppLogger.w(
+          'PlayerScreen',
+          'Video did not initialize within 15s '
+          '(controller=${showing ? 'published' : 'missing'}): $id',
+        );
+        unawaited(_retryLoad(item));
+      },
+    );
   }
 
-  void _cancelLoadWatchdog() {
-    _loadWatchdog?.cancel();
-    _loadWatchdog = null;
-  }
+  void _cancelLoadWatchdog() => cancelLoadWatchdog();
+
+  /// 传给平台通道的 `playerEngine` 参数（`'vlc'` / `'exoPlayer'`）。
+  ///
+  /// 规则集中在 [VideoEngineFallbackState.engineFor]：用户选了 VLC、但这个视频在
+  /// VLC 下已经确认拿不到帧时（见 [_retryLoad]），本屏会话内对**这一个**视频改用
+  /// 默认引擎，而不是反复把用户扔回黑屏。
+  String _preferredEngineFor(MediaItem item) => engineFor(item.id);
 
   /// One automatic retry per item, then a visible error instead of a spinner.
+  ///
+  /// 引擎回退优先于“再试一次同一个引擎”：VLC 侧没有 ExoPlayer 那样的
+  /// frameWatchdog / reattachSurface 自愈（surface 丢了就一直是黑屏，
+  /// 只能重建整个播放器），而且同一份文件在同一个引擎下重试大概率还是同样
+  /// 的结果。所以第一次超时就直接换回默认引擎重载，把这一次重试额度用掉。
   Future<void> _retryLoad(MediaItem item) async {
     if (!mounted) return;
+
+    // 还没用过那唯一一次自动重试、且当前用的是 VLC ⇒ 换成 ExoPlayer 重载。
+    if (!_autoRetriedItemIds.contains(item.id) &&
+        _preferredEngineFor(item) == 'vlc') {
+      _autoRetriedItemIds.add(item.id);
+      useEngineFallback(item.id);
+      AppLogger.w(
+        'PlayerScreen',
+        'VLC engine produced no frame within 15s, retrying with the '
+        'exoPlayer engine: ${item.id}',
+      );
+      await _disposeNativeVideo();
+      if (!mounted) return;
+      final state = ref.read(playerControllerProvider);
+      if (state.current?.id != item.id) return;
+      unawaited(_loadVideo(item, state.playing, force: true));
+      return;
+    }
+
     if (_autoRetriedItemIds.contains(item.id)) {
       if (_videoErrorItemId != item.id) {
         AppLogger.e('PlayerScreen', 'Video load retry failed: ${item.id}');
@@ -477,8 +511,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
 
     try {
-      final settings = ref.read(settingsControllerProvider);
-      final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
+      // 注意不要再直接读 settings.playerEngine：走 [_preferredEngineFor]，
+      // 它会在 VLC 已经确认画不出帧时回退到默认引擎。
+      final engine = _preferredEngineFor(item);
       final controller = await NativeVideoController.create(
         item.privatePath,
         playerEngine: engine,
@@ -488,7 +523,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         await controller.dispose();
         return;
       }
-      AppLogger.i('PlayerScreen', 'Configuring native video: ${item.id}, playing=$playing');
+      AppLogger.i('PlayerScreen',
+          'Configuring native video: ${item.id}, engine=$engine, playing=$playing');
       await _configureNativeVideo(controller, playing: playing);
       if (_isStaleLoad(request, item)) {
         await controller.dispose();
@@ -796,7 +832,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           'initialized=${c?.value.isInitialized}, '
           'nativeError=${c?.value.hasError}, '
           'loadingItem=${_loadingItemId ?? '-'}, '
-          'watchdog=${_loadWatchdog != null})',
+          'watchdog=$isLoadWatchdogArmed)',
         );
       }
       return GestureDetector(

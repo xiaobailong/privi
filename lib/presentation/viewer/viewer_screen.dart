@@ -11,12 +11,13 @@ import '../../application/providers.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
+import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
-import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
 import '../common/keep_vault_unlocked.dart';
 import '../common/zoomable_media_image.dart';
+import '../player/engine_fallback.dart';
 import '../player/video_player_controls.dart';
 import '../player/video_player_surface.dart';
 
@@ -35,7 +36,8 @@ class ViewerScreen extends ConsumerStatefulWidget {
   ConsumerState<ViewerScreen> createState() => _ViewerScreenState();
 }
 
-class _ViewerScreenState extends ConsumerState<ViewerScreen> {
+class _ViewerScreenState extends ConsumerState<ViewerScreen>
+    with VideoEngineFallbackState<ViewerScreen> {
   late final PageController _page;
   late int _index;
   bool _chrome = true;
@@ -45,6 +47,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   String? _videoId;
   String? _completedForId;
   int _videoRequest = 0;
+  /// 15s 看门狗判定"这个视频在本引擎下起不来"时写这里：界面显示可见的错误，
+  /// 而不是一直转圈（见 [VideoEngineFallbackState]）。
+  String? _videoError;
+  String? _videoErrorItemId;
   DateTime? _ignoreAutoAdvanceUntil;
   VideoFitMode _fitMode = VideoFitMode.fit;
   double _playbackSpeed = 1;
@@ -158,9 +164,12 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     final file = File(item.privatePath);
     if (!file.existsSync()) return;
     if (!mounted || request != _videoRequest) return;
-    final settings = ref.read(settingsControllerProvider);
-    final engine = settings.playerEngine == PlayerEngine.vlc ? 'vlc' : 'exoPlayer';
-    final c = await NativeVideoController.create(file.path, playerEngine: engine);
+    // 引擎必须经 engineFor() 取：VLC 下拿不到帧的 item 会在这里被换成默认引擎。
+    final engine = engineFor(item.id);
+    final c = await NativeVideoController.create(
+      file.path,
+      playerEngine: engine,
+    );
     if (!mounted || request != _videoRequest || _current.id != item.id) {
       await c.dispose();
       return;
@@ -181,8 +190,52 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       _video = c;
       _videoId = item.id;
       _completedForId = null;
+      _videoError = null;
+      _videoErrorItemId = null;
     });
     _recordPlay(item);
+    // 兜底：15s 还没 ready 就走「换引擎 → 显示错误」这条路，否则引擎挂掉时
+    // 这里会永远停在加载占位图上（历史问题：无看门狗、无错误态、无回退）。
+    armLoadWatchdog(item.id, onTimeout: (id) => _retryVideoLoad(item, request));
+  }
+
+  /// 15s 看门狗超时后的处置：先试「换回默认引擎重建一次」，再失败就显示错误，
+  /// 不再静默转圈（与 `player_screen.dart` 的 `_retryLoad` 同策略）。
+  ///
+  /// 请求序号校验必须带上：重试是异步的，中途用户可能已经滑到别的 item。
+  Future<void> _retryVideoLoad(MediaItem item, int request) async {
+    if (!mounted) return;
+    if (request != _videoRequest || _current.id != item.id) return;
+    final video = _video;
+    final showing = video != null && _videoId == item.id;
+    if (showing && (video.value.isInitialized || video.value.hasError)) return;
+
+    final retried = await fallbackToDefaultEngineIfPossible(
+      item.id,
+      reload: () async {
+        if (!mounted) return;
+        setState(() {
+          _videoError = null;
+          _videoErrorItemId = null;
+        });
+        await _detachVideo();
+        if (!mounted) return;
+        await _syncVideo();
+      },
+    );
+    if (retried) return;
+
+    AppLogger.e(
+      'ViewerScreen',
+      'Video did not start within 15s, giving up '
+      '(engine=${engineFor(item.id)}): ${item.id}',
+    );
+    await _detachVideo();
+    if (!mounted) return;
+    setState(() {
+      _videoError = 'Video failed to start: ${item.originalName}';
+      _videoErrorItemId = item.id;
+    });
   }
 
   void _markUserSeek() {
@@ -483,6 +536,34 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   }
 
   Widget _videoPage(MediaItem item, bool active) {
+    // 看门狗已经判定"起不来"且重试也用完了：显示可见的错误，不再转圈。
+    if (active && _videoErrorItemId == item.id && _videoError != null) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleChrome,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                color: Colors.white54,
+                size: 56,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  _videoError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final video = _video;
     if (!active ||
         video == null ||

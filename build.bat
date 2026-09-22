@@ -21,7 +21,7 @@ if "%~1" NEQ "--log" (
 title Privi Build
 
 REM ============================================
-REM  Privi 一键构建脚本
+REM  Privi 一键构建脚本（辅助 PowerShell 脚本统一放在 scripts\ 目录）
 REM  用法: 双击运行            (完整构建 + 递增版本 + 自动发布 Release)
 REM        build codegen       (仅代码生成)
 REM        build clean         (清理构建产物)
@@ -121,24 +121,24 @@ REM ============================================
 
 REM 计算代码生成相关文件的哈希
 REM 注意: 本机安全策略会静默拦截含正则/管道的 powershell -Command 长命令行
-REM       （表现为退出码 786、无输出），因此哈希逻辑放在 build_hash.ps1 里用 -File 调用。
+REM       （表现为退出码 786、无输出），因此哈希逻辑放在 scripts\build_hash.ps1 里用 -File 调用。
 :calc_hash_codegen
 set "HASH_CODE_GEN="
-if not exist "%~dp0build_hash.ps1" (
-    echo [警告] 未找到 build_hash.ps1，无法计算代码哈希
+if not exist "%~dp0scripts\build_hash.ps1" (
+    echo [警告] 未找到 scripts\build_hash.ps1，无法计算代码哈希
     goto :eof
 )
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind codegen 2^>nul`) do set "HASH_CODE_GEN=%%v"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_hash.ps1" -Kind codegen 2^>nul`) do set "HASH_CODE_GEN=%%v"
 goto :eof
 
 REM 计算 Gradle 配置文件的哈希
 :calc_hash_gradle
 set "HASH_GRADLE="
-if not exist "%~dp0build_hash.ps1" (
-    echo [警告] 未找到 build_hash.ps1，无法计算 Gradle 哈希
+if not exist "%~dp0scripts\build_hash.ps1" (
+    echo [警告] 未找到 scripts\build_hash.ps1，无法计算 Gradle 哈希
     goto :eof
 )
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind gradle 2^>nul`) do set "HASH_GRADLE=%%v"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_hash.ps1" -Kind gradle 2^>nul`) do set "HASH_GRADLE=%%v"
 goto :eof
 
 REM 读取状态文件，对比哈希，确定从哪一步开始
@@ -157,7 +157,7 @@ REM 计算当前哈希
 call :calc_hash_codegen
 call :calc_hash_gradle
 
-REM 哈希没算出来（build_hash.ps1 缺失 / 被安全策略拦截）→ 绝不能拿空值去比较，
+REM 哈希没算出来（scripts\build_hash.ps1 缺失 / 被安全策略拦截）→ 绝不能拿空值去比较，
 REM 否则会误判成"代码未变更"，直接跳过编译复用上一版 APK。
 if not defined HASH_CODE_GEN (
     echo [断点续传] 无法计算代码哈希，取消续传，从头构建
@@ -231,19 +231,19 @@ set "WMI_GUARDED=1"
 set "WMI_FAILED=0"
 
 echo        [WMI 自检] Dart 读 OS 版本（WMI 无响应会让所有 flutter 命令静默挂死）...
-if not exist "%~dp0build_wmi_guard.ps1" (
-    echo        [跳过] 未找到 build_wmi_guard.ps1
+if not exist "%~dp0scripts\build_wmi_guard.ps1" (
+    echo        [跳过] 未找到 scripts\build_wmi_guard.ps1
     goto :eof
 )
 
 set "WMI_OUT=%TEMP%\privi_wmi_guard.txt"
 del /q "%WMI_OUT%" 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_wmi_guard.ps1" -FlutterRoot "%FLUTTER_HOME%" > "%WMI_OUT%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_wmi_guard.ps1" -FlutterRoot "%FLUTTER_HOME%" > "%WMI_OUT%" 2>&1
 set "WMI_RC=%ERRORLEVEL%"
 set "WMI_MSG="
 for /f "usebackq delims=" %%l in ("%WMI_OUT%") do set "WMI_MSG=%%l"
 
-REM 退出码 5 = 确认 WMI 无响应（build_wmi_guard.ps1 的定义）
+REM 退出码 5 = 确认 WMI 无响应（scripts\build_wmi_guard.ps1 的定义）
 REM 注意: 这里刻意不在 echo 里写半角括号。`echo xxx(!VAR!)yyy` 位于 ( ) 块内时，
 REM 那个 ')' 会被 cmd 当成块的结束符，剩下的内容被解析成非法语句并直接中断整个批处理
 REM （现象: ": was unexpected at this time."）。改用拼接好的变量输出。
@@ -266,7 +266,7 @@ echo              winmgmt 不响应时, 每条 flutter 命令都会静默挂死�
 echo              表现出来就是"构建卡住不动"。
 echo        处理: 1) 重启机器（最有效）
 echo              2) 或管理员执行: winmgmt /resetrepository
-echo              3) 单独复现: powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1
+echo              3) 单独复现: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_wmi_guard.ps1
 echo ============================================
 goto :eof
 
@@ -369,14 +369,14 @@ REM ---- 更新 pubspec.yaml：只替换 + 号后面的数字，不动版本名 
 REM  必须用 -File 调脚本，不能用 powershell -Command 一行式！
 REM  本机安全策略会拦截命令行里含正则 (\+)\d+ 的 -Command 调用：powershell 以退出码
 REM  786 静默退出，pubspec.yaml 不会被修改（历史版本号漂移就是这么来的）。
-if not exist "%~dp0bump_version.ps1" (
-    echo [错误] 缺少版本号更新脚本: %~dp0bump_version.ps1
+if not exist "%~dp0scripts\bump_version.ps1" (
+    echo [错误] 缺少版本号更新脚本: %~dp0scripts\bump_version.ps1
     echo        该脚本被误删过，可从 git 历史恢复:
-    echo          git checkout b71b426 -- bump_version.ps1
+    echo          git show b71b426:bump_version.ps1 ^> scripts\bump_version.ps1
     set "BUMP_FAILED=1"
     goto :eof
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bump_version.ps1" -BuildNumber %BN% -Path "pubspec.yaml"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bump_version.ps1" -BuildNumber %BN% -Path "pubspec.yaml"
 set "BUMP_EXIT=%ERRORLEVEL%"
 
 REM ---- 回读校验：pubspec.yaml 的 build number 必须真的等于 %BN% ----
@@ -428,13 +428,13 @@ echo       日志输出到: build\pub_get_codegen.log
 echo       [提示] 首次下载依赖可能需要 2-5 分钟，请耐心等待...
 echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，不再无限期挂起
 echo.
-REM 走 build_pub_get.ps1 而不是直接 call flutter：直接调用时一旦 dart 卡在启动阶段，
+REM 走 scripts\build_pub_get.ps1 而不是直接 call flutter：直接调用时一旦 dart 卡在启动阶段，
 REM 日志 0 字节、进程永不返回，构建就无声挂死。看门狗保证最坏 300 秒给结论。
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_codegen.log" -IdleTimeoutSec 300
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_codegen.log" -IdleTimeoutSec 300
 set PUB_EXIT=%ERRORLEVEL%
 if !PUB_EXIT! equ 124 (
     echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
-    echo        最可能原因: WMI 无响应 → 重启机器；诊断: build_wmi_guard.ps1
+    echo        最可能原因: WMI 无响应 → 重启机器；诊断: scripts\build_wmi_guard.ps1
     set BUILD_FAILED=1
     goto :eof
 )
@@ -566,8 +566,8 @@ REM ============================================
 REM  构建前内存检查：回收残留 JVM + 打印可用内存
 REM ============================================
 :reclaim_memory
-if not exist "%~dp0build_mem.ps1" (
-    echo [内存] 未找到 build_mem.ps1，跳过内存检查
+if not exist "%~dp0scripts\build_mem.ps1" (
+    echo [内存] 未找到 scripts\build_mem.ps1，跳过内存检查
     goto :eof
 )
 echo.
@@ -576,10 +576,10 @@ REM 为什么需要这步：R8 全模式压缩（app/build.gradle.kts 里 isMini
 REM JVM 申请的是"物理内存 + 页面文件"的提交内存，崩溃日志 android/hs_err_pid58400.log
 REM 里那句 "TotalPageFile size 54340M (AvailPageFile size 23M)" 就是提交内存被榨干，
 REM JVM 连 Chunk::new 的 1.5MB 都申请不到，Gradle 守护进程直接消失。
-REM build_mem.ps1 用 kernel32!GlobalMemoryStatusEx 取内存（本机 WMI/jps/Get-Counter
+REM scripts\build_mem.ps1 用 kernel32!GlobalMemoryStatusEx 取内存（本机 WMI/jps/Get-Counter
 REM 都会挂死，详见脚本头注释），-StopDaemons 只结束本机 JDK(%JAVA_HOME%) 启动、
 REM 且启动超过 120 秒的 java 进程，不会动 VS Code / Android Studio 的 JVM。
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_mem.ps1" -JavaHome "%JAVA_HOME%" -StopDaemons
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_mem.ps1" -JavaHome "%JAVA_HOME%" -StopDaemons
 set "MEM_EXIT=%ERRORLEVEL%"
 if not "%MEM_EXIT%"=="0" (
     echo [内存] 检查未完全成功 ^(exit=%MEM_EXIT%^)，继续构建...
@@ -723,9 +723,9 @@ set "REL_REPO_ARG="
 if defined RELEASE_SLUG set "REL_REPO_ARG=--repo !RELEASE_SLUG!"
 
 REM ---- SHA-256 校验和资产（与上游 Release 的 privi-<版本>.apk.sha256 同名）----
-REM 哈希逻辑放在 build_hash.ps1 里用 -File 调用，原因见该脚本头注释。
+REM 哈希逻辑放在 scripts\build_hash.ps1 里用 -File 调用，原因见该脚本头注释。
 set "APK_SHA="
-for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
+for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
 if not defined APK_SHA (
     echo       [跳过] 计算 SHA-256 失败；为保证产物可校验，本次不发布
     goto :eof
@@ -937,11 +937,11 @@ if !RESUME_STEP! lss 4 (
     echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，不再无限期挂起
     echo.
     set "STEP_NAME=[4/7] flutter pub get"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_build.log" -IdleTimeoutSec 300
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_build.log" -IdleTimeoutSec 300
     set PUB_EXIT=%ERRORLEVEL%
     if !PUB_EXIT! equ 124 (
         echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
-        echo        最可能原因: WMI 无响应 → 重启机器；诊断: build_wmi_guard.ps1
+        echo        最可能原因: WMI 无响应 → 重启机器；诊断: scripts\build_wmi_guard.ps1
         set BUILD_FAILED=1
         goto :end
     )
@@ -1045,7 +1045,7 @@ if "!WMI_FAILED!"=="1" (
     echo.
     echo  [根因] WMI 无响应 → 所有 flutter 命令都会静默挂死
     echo  [处理] 重启机器；或管理员执行 winmgmt /resetrepository
-    echo  [复现] powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1
+    echo  [复现] powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_wmi_guard.ps1
 )
 echo.
 echo 窗口将在 60 秒后自动关闭，或按任意键立即关闭...

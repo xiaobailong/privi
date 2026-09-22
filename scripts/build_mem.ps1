@@ -38,8 +38,8 @@
 #  is not killed by accident. With an empty -JavaHome nothing is killed at all.
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_mem.ps1 -JavaHome "D:\...\jdk-21"
-#    powershell -NoProfile -ExecutionPolicy Bypass -File build_mem.ps1 -JavaHome "D:\...\jdk-21" -StopDaemons
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_mem.ps1 -JavaHome "D:\...\jdk-21"
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_mem.ps1 -JavaHome "D:\...\jdk-21" -StopDaemons
 #
 #  OUTPUT (stdout; the last line is machine readable, callers parse it)
 #    MEM OK FreePhysMB=... FreeCommitMB=... CommitLimitMB=... Daemons=... Killed=...
@@ -154,7 +154,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($JavaHome)) { $JavaHome = $env:JAVA_HOME }
     if ([string]::IsNullOrWhiteSpace($LogFile)) {
         $root = $ProjectRoot
-        if ([string]::IsNullOrWhiteSpace($root)) { $root = $PSScriptRoot }
+        if ([string]::IsNullOrWhiteSpace($root) -and $PSScriptRoot) { $root = Split-Path -Parent $PSScriptRoot }   # scripts\ -> project root
         if ([string]::IsNullOrWhiteSpace($root)) { $root = (Get-Location).Path }
         $LogFile = Join-Path $root 'build\mem_report.log'
     }

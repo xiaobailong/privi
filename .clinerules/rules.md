@@ -3,3 +3,4 @@
 - 本仓库构建入口：build.bat（全流程）、build.bat gradle（仅 Gradle，快速迭代）、build.bat fast。日志：build/build_full.log、build/build_exit.log。
 - 改完必须自测：跑构建并把失败日志尾部贴出，不要只给结论。
 - 结束前必须给出 git diff 摘要；不要自动 git commit / git push。
+- 知识库（强制）：**开工前**先查 `memory-bank/`（协议 + 索引见 `memory-bank/README.md`），命中即复用条目结论、不重复排查；**结束前**必须按模板回填 `memory-bank/issues-solved.md`（已排查问题）/ `pitfalls.md`（踩坑）/ `decisions.md`（技术决策）并更新索引。完整硬性要求见 `.clinerules/memory-bank.md`。
