@@ -79,6 +79,9 @@ android {
 
 flutter {
     source = "../.."
+    // gen_snapshot OOM 缓解：跳过 strip 阶段大幅降低 AOT 编译峰值内存。
+    // APK 体积增加约 1-3 MB，但比构建崩溃好得多。
+    extraGenSnapshotOptions.add("--no-strip")
 }
 
 dependencies {
