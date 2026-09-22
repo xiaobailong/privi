@@ -1,7 +1,7 @@
 ﻿name: privi
 description: 密册 — personal on-device Android media vault.
 publish_to: "none"
-version: 1.0.30+53
+version: 1.0.30+55
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
