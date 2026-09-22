@@ -169,6 +169,7 @@ build.bat clean     # 清理所有构建产物
 ├── assets/branding/      # 应用图标
 ├── drift_schemas/        # 数据库迁移 Schema
 ├── scripts/              # 构建辅助脚本（PowerShell：哈希 / 内存 / pub get 看门狗 / WMI 守卫 / 版本号）
+├── tmp/                  # 本地临时目录（Cline 工作产物，gitignored、可整目录删除；约定见 .clinerules/tmp-files.md）
 ├── memory-bank/          # 跨会话知识库：已排查问题 / 踩坑记录 / 技术决策（见 memory-bank/README.md）
 └── pubspec.yaml
 ```

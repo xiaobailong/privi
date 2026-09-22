@@ -4,3 +4,4 @@
 - 改完必须自测：跑构建并把失败日志尾部贴出，不要只给结论。
 - 结束前必须给出 git diff 摘要；不要自动 git commit / git push。
 - 知识库（强制）：**开工前**先查 `memory-bank/`（协议 + 索引见 `memory-bank/README.md`），命中即复用条目结论、不重复排查；**结束前**必须按模板回填 `memory-bank/issues-solved.md`（已排查问题）/ `pitfalls.md`（踩坑）/ `decisions.md`（技术决策）并更新索引。完整硬性要求见 `.clinerules/memory-bank.md`。
+- 临时文件（强制）：任务过程中产生的**一切中间文件**（命令输出、临时脚本、状态/轮询文件、探针日志…）统一写在仓库根 `tmp\` 下，禁止散落在仓库根或其它目录；收尾前清理干净。完整规则见 `.clinerules/tmp-files.md`。

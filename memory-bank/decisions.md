@@ -180,6 +180,28 @@
 - 影响 / 约束: **不要再往 `flutter { }` 里加已删除的 DSL 属性**；升级 Flutter 后若键名变化，
   以 SDK 源码里的 `project.findProperty(...)` 为准；`android.newDsl=false` 与本条无关（本就设着）
 
+## ADR-019 Cline 工作临时产物统一放仓库根 `tmp\`
+- 日期: 2026-09-22 | 状态: 已采纳
+- 背景: 任务过程中的中间产物（命令输出重定向、临时 ps1/bat、状态/轮询文件、探针日志）此前散落在**仓库根**：
+  本次会话前后在根目录生成过 40+ 个文件（`_apply_*.ps1`、`_enc_*.ps1`、`ps1refs*.txt`、`git_*.txt`、
+  `st*.txt`、`cpu*.txt`、`push*.txt`…），每轮都要人工辨认+逐个删除；交接文档的收尾清单里也专门有一条
+  「删掉仓库根目录的一次性产物」（`PIT-022`）。`git status` 噪声大，且存在误删业务文件的风险
+- 决策:
+  ① 规则写入 `.clinerules/tmp-files.md`，并在 `.clinerules/rules.md` 加一条强制引用；
+  ② 一切中间文件写 `tmp\`（相对路径 `tmp\x.txt`，绝对路径 `D:\WorkSpace\test\privi\tmp\x.txt`），
+  **禁止**散落在仓库根 / `lib\` / `android\` / `scripts\` / `docs\` / `memory-bank\`；
+  ③ `.gitignore` 加 `/tmp/`（整目录忽略、不入库，可放心当垃圾桶）；
+  ④ `clean.bat` 与 `build.bat clean` 都增加「整目录删除 `tmp\`」的清理步骤
+- 理由: 集中目录 ⇒ `git status` 只看真实改动、清理是一条命令、不会误删业务文件；
+  且 `tmp\` 与 `build\`（同样是可丢弃产物目录）语义一致，符合本仓库既有习惯
+- 备选与为何不选: ①继续放根目录（就是现在的问题）；②放 `build\`（`flutter clean` 会删、且会被误当构建产物，
+  见 `PIT-017`）；③放系统临时目录（跨会话找不到、也无法随仓库一起清理）；④放 `docs\`（是"留存文档"的语义）
+- 影响 / 约束:
+  - 规范**例外**（不是临时文件，不要往 `tmp\` 塞）：构建脚本自身日志 → `build\`；知识库 → `memory-bank\`；
+    交接文档 → `docs\HANDOFF-*.md`；长期复用的脚本 → `scripts\`（新增脚本要同步 `build.bat` 路径，见 `ISSUE-011`）
+  - 任务收尾必须清空 `tmp\`，并在回复里说明是否已清空
+  - 验证方式：`git check-ignore -v tmp\x.txt` 命中 `.gitignore:/tmp/`；`git status` 不应出现 `tmp\` 内文件
+
 ## ADR-016 AGP 9.1.0 / Gradle 9.3.1 / Kotlin 2.4.0 版本组合与 `newDsl` 迁移
 - 日期: 2026-09-22 | 状态: **已结案**（2026-09-22；版本组合保持不变，只改配置点，见 `ADR-018`）
 - 背景: `android/settings.gradle.kts` 固定 AGP 9.1.0 + Kotlin 2.4.0，
@@ -210,3 +232,34 @@
   不要裸读 `settings.playerEngine`（`player_screen.dart` 里已留注释提示）；
   重试路径必须带请求序号校验；错误文案目前与 `PlayerScreen` 一致用英文
   （l10n 暂无对应 key，属已知欠账，改动 l10n 需要同步 `app_localizations.dart`）
+
+## ADR-020 VLC 回调一律"按当前这一轮播放"做身份校验；libvlc 线程异常就地吞；崩溃留痕
+- 日期: 2026-09-22 | 状态: 已采纳
+- 背景: `ISSUE-015` —— 快速切片时偶现**进程级崩溃**（日志里上一段停在 `onPlaying`，下一段就是新 session，
+  中间零错误行）。定位到 `VlcPlayerHandler` 把 libvlc 事件/布局回调 `mainHandler.post` 到主线程时，
+  lambda 捕获了 `MediaPlayer mp`，而 `release()` 之后**已入队的回调仍会执行**并读
+  `mp.length` / `mp.time` / `mp.isPlaying` —— 这三个是 native 方法，在已释放的 native 句柄上做 JNI 调用
+- 决策:
+  ① 所有跨线程回调（libvlc 事件线程 / vout 线程 → 主线程）**必须**带身份校验
+     `if (mediaPlayer !== mp) return@post`，与既有 `probeVideoSizeAsync` 的写法统一；
+     `onMediaPlayerEvent()` 入口再兜一层，任何新增调用点都不会绕过；
+  ② 回调体（尤其跑在 libvlc 事件线程上的）整段 `try/catch`：那里异常逃出去 = 进程级崩溃；
+  ③ `resetPlayer()` 在 `stop()` 之后显式 `setEventListener(null)`（libvlc 的既定 detach 用法，javap 已确认），
+     压缩"入队即过期"的回调数量；
+  ④ 共享 `LibVLC` 的释放必须在 IO 线程池收尾之后（`ioExecutor.shutdown()` + `awaitTermination(1s)`），
+     因为后台 `media.parse()` 用的是同一个 native 实例；
+  ⑤ Java/Kotlin 未捕获异常统一落盘到 `Download/密册/logs/密册_crash_<日期>.txt`
+     （`Thread.setDefaultUncaughtExceptionHandler`，保留原 handler 不改变崩溃行为）
+- 理由: 「偶现崩溃」的排查成本远高于防护成本；而且这类崩溃**没有 Dart 日志**，没有留痕就只能靠猜。
+  身份校验是零成本的（一次引用比较），不会改变任何正常路径的行为
+- 备选与为何不选: ①把回调都改成 `Handler.removeCallbacksAndMessages(null)` 清理
+  （resetPlayer 时清队列确实能覆盖本场景，但粒度太粗、会误删其它消息）；
+  ②改成在 `release()` 之前 sleep 等回调排空（时序赌博，慢机器上照样崩）；
+  ③让 Dart 侧"别切那么快"（治不了偶发，且用户体验倒挂）
+- 影响 / 约束:
+  - **新增任何 libvlc/ExoPlayer 回调都必须带"当前这一轮播放"的身份校验**，别直接读 native 字段；
+  - 崩溃兜底只覆盖 Java/Kotlin 层：**native SIGSEGV 只进 logcat/tombstone**，
+    下次若 `密册_crash_*.txt` 没有新增、但日志里又出现"新 session + 上一段无错误行"，
+    说明是 native 崩溃，需要连电脑取 logcat（`adb logcat -b crash`）
+  - 崩溃日志文件名是 `密册_crash_<日期>.txt`，与 Dart 的 `密册_log_<日期>.txt` 分开放，
+    避免两边同时写同一文件

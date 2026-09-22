@@ -82,6 +82,14 @@ if exist "*.aab" (
     echo       无 aab 文件，跳过。
 )
 
+echo       清理 Cline 临时目录 tmp...
+if exist "tmp" (
+    rmdir /s /q "tmp" 2>nul
+    echo       已清空 tmp 目录（Cline 工作产物，约定见 .clinerules/tmp-files.md）。
+) else (
+    echo       tmp 目录不存在，跳过。
+)
+
 echo.
 echo ============================================
 echo  清理完成！

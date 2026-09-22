@@ -19,6 +19,14 @@
   （本次实现见 git 历史里的临时校验脚本；`scripts\` 下 7 个 ps1 全部 `enc=BOM CRLF=...`，`bareLF=0`）
 - 反例: 用编辑器直接"另存为 UTF-8"（多数编辑器默认无 BOM）
 - 自检: `enc=BOM` + `bareLF=0` 才算合格
+- 复核 2026-09-22（又踩一次，症状更隐蔽）: 临时脚本 `tmp\grep_log.ps1` 里写了中文路径
+  `$root\tmp\密册_log_2026-09-22.txt`，而该 ps1 是**编辑器写出的无 BOM UTF-8**
+  ⇒ PowerShell 5.1 按 GBK 解码，路径变乱码 ⇒ 脚本一声不响，`Get-Content` 返回
+  **0 行**，输出文件里只有 `TOTAL_LINES=0`，看着像"日志文件是空文件"。
+  正确做法：**无 BOM 的 ps1 里不要出现中文路径/中文字面量**，改用通配符定位：
+  `$src = (Get-ChildItem -Path "$root\tmp" -Filter '*_log_2026-09-22.txt' | Select-Object -First 1).FullName`
+  （`read_files` 传中文绝对路径不受影响，那是 Cline 侧按 UTF-8 处理）
+- 新增自检: 脚本输出"空/0 行/0 命中"时，先确认脚本自身编码是否 BOM；再确认里面有没有中文字面量
 
 ## PIT-003 PowerShell 嵌套数组会被展平 ⇒ `@(@('a','b'))` 里 `$pair[0]` 取出的是**字符**
 - 触发条件: 写"成对参数"表，如 `$pairs = @(@('old','new'), @('old2','new2'))` 再 `foreach ($p in $pairs) { $p[0] / $p[1] }`
@@ -215,3 +223,24 @@
   用 `read_files` 读到空就断定命令失败
 - 自检: 状态文件 mtime 是否在推进；目标任务进程（`java.exe`/`dart.exe`）是否还在
 - 首次记录: 2026-09-22（本次全程用它轮询 `build.bat` 进度）
+
+## PIT-022 临时产物散落在仓库根 ⇒ `git status` 噪声 + 要人工辨认哪些能删
+- 触发条件: 把命令输出、临时脚本、轮询/状态文件直接写在仓库根（如 `> out.txt`、`> st3.txt`）
+- 错误现象: 仓库根迅速堆满一次性文件 —— 本次会话前后累积 40+ 个
+  （`_apply_script_paths.ps1`、`_enc_*.ps1`、`_cpu.ps1`、`_tail.ps1`、`ps1refs*.txt`、`git_*.txt`、
+  `diff_*.txt`、`st3.txt`…`st27.txt`、`cpu*.txt`、`push*.txt`、`tmp_recon.txt`），
+  `git status` 里混着 `??` 噪声，收尾必须逐个 `del`，还有误删业务文件的风险。
+  上一轮交接文档的收尾清单里就专门列了一条「删掉仓库根目录的一次性产物」
+- 正确做法: 一切中间文件写进仓库根 `tmp\`（约定见 `.clinerules/tmp-files.md` / `ADR-019`）：
+
+  ```bat
+  mkdir tmp 2>nul
+  git status --porcelain -M > tmp\status.txt 2>&1
+  powershell -NoProfile -ExecutionPolicy Bypass -File tmp\probe.ps1 > tmp\probe_out.txt 2>&1
+  ```
+
+  收尾清理：`rmdir /s /q tmp`（或直接跑 `clean.bat` / `build.bat clean`，二者都会整目录清掉 `tmp\`）
+- 反例: 把 `> out.txt`、`> push5.txt` 写在仓库根；把临时 ps1 写在根目录"用完删"（忘了删就留下；
+  重名还会覆盖上一次的排查证据）
+- 自检: `git status --porcelain` 里除真实改动外**不应有 `??` 项**；`dir /b tmp` 只应有本次要用的文件
+- 首次记录: 2026-09-22（本次任务落地 `tmp\` 规范）

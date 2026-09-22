@@ -493,6 +493,14 @@ if exist "privi-*.apk.sha256" del /q "privi-*.apk.sha256" 2>nul
 if exist "*.aab" del /q "*.aab" 2>nul
 rmdir /s /q ".dart_tool" 2>nul
 rmdir /s /q "build" 2>nul
+REM Cline 工作临时目录（约定见 .clinerules/tmp-files.md）：整目录清掉，不留残留。
+REM 注意：这是"一次性产物"目录，与上面的 build\ 一样属于可无脑删的范围。
+if exist "tmp" (
+    rmdir /s /q "tmp" 2>nul
+    echo       已清空 tmp 目录（Cline 临时产物）。
+) else (
+    echo       tmp 目录不存在，跳过。
+)
 echo       清理完成。
 del "%STATE_FILE%" 2>nul
 goto :end
