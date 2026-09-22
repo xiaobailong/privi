@@ -154,23 +154,32 @@
 - 反例 / 易误判: 只改了 `-File` 调用行，忘了 `if not exist` 的探测行；只搬文件不 grep
 - 相关文件: `build.bat`、`scripts\*.ps1`（7 个）
 
-## ISSUE-012 【未修复·待决】AGP 9.1.0 新 DSL 与 `extraGenSnapshotOptions` 不兼容
-- 状态: 未修复（与脚本搬迁无关，2026-09-22 复现）
+## ISSUE-012 【已修复】`flutter { extraGenSnapshotOptions }` 在 Flutter 3.47 已被移除（AGP 9.1.0 下报 Unresolved reference）
+- 状态: 已修复（2026-09-22；与脚本搬迁无关，曾连续两次复现）
 - 症状 / 现场: `flutter build apk --release` →
   `e: file:///.../android/app/build.gradle.kts:84:5: Unresolved reference 'extraGenSnapshotOptions'.`；
   末尾 `BUILD FAILED in 40s` / `Gradle task assembleRelease failed with exit code 1`
 - 复发判据: 日志出现 `Unresolved reference 'extraGenSnapshotOptions'` 就是它
   （**不是** WMI 挂死、**不是**内存不足、**不是**依赖缺失）
-- 根因: `android/settings.gradle.kts` 固定 `com.android.application 9.1.0` + Gradle `9.3.1`
-  （AGP 9 默认 `android.newDsl=true`），而 `android/app/build.gradle.kts` 里
-  `flutter { extraGenSnapshotOptions.add("--no-strip") }` 在新 DSL 下解析不到；
-  同时 `android { }` 块被标记 deprecated（AGP 10 会移除）
+- 根因: **Flutter 3.47.4 的 `flutter {}` 扩展里已经没有 `extraGenSnapshotOptions` 属性**（DSL 已被上游移除）。
+  该值现在改为读 **Gradle project property**：`flutter_tools/gradle/FlutterPlugin.kt` 用
+  `project.findProperty("extra-gen-snapshot-options")` 取值，再经 `tasks/BaseFlutterTaskHelper.kt`
+  以 `--ExtraGenSnapshotOptions=<值>` 传给 flutter tool。
+  本仓库 `android/gradle.properties` **早就设了** `android.newDsl=false`，所以这不是 newDsl 开关的问题；
+  日志里 `android { }` 那两行 deprecation 只是伴随信息，不是失败原因
 - 证据: `build\build_full.log` 两次构建输出完全相同（2026-09-22 16:35 与 16:46），
   均为第 33/47/58 行那三条；`build\build_exit.log` = `BUILD_FAILED=1 WMI_FAILED=0`；第二次 `BUILD FAILED in 29s`
 - 复核记录: 2026-09-22 16:46 重跑 `build.bat gradle` → 同一条 `Unresolved reference 'extraGenSnapshotOptions'`
   （证明与 `scripts\` 搬迁、`memory-bank/` 改动**无关**；前置环节 WMI 自检 rc=0、MEM OK 均正常）
-- 下一步（二选一）: ①回退 AGP / Kotlin / Gradle 组合到该属性可用；
-  ②按 AGP 9 新 DSL 改写该 `flutter {}` 块（`--no-strip` 的诉求见 `ISSUE-004` / `ADR-009`，是为了降 gen_snapshot 峰值内存）
+- 修法（2026-09-22）: ①删掉 `android/app/build.gradle.kts` 里那行 `extraGenSnapshotOptions.add("--no-strip")`
+  （保留 `flutter { source = "../.." }`，并在原处留注释说明别再写回来）；
+  ②在 `android/gradle.properties` 加 `extra-gen-snapshot-options=--no-strip`，
+  保住 `ADR-009` 的"降 AOT 峰值内存"诉求（`--no-strip` 仍是有效选项，`gen_snapshot --help` 里列着 `[--strip]`）
+- 复发判据（补）: `findstr /c:"extraGenSnapshotOptions" android\app\build.gradle.kts` **必须无输出**；
+  `findstr /c:"extra-gen-snapshot-options" android\gradle.properties` **必须有 1 行**。
+  注意 `build.bat :config_gradle_proxy` 只过滤 `systemProp.*.proxy` 行，不会吞掉该键
+- 验证: <构建结果待填>
+- 决策: 见 `ADR-018`（`ADR-016` 据此结案）
 - 相关文件: `android/settings.gradle.kts`、`android/app/build.gradle.kts:80-85`、
   `android/gradle/wrapper/gradle-wrapper.properties`
 

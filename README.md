@@ -41,7 +41,8 @@
 
 ### 播放器
 
-- 基于 Android Media3 ExoPlayer 的原生播放，支持硬件加速
+- 基于 Android Media3 ExoPlayer 的原生播放，支持硬件加速；可在设置切换 **libVLC**（FFmpeg，格式更全）
+- **引擎自动回退**：某文件在当前引擎 15 秒内没画面时，自动换回默认引擎重试一次；仍失败就给出明确错误，不再无限转圈
 - 无缝连续播放（顺序 / 按播放次数加权随机）
 - 外部播放器调用（如 VLC）
 - 变速播放 0.5x–2x，可配快进快退步长、静音、循环
@@ -121,6 +122,7 @@ build.bat fast      # 快速构建（跳过代码生成）
 build.bat gradle    # 仅 Gradle 编译
 build.bat codegen   # 仅代码生成
 build.bat release   # 只发布（不重新编译）
+build.bat norelease # 构建但不发布 Release（等价于 set SKIP_RELEASE=1）
 build.bat clean     # 清理所有构建产物
 ```
 
@@ -129,6 +131,29 @@ build.bat clean     # 清理所有构建产物
 首次使用需修改 `build.bat` 顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径。
 
 发布 Release 依赖 `gh` CLI（`winget install --id GitHub.cli`），未安装或未登录时自动跳过。
+
+### 构建排查
+
+构建脚本内置几道防「卡死 / 静默失败」的保险：WMI 自检（Dart 读 OS 版本）、`pub get` 看门狗、
+编译前内存回收、产物与哈希校验。过程日志 `build/build_full.log`，结论 `build/build_exit.log`
+（看 `BUILD_FAILED=` / `WMI_FAILED=`）。
+
+**已知问题、复发判据与排查方法集中在 [memory-bank/](memory-bank/README.md)**，遇到问题先查那里，避免重复排查：
+
+| 现象 | 条目 |
+| --- | --- |
+| 构建「卡住不动」、日志 0 字节、进程杀不掉 | `ISSUE-001`（本机 WMI 无响应 → 所有 flutter 命令静默挂死） |
+| Gradle 报 `Unresolved reference 'extraGenSnapshotOptions'` | `ISSUE-012` / `ADR-018`（Flutter 3.47 已移除该 DSL，改用 Gradle project property） |
+| `pubspec.yaml` 版本号不递增 | `ISSUE-005` |
+| Gradle 守护进程消失 / `OutOfMemoryError (arena.cpp)` | `ISSUE-004`（编译前内存回收） |
+
+本机实测可用的工具链组合（改 `android/settings.gradle.kts` / wrapper 前先看 `memory-bank/decisions.md`）：
+
+| 组件 | 版本 |
+| --- | --- |
+| Flutter / Dart | 3.47.4 / 3.13.3（`flutter: ">=3.38.0"`） |
+| JDK | 21（`build.bat` 顶部路径；Gradle 内 `sourceCompatibility = 17`） |
+| AGP / Gradle | 9.1.0 / 9.3.1（`android/gradle.properties` 里 `android.newDsl=false`） |
 
 ### 项目结构
 
@@ -143,6 +168,7 @@ build.bat clean     # 清理所有构建产物
 │   └── presentation/     # UI 页面和组件
 ├── assets/branding/      # 应用图标
 ├── drift_schemas/        # 数据库迁移 Schema
+├── scripts/              # 构建辅助脚本（PowerShell：哈希 / 内存 / pub get 看门狗 / WMI 守卫 / 版本号）
 ├── memory-bank/          # 跨会话知识库：已排查问题 / 踩坑记录 / 技术决策（见 memory-bank/README.md）
 └── pubspec.yaml
 ```

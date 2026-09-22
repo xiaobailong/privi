@@ -160,8 +160,24 @@
 - 影响 / 约束: **任何任务结束都要更新 memory-bank**；发现老条目与现场矛盾时更新原条目而不是新建；
   不写 token/密钥；`docs/` 仍作为过程记录保留
 
-## ADR-016 待决：AGP 9.1.0 / Gradle 9.3.1 / Kotlin 2.4.0 版本组合与 `newDsl` 迁移
-- 日期: 2026-09-22 | 状态: **待决**（`ISSUE-012` 阻塞 release 构建）
+## ADR-018 Flutter 3.47 移除 `extraGenSnapshotOptions` DSL ⇒ 改用 Gradle project property
+- 日期: 2026-09-22 | 状态: 已采纳
+- 背景: `ISSUE-012` —— `flutter build apk --release` 在 `android/app/build.gradle.kts` 的
+  `flutter { extraGenSnapshotOptions.add("--no-strip") }` 处报 `Unresolved reference`，release 构建恒失败；
+  而 `--no-strip` 正是 `ADR-009` 为压 AOT 峰值内存加的（`ISSUE-004` 的 OOM 缓解）
+- 决策: ①删掉该 DSL 调用（保留 `flutter { source = "../.." }`，并在原处留注释禁止写回）；
+  ②把 `--no-strip` 配置到 `android/gradle.properties`：`extra-gen-snapshot-options=--no-strip`
+- 理由: Flutter 3.47 起 flutter-gradle-plugin 改为
+  `project.findProperty("extra-gen-snapshot-options")`（`FlutterPlugin.kt:640`）取值，
+  再经 `BaseFlutterTaskHelper.kt:140` 以 `--ExtraGenSnapshotOptions=` 传给 flutter tool；
+  gradle.properties 的键本身就是 project property ⇒ 改动最小、不动 AGP/Gradle 版本、与原来行为一致
+- 备选与为何不选: ①回退 AGP/Kotlin/Gradle 组合（改动面大、要重下依赖，且 AGP 8 与 Gradle 9 不兼容）；
+  ②改从命令行传 `-P`（`build.bat` 里稳定注入很脆）；③干脆不要 `--no-strip`（会退回 `ISSUE-004` 的 OOM 风险）
+- 影响 / 约束: **不要再往 `flutter { }` 里加已删除的 DSL 属性**；升级 Flutter 后若键名变化，
+  以 SDK 源码里的 `project.findProperty(...)` 为准；`android.newDsl=false` 与本条无关（本就设着）
+
+## ADR-016 AGP 9.1.0 / Gradle 9.3.1 / Kotlin 2.4.0 版本组合与 `newDsl` 迁移
+- 日期: 2026-09-22 | 状态: **已结案**（2026-09-22；版本组合保持不变，只改配置点，见 `ADR-018`）
 - 背景: `android/settings.gradle.kts` 固定 AGP 9.1.0 + Kotlin 2.4.0，
   `gradle-wrapper.properties` 指向 Gradle 9.3.1；AGP 9 默认 `android.newDsl=true`，
   `android { }` 旧 DSL 被废弃（AGP 10 移除），`flutter { extraGenSnapshotOptions }` 解析失败

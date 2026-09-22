@@ -48,7 +48,7 @@
 | `scripts\build_*.ps1` 全部报「未找到 / 跳过」 | `ISSUE-011`（路径不同步） |
 | `pubspec.yaml` 版本号没变、`.BUILD_NUM` 却涨了 | `ISSUE-005` |
 | Gradle 守护进程消失 / `hs_err_pid*.log` / `OutOfMemoryError (arena.cpp)` | `ISSUE-004` |
-| Gradle：`Unresolved reference 'extraGenSnapshotOptions'` | `ISSUE-012`（未修复，待决） |
+| Gradle：`Unresolved reference 'extraGenSnapshotOptions'` | `ISSUE-012`（已修复）、`ADR-018` |
 | 构建失败但根目录还留着旧 APK，易被当成成功 | `ISSUE-007` |
 | VLC 引擎黑屏/纯色，ExoPlayer 引擎正常 | `ISSUE-008` |
 | 视频点开「秒完」、自动跳到下一项 | `ISSUE-009` |
