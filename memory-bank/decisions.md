@@ -68,6 +68,10 @@
 - 备选与为何不选: WMI / jps（挂死）；无条件杀 `java.exe`（会误伤编辑器）
 - 影响 / 约束: `MinFreeCommitMB=1500` 只是**警告**阈值，不阻塞构建；
   换 JDK 目录后 `-JavaHome` 传参（`build.bat` 已传 `%JAVA_HOME%`）
+- 2026-09-22 调整（复现见 `ISSUE-004` 的复发记录）: 1500MB 阈值不足以预警「R8 中途膨胀」
+  —— 本次开局 `FreeCommitMB=6289` 仍崩；同时把内存预算收紧：
+  `org.gradle.jvmargs` `-Xmx4G`→`-Xmx3G`、`kotlin.daemon.jvmargs` `-Xmx2G`→`-Xmx1G`，
+  并在构建前用 `-StopDaemons` 回收残留 Kotlin 守护进程（本次回收 580MB）
 
 ## ADR-007 Release 发布用 `gh` CLI；前置条件不满足一律「跳过」，不算构建失败
 - 日期: 2026-09-22 | 状态: 已采纳

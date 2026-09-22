@@ -60,6 +60,28 @@
 - 反例 / 易误判: 以为是 `-Xmx` 太小；用 WMI / `jps` / `Get-Counter` 查内存（本机会挂死，见 `PIT-011`）
 - 相关文件: `scripts\build_mem.ps1`、`build.bat`(`:reclaim_memory`)、`android/app/build.gradle.kts`(`isMinifyEnabled`)
 
+### 复发记录 2026-09-22 17:36（R8 阶段，当时 `-Xmx4G`）
+- 现场: `build.bat gradle` 已越过 Kotlin DSL 编译（`ISSUE-012` 已修）后，在 `assembleRelease` 第 **303 秒**崩溃：
+  `Gradle build daemon disappeared unexpectedly` + `JVM crash log found: android/hs_err_pid51552.log`
+- 崩溃日志原文（`android/hs_err_pid51552.log:1-33`）：
+  ```
+  # There is insufficient memory for the Java Runtime Environment to continue.
+  # Native memory allocation (mmap) failed to map 765460480 bytes for G1 virtual space
+  #  Out of Memory Error (os_windows.cpp:3604), pid=51552
+  # Time: Tue Sep 22 17:36:47 2026 elapsed time: 303.714730 seconds
+  # Host: AMD Ryzen 7 8745H ... 16 cores, 27G, Windows 11
+  ```
+  ⇒ 与 09-21 的 `arena.cpp` 是**同一根因的两种表现**：这次卡在「把堆扩到 `-Xmx` 上限」的预留上
+- **重要反例**: 本次构建前 `MEM OK ... FreeCommitMB=6289`（远高于 1500 阈值）**仍然崩了** ⇒
+  该阈值只能抓"一开始就很紧张"，抓不到"R8 中途膨胀"；**不要把 `MEM OK` 当安全保证**
+- 缓解（本次采用，`ADR-006` 已更新）:
+  ① 构建前 `scripts\build_mem.ps1 -StopDaemons` 回收残留 Kotlin 守护进程（本次释放 580MB，commit free 5549→6534MB）；
+  ② `org.gradle.jvmargs` 的 `-Xmx` 4G→**3G**；③ `kotlin.daemon.jvmargs` 的 `-Xmx` 2G→**1G**
+- 复发判据（补）: 崩溃日志出现 `for G1 virtual space` / `os_windows.cpp:3604` ⇒ 同一根因；
+  只要看到 `daemon has disappeared`，先按本节处置，别去怀疑业务代码
+- 处置后验证: **2026-09-22 17:42:30** `build.bat gradle` → `BUILD_FAILED=0`，
+  耗时 252s 走完 `assembleRelease` 并产出 `app-release.apk`（同一次会话里 `-Xmx4G` 那次 303s 崩溃）
+
 ## ISSUE-005 版本号漂移：`.BUILD_NUM` 涨了但 `pubspec.yaml` 没变
 - 状态: 已修复
 - 症状 / 现场: 打出来的 APK versionCode 是旧的；历史上多次「版本号漂移」
@@ -178,7 +200,8 @@
 - 复发判据（补）: `findstr /c:"extraGenSnapshotOptions" android\app\build.gradle.kts` **必须无输出**；
   `findstr /c:"extra-gen-snapshot-options" android\gradle.properties` **必须有 1 行**。
   注意 `build.bat :config_gradle_proxy` 只过滤 `systemProp.*.proxy` 行，不会吞掉该键
-- 验证: <构建结果待填>
+- 验证: **2026-09-22 17:42:30** 重跑 `build.bat gradle` → `BUILD_FAILED=0`，
+  产出 `build\app\outputs\flutter-apk\app-release.apk`（+ `.sha1`）；`assembleRelease` 全程走完，DSL 报错不再出现
 - 决策: 见 `ADR-018`（`ADR-016` 据此结案）
 - 相关文件: `android/settings.gradle.kts`、`android/app/build.gradle.kts:80-85`、
   `android/gradle/wrapper/gradle-wrapper.properties`
