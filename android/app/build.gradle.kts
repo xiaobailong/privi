@@ -27,6 +27,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Strip x86/x86_64 .so files from AAR dependencies.
+    // ndk.abiFilters only covers NDK builds; this removes pre-built libs.
+    packaging {
+        jniLibs {
+            excludes += setOf("**/x86/**", "**/x86_64/**")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.privi.app"
         // Product baseline documented in the architecture and install guides.
@@ -35,11 +43,6 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // Drop x86/x86_64 native libs for smaller APK.
-        // Real Android devices are ARM-only since API 26+.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
     }
 
     signingConfigs {
