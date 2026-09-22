@@ -286,6 +286,9 @@
   - 备份分支名固定 `backup_YYYYMMDD`，**不要删**（除非用户明确说）；同名冲突时先确认是不是同一天的快照
   - `--ff-only` 失败（说明 `main` 上有 `dev` 没有的提交）时**必须停下来**看 `git log --oneline main..dev` /
     `dev..main`，人工决定是合并还是回退，**不要**改成普通 `git merge` 蒙过去
+  - 构建会改 `pubspec.yaml` 的 `version:` ⇒ 绿构建之后**先在当前分支提交 bump 再推送**，
+    然后把另一个分支**快进过来**（`git checkout dev && git merge --ff-only main && git push origin dev`），
+    让 `main`/`dev` 回到同一提交 —— 否则 bump 提交会让 `main` 领先 `dev`、下轮 `--ff-only` 直接失败
   - 本轮记录: `backup_20260922` = `8903ef1`；`main` 由 `8903ef1` 快进到 `4c280c2`（35 files, +3320/−122），
     随后未加修改地推送（`8903ef1..4c280c2  main -> main`）—— 因为 `ISSUE-001`（WMI 挂死）导致
     `main` 上的构建没跑起来，所以这次没有版本号 bump 提交
