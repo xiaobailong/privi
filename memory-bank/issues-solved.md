@@ -342,4 +342,15 @@
 - 相关文件: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`、
   `android/app/src/main/kotlin/com/privi/app/MainActivity.kt`
 - 决策: 见 `ADR-020`
-- 首次记录: 2026-09-22 ／ 验证: 见"最近复核"（完整构建 + 真机日志）
+- 首次记录: 2026-09-22 ／ 验证（本次）:
+  ① **Kotlin 编译级验证已通过**：19:01 那次 `build.bat norelease` 里 `assembleRelease` 已经走到 R8
+     （`build\app\outputs\mapping\release\{usage,seeds}.txt` 已写出）⇒ `:app:compileReleaseKotlin` 成功，
+     即本次改动**语法/API 层面无问题**（`return@post` / `return@OnNewVideoLayoutListener` /
+     `mp?.setEventListener(null)` / `Thread.setDefaultUncaughtExceptionHandler` 全部编译通过）
+  ② **完整构建（装 APK）尚未跑通**，被两条既有环境问题挡住，与本次改动无关：
+     `ISSUE-004`（R8 第 295.6 秒 `arena.cpp` OOM，`hs_err_pid20124.log`）+
+     `ISSUE-001`（重试时 WMI 守卫 rc=5，构建 22 秒即终止）
+  ③ 待办验证: 机器重启（或 `winmgmt /resetrepository`）后跑
+     `build.bat norelease`（或完整 `build.bat`）→ 期望 `BUILD_FAILED=0` + 产出
+     `build\app\outputs\flutter-apk\app-release.apk`；装到手机上再按"快速连点下一集"复现路径回归，
+     崩溃不再出现、且 `Download/密册/logs/密册_crash_*.txt` 始终不生成即为通过

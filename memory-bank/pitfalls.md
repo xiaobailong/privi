@@ -177,6 +177,15 @@
 - 实测（2026-09-22）: 构建 16:46:12 已结束并写进 `build\build_exit.log`，
   但同一路径 `build\build_full.log` 连续读 4 次仍只显示到第 31 行（旧内容）；
   只有再等一段时间/换名读才看到尾部 → **不要据此判断"构建卡住了"**（对比 `ISSUE-002` 的 0 字节才是真卡死）
+- 实测追加（2026-09-22 19:0x，本轮三次踩到同一件事）:
+  ① **`scripts\build_wmi_guard.ps1` 的输出文件停在 0 字节，不代表它没跑** ——
+     只要我发下一条终端命令，前一条（含守卫）就被回收，输出永远写不出来；
+     正确做法是把守卫/长任务放**独立窗口**（`start "" /min cmd /c "..." > tmp\x.txt 2>&1`），
+     之后只用 `read_files tmp\x.txt` 看结果（不再动终端）；
+  ② `build\build_full.log` 在 `dir` 里显示 **0 字节**、1 秒后的 `copy` 却有内容 ⇒ 同一条命令链里
+     "先 dir 再 copy"会看到两个不同结果，别用 dir 的大小下结论；
+  ③ 判断构建是否还在跑，用 `tasklist /fi "imagename eq java.exe"`（Gradle JVM 内存会持续上涨）
+     或看 `build\app\outputs\mapping\release\*` 是否已被写出，比读日志可靠
 - 实测追加（2026-09-22 17:54）: `read_files` 读 `push5.txt` 返回**空内容**，同时 `dir /tw` 显示它其实已有
   **333 字节**（里面正是 `Connection reset by ... port 22` + `ls-remote` 结果）⇒
   判断"命令没输出/文件没写"之前，先用 `dir /tw <文件>` 看 size/mtime
