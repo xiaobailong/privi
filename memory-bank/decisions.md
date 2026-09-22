@@ -263,3 +263,29 @@
     说明是 native 崩溃，需要连电脑取 logcat（`adb logcat -b crash`）
   - 崩溃日志文件名是 `密册_crash_<日期>.txt`，与 Dart 的 `密册_log_<日期>.txt` 分开放，
     避免两边同时写同一文件
+
+## ADR-021 发布流程：先给 `main` 打 `backup_YYYYMMDD` 快照，再用 `--ff-only` 把 `dev` 提升进 `main`
+- 日期: 2026-09-22 | 状态: 已采纳
+- 背景: 需要一条固定的"提测/发布"动作：留一份 `main` 的快照，再把 `dev` 的提升上去、在 `main` 上出包。
+  本轮实操：`dev` 领先 `main` **24 个提交**（含 `ISSUE-015` 的 VLC 崩溃修复），`main` 是 `dev` 的祖先
+- 决策:
+  ①提升**之前**先打快照：`git branch backup_YYYYMMDD main` + `git push -u origin backup_YYYYMMDD`
+  （日期取当天，如 `backup_20260922`；同名已存在就说明当天已打过，**不覆盖、直接复用**）；
+  ②`git checkout main` → `git merge --ff-only dev`（**只允许快进**）；
+  ③构建在 `main` 上跑（`build.bat norelease` 跑完整流程但不对外发 Release）；
+  ④版本号递增由构建脚本产生（`pubspec.yaml` 的 `version:`），**构建成功后再单独提交 bump**；
+  ⑤`git push origin main`，并确认 `git branch -vv` 里三个分支都与 origin 对齐
+- 理由: 备份分支给"合错了要回退"留一条 5 秒的退路（`git reset --hard backup_YYYYMMDD` + 强推即可，
+  比翻 reflog 靠谱）；`--ff-only` 保证 `main` 永远是 `dev` 历史的子集 ⇒ 线性历史、回滚点唯一、
+  不会出现"两个人各造一个 merge commit"的分叉
+- 备选与为何不选: ①`--no-ff` 合并提交（多一层无信息量的节点，回滚还要多退一步）；
+  ②打 tag 代替分支（tag 不能继续提交，且本节要的是"可对照/可回退的副本"）；
+  ③不备份直接合（回退只能靠 reflog）；④把构建出的 APK 一起入库（`.gitignore` 已有 `/privi-*.apk`，
+  APK 走 GitHub Release 分发，见 `ISSUE-006`/`ISSUE-007` 的历史决策）
+- 影响 / 约束:
+  - 备份分支名固定 `backup_YYYYMMDD`，**不要删**（除非用户明确说）；同名冲突时先确认是不是同一天的快照
+  - `--ff-only` 失败（说明 `main` 上有 `dev` 没有的提交）时**必须停下来**看 `git log --oneline main..dev` /
+    `dev..main`，人工决定是合并还是回退，**不要**改成普通 `git merge` 蒙过去
+  - 本轮记录: `backup_20260922` = `8903ef1`；`main` 由 `8903ef1` 快进到 `4c280c2`（35 files, +3320/−122），
+    随后未加修改地推送（`8903ef1..4c280c2  main -> main`）—— 因为 `ISSUE-001`（WMI 挂死）导致
+    `main` 上的构建没跑起来，所以这次没有版本号 bump 提交

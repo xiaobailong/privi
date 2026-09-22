@@ -233,6 +233,30 @@
 - 自检: 状态文件 mtime 是否在推进；目标任务进程（`java.exe`/`dart.exe`）是否还在
 - 首次记录: 2026-09-22（本次全程用它轮询 `build.bat` 进度）
 
+## PIT-023 上一轮 `build.bat` 的窗口没关 ⇒ 新构建**完全没跑**（tee 抢不到 `build\build_full.log`）
+- 触发条件: 构建失败后立刻再次 `build.bat`（尤其用 `start /min cmd /c "build.bat ..."` 启动的窗口，
+  它在失败后会停 60 秒"窗口将在 60 秒后自动关闭，或按任意键立即关闭"，期间**一直占着日志句柄**）
+- 错误现象: 新窗口里只有一堆 PowerShell 异常，**构建一行都没执行**：
+  ```
+  Exception calling ".ctor" with "3" argument(s): "The process cannot access the file
+  '...\build\build_full.log' because it is being used by another process."
+  ... you cannot call a method on a null-valued expression ...
+  ```
+  同时 `build\build_exit.log` 不更新、`build_full.log` mtime 还是上一轮的时间 ⇒
+  很容易误判成"构建又失败了"（其实**根本没启动**）
+- 正确做法:
+  ```bat
+  REM 1) 先确认真空：能删掉日志说明没有残留窗口持有它
+  del /q build\build_full.log 2>nul
+  if exist build\build_full.log (echo LOCKED: 还有旧窗口没关) else (echo OK: 可以开始)
+  REM 2) 还锁着就杀窗口（窗口名 = start 的第一个参数），或用 WINDOWTITLE 过滤
+  taskkill /f /fi "WINDOWTITLE eq privi_main_build"
+  ```
+- 反例（别这么写）: 构建失败后马上原地重跑，然后看 `build_exit.log` 的旧内容下结论
+- 自检: 新构建启动 10 秒内 `dir /tw build\build_full.log` 的 **mtime 必须是今天刚变的**；
+  `build_main_console*.txt` 里不能出现 `StreamWriter` / `being used by another process`
+- 首次记录: 2026-09-22（本轮 2 次重跑就是这样白跑的）
+
 ## PIT-022 临时产物散落在仓库根 ⇒ `git status` 噪声 + 要人工辨认哪些能删
 - 触发条件: 把命令输出、临时脚本、轮询/状态文件直接写在仓库根（如 `> out.txt`、`> st3.txt`）
 - 错误现象: 仓库根迅速堆满一次性文件 —— 本次会话前后累积 40+ 个

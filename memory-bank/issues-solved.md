@@ -37,6 +37,15 @@
 - 处置: 重启机器最有效；或管理员 `winmgmt /resetrepository`（本机未执行，属系统级变更）
 - 影响: WMI 挂死期间 `build.bat` 与 `build.bat gradle` **都跑不了**（后者内部也是 `flutter build apk`，`build.bat:848`），
   但 **git commit / push 不受影响**
+- 复发 2026-09-22 19:02→19:16（本轮，连续第 2 次爆发）: 从 19:02:47 起 **8 次以上**探测全部 `rc=5`，
+  **15 分钟未自愈**；期间两次真实构建（19:14:17 完整构建、19:16:18 在 `main` 上重跑）都在
+  **21~23 秒**内以 `[错误] WMI 无响应` 终止（`build_exit.log` = `BUILD_FAILED=1 WMI_FAILED=1 NEW_VER=` 为空）
+  ⇒ 同一台机器 **18:53 还是 `rc=0 OK: WMI 1286ms`**，说明这是"时好时坏、一旦挂了要等很久"的机器级问题
+- 环境补充（本轮实测）: 本会话 shell **有管理员权限**（`net session` 退出码 0）⇒ 需要时可直接执行
+  `net stop winmgmt /y` → `winmgmt /verifyrepository` → `winmgmt /resetrepository` → `net start winmgmt`
+  （**未执行**：属机器级变更、会影响其它依赖 WMI 的程序，等用户决定；首选仍是重启机器）
+- 结论: 遇到它**不要**去改构建脚本或怀疑代码 —— 先 `read_files` 看 `build\build_exit.log` 是否 `WMI_FAILED=1`，
+  是就停下等环境恢复
 
 ## ISSUE-002 pub get 无限期挂起，看不出是「慢」还是「死」
 - 状态: 已规避
