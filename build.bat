@@ -241,14 +241,9 @@ if %ERRORLEVEL% neq 0 (
 )
 echo        [Flutter 位置] %FLUTTER_HOME%
 
-REM Flutter --version 可能会触发 SDK 首次初始化（Building flutter tool...）
-echo        [Flutter 版本] 正在获取（首次运行可能需要下载 SDK 组件，请耐心等待）...
-for /f "tokens=2" %%v in ('flutter --version 2^>^&1 ^| findstr /r "^Flutter"') do (
-    echo        Flutter: %%v
-)
-if %ERRORLEVEL% neq 0 (
-    echo        [警告] flutter --version 未返回版本号，但可能不影响构建
-)
+REM Flutter --version 触发 SDK 首次初始化可能会卡死，跳过。
+REM 版本号在后续 pub get / build 阶段自然会显示。
+echo        [Flutter 版本] （跳过 --version 避免触发工具链下载阻塞）
 
 if not exist "%ANDROID_HOME%" (
     echo [警告] Android SDK 未找到: %ANDROID_HOME%
