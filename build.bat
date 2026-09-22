@@ -270,13 +270,8 @@ for %%h in (pub.dev pub.flutter-io.cn mirrors.tuna.tsinghua.edu.cn) do (
     powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'https://%%h' -TimeoutSec 5 -UseBasicParsing; Write-Host '          %%h: 可达 (' $r.StatusCode ')' } catch { Write-Host '          %%h: 不可达 (' $_.Exception.Message.Trim() ')' }" 2>nul
 )
 
-REM ---- Flutter Doctor 简要状态（非致命） ----
-echo.
-echo        [Flutter 状态] flutter doctor 摘要...
-flutter doctor 2>&1 | findstr /i /c:"No issues" /c:"issue" /c:"Android toolchain" /c:"Chrome" 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo        [警告] flutter doctor 未返回预期内容，但可能不影响构建
-)
+REM Flutter doctor / --version 都会触发工具链下载，跳过避免卡死。
+echo        [Flutter 状态] （跳过 flutter doctor 避免触发工具链下载阻塞）
 
 if not exist "local.properties" (
     echo sdk.dir=%ANDROID_HOME%> "local.properties" 2>nul
