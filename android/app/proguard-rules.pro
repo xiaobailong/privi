@@ -20,3 +20,7 @@
 -keepattributes *Annotation*
 -keepattributes EnclosingMethod
 -keepattributes InnerClasses
+
+# libVLC / VLC Android SDK — keep all JNI entry points and reflective classes.
+-keep class org.videolan.libvlc.** { *; }
+-dontwarn org.videolan.libvlc.**
