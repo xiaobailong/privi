@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  build_mem.ps1 - report memory headroom + reclaim leftover JVMs of this repo
 #                  (called by build.bat before `flutter build apk --release`)
 #

@@ -213,6 +213,64 @@ if not exist "build" mkdir "build" 2>nul
 goto :eof
 
 REM ============================================
+REM  构建前置自检：WMI 硬超时守卫
+REM
+REM  为什么需要：Windows 上 Dart 用 COM/WMI 查平台信息
+REM  （Platform.operatingSystemVersion -> Win32_OperatingSystem），这条调用没有超时。
+REM  winmgmt 服务"显示 RUNNING 但不回请求"时，flutter.bat 每次启动都静默阻塞：
+REM  日志 0 字节、CPU 0%、永远不返回 —— 也就是"构建卡住不动"。
+REM  这个自检 1 秒内就能把结论定死，不用等人肉发现。
+REM
+REM  结果：WMI_FAILED=1 表示确认 WMI 挂死 —— 调用方必须终止构建，不能只警告
+REM        （顶层流程用 goto :end；被 call 的例程用 goto :eof，由调用方收口，避免 :end 跑两遍）
+REM  每次构建只跑一次（WMI_GUARDED 去重）
+REM ============================================
+:preflight
+if "%WMI_GUARDED%"=="1" goto :eof
+set "WMI_GUARDED=1"
+set "WMI_FAILED=0"
+
+echo        [WMI 自检] Dart 读 OS 版本（WMI 无响应会让所有 flutter 命令静默挂死）...
+if not exist "%~dp0build_wmi_guard.ps1" (
+    echo        [跳过] 未找到 build_wmi_guard.ps1
+    goto :eof
+)
+
+set "WMI_OUT=%TEMP%\privi_wmi_guard.txt"
+del /q "%WMI_OUT%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_wmi_guard.ps1" -FlutterRoot "%FLUTTER_HOME%" > "%WMI_OUT%" 2>&1
+set "WMI_RC=%ERRORLEVEL%"
+set "WMI_MSG="
+for /f "usebackq delims=" %%l in ("%WMI_OUT%") do set "WMI_MSG=%%l"
+
+REM 退出码 5 = 确认 WMI 无响应（build_wmi_guard.ps1 的定义）
+REM 注意: 这里刻意不在 echo 里写半角括号。`echo xxx(!VAR!)yyy` 位于 ( ) 块内时，
+REM 那个 ')' 会被 cmd 当成块的结束符，剩下的内容被解析成非法语句并直接中断整个批处理
+REM （现象: ": was unexpected at this time."）。改用拼接好的变量输出。
+set "WMI_TAG=[警告] 自检未通过"
+if "!WMI_RC!"=="0" set "WMI_TAG=[WMI 自检]"
+if not "!WMI_RC!"=="5" (
+    echo        !WMI_TAG! rc=!WMI_RC! !WMI_MSG!
+    goto :eof
+)
+
+set "WMI_FAILED=1"
+echo.
+echo ============================================
+echo  [错误] WMI 无响应
+echo ============================================
+echo        !WMI_MSG!
+echo.
+echo        说明: Dart 在 Windows 上通过 WMI 读取 OS 版本且没有超时。
+echo              winmgmt 不响应时, 每条 flutter 命令都会静默挂死（日志 0 字节、CPU 0%%），
+echo              表现出来就是"构建卡住不动"。
+echo        处理: 1) 重启机器（最有效）
+echo              2) 或管理员执行: winmgmt /resetrepository
+echo              3) 单独复现: powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1
+echo ============================================
+goto :eof
+
+REM ============================================
 REM  环境检查（非致命，失败只警告不退出）
 REM ============================================
 :checkenv
@@ -349,6 +407,17 @@ if "%BUILD_FAILED%"=="1" (
     echo [警告] 环境检查有警告，但尝试继续代码生成...
 )
 
+REM WMI 挂死是致命的：pub get 会永远不返回，所以这里必须先拦
+REM 注意用 goto :eof 不是 goto :end —— :codegen 是被 call 进来的，
+REM 在里面 goto :end 会让 :end 块执行两遍（build_exit.log 写两次 + 白等两个 60 秒）。
+REM 这里只置 BUILD_FAILED，让调用方（:build）跳过 :save_state 1，
+REM 真正的终止交给 :do_build 里的 preflight 检查。
+call :preflight
+if "!WMI_FAILED!"=="1" (
+    set BUILD_FAILED=1
+    goto :eof
+)
+
 echo.
 echo ============================================
 echo  代码生成 - %date% %time%
@@ -357,13 +426,22 @@ echo ============================================
 echo [1/3] flutter pub get (verbose)...
 echo       日志输出到: build\pub_get_codegen.log
 echo       [提示] 首次下载依赖可能需要 2-5 分钟，请耐心等待...
+echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，不再无限期挂起
 echo.
-call flutter pub get --verbose > build\pub_get_codegen.log 2>&1
+REM 走 build_pub_get.ps1 而不是直接 call flutter：直接调用时一旦 dart 卡在启动阶段，
+REM 日志 0 字节、进程永不返回，构建就无声挂死。看门狗保证最坏 300 秒给结论。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_codegen.log" -IdleTimeoutSec 300
 set PUB_EXIT=%ERRORLEVEL%
+if !PUB_EXIT! equ 124 (
+    echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
+    echo        最可能原因: WMI 无响应 → 重启机器；诊断: build_wmi_guard.ps1
+    set BUILD_FAILED=1
+    goto :eof
+)
 if !PUB_EXIT! neq 0 (
     echo [警告] pub get 失败！Exit code=!PUB_EXIT!
     echo       最后 20 行日志:
-    powershell -NoProfile -Command "Get-Content 'build\pub_get_codegen.log' -Tail 20" 2>nul
+    powershell -NoProfile -Command "Get-Content 'build\pub_get_codegen.log' -Tail 20 -Encoding UTF8" 2>nul
     set BUILD_FAILED=1
     goto :eof
 )
@@ -404,7 +482,12 @@ echo.
 echo ============================================
 echo  清理构建产物...
 echo ============================================
-call flutter clean 2>nul
+call :preflight
+if "!WMI_FAILED!"=="1" (
+    echo        [跳过] WMI 无响应，跳过 flutter clean（否则会挂死），只删本地文件
+) else (
+    call flutter clean 2>nul
+)
 if exist "privi-*.apk" del /q "privi-*.apk" 2>nul
 if exist "privi-*.apk.sha256" del /q "privi-*.apk.sha256" 2>nul
 if exist "*.aab" del /q "*.aab" 2>nul
@@ -730,6 +813,10 @@ REM ============================================
 call :checkenv
 if "%BUILD_FAILED%"=="1" goto :end
 
+REM WMI 挂死时 flutter build apk 会静默挂死，先拦
+call :preflight
+if "!WMI_FAILED!"=="1" goto :end
+
 echo.
 echo ============================================
 echo  [调试模式] 仅 Gradle 编译 - %date% %time%
@@ -787,7 +874,10 @@ if !RESUME_STEP! leq 0 (
     echo [1/7] 代码生成...
     set "STEP_NAME=[1/7] 代码生成"
     call :codegen
-    if "%BUILD_FAILED%"=="1" (
+    REM 必须用 !BUILD_FAILED! 而不是 %BUILD_FAILED%：整块是在 call :codegen 之前
+    REM 一次性解析的，%...% 会取到调用前的旧值（永远是 0），于是把失败当成功、
+    REM 错误地 :save_state 1（下次构建就会跳过代码生成）。
+    if "!BUILD_FAILED!"=="1" (
         echo [警告] 代码生成阶段出现问题，但尝试继续后续步骤...
     ) else (
         call :save_state 1
@@ -801,6 +891,10 @@ echo.
 echo ============================================
 echo  Privi 构建 - %date% %time%
 echo ============================================
+
+REM WMI 自检：断点续传/fast 模式会跳过步骤1，这里是最后一道拦截点
+call :preflight
+if "!WMI_FAILED!"=="1" goto :end
 
 REM 内存检查放在最前面：既回收上次崩溃留下的守护进程，也让日志留下构建起点的
 REM 可用内存快照（崩溃后可以和 hs_err_pid*.log 对照排查）
@@ -840,14 +934,21 @@ if !RESUME_STEP! lss 4 (
     echo [4/7] flutter pub get ^(verbose^)...
     echo       日志输出到: build\pub_get_build.log
     echo       [提示] 如果 codegen 阶段已成功，这步会很快...
+    echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，不再无限期挂起
     echo.
     set "STEP_NAME=[4/7] flutter pub get"
-    call flutter pub get --verbose > build\pub_get_build.log 2>&1
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_build.log" -IdleTimeoutSec 300
     set PUB_EXIT=%ERRORLEVEL%
+    if !PUB_EXIT! equ 124 (
+        echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
+        echo        最可能原因: WMI 无响应 → 重启机器；诊断: build_wmi_guard.ps1
+        set BUILD_FAILED=1
+        goto :end
+    )
     if !PUB_EXIT! neq 0 (
         echo [警告] pub get 失败！Exit code=!PUB_EXIT!
         echo       最后 20 行日志:
-        powershell -NoProfile -Command "Get-Content 'build\pub_get_build.log' -Tail 20" 2>nul
+        powershell -NoProfile -Command "Get-Content 'build\pub_get_build.log' -Tail 20 -Encoding UTF8" 2>nul
         set BUILD_FAILED=1
         goto :end
     )
@@ -928,7 +1029,9 @@ REM  统一出口：永远 pause，让用户看到结果
 REM ============================================
 :end
 REM 写入诊断文件，确认脚本走到了 :end
-echo %date% %time% BUILD_FAILED=%BUILD_FAILED% NEW_VER=%NEW_VER% > build\build_exit.log 2>nul
+REM WMI_FAILED 一并落盘：后续排查"卡住不动"时，这个字段能直接区分
+REM "WMI 挂死被拦下" 和 "真的编译失败"。
+echo %date% %time% BUILD_FAILED=%BUILD_FAILED% WMI_FAILED=%WMI_FAILED% NEW_VER=%NEW_VER% > build\build_exit.log 2>nul
 echo.
 echo ============================================
 if "%BUILD_FAILED%"=="1" (
@@ -937,6 +1040,13 @@ if "%BUILD_FAILED%"=="1" (
     echo  构建流程结束
 )
 echo ============================================
+REM WMI 挂死是最常见的"卡住不动"根因，单独再提示一次，避免用户翻日志
+if "!WMI_FAILED!"=="1" (
+    echo.
+    echo  [根因] WMI 无响应 → 所有 flutter 命令都会静默挂死
+    echo  [处理] 重启机器；或管理员执行 winmgmt /resetrepository
+    echo  [复现] powershell -NoProfile -ExecutionPolicy Bypass -File build_wmi_guard.ps1
+)
 echo.
 echo 窗口将在 60 秒后自动关闭，或按任意键立即关闭...
 timeout /t 60 > nul
