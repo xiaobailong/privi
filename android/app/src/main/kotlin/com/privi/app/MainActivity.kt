@@ -14,7 +14,12 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Registers Flutter channels and owns their executor lifecycle.
@@ -66,8 +71,57 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    /**
+     * Process-level crash backstop.
+     *
+     * A Java/Kotlin exception on any thread (the libvlc event thread included)
+     * kills the process and until now only appeared in logcat, which a
+     * phone-only user cannot reach - an intermittent crash therefore left no
+     * trace anywhere. Append the stack to
+     * `Download/密册/logs/密册_crash_<date>.txt` before the process dies, and
+     * keep the previous handler so the default crash behavior is unchanged.
+     */
+    private fun installCrashLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            try {
+                appendCrashLog(thread, error)
+            } catch (_: Throwable) {
+                // The backstop must never change how the crash itself behaves.
+            }
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
+    private fun appendCrashLog(thread: Thread, error: Throwable) {
+        Log.e("PriviCrash", "uncaught on ${thread.name}", error)
+        val dir = crashLogDir() ?: return
+        if (!dir.isDirectory && !dir.mkdirs()) return
+        val now = Date()
+        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(now)
+        val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
+        File(dir, "密册_crash_$day.txt").appendText(
+            "\n==== $stamp thread=${thread.name}\n" +
+                Log.getStackTraceString(error) + "\n"
+        )
+    }
+
+    /** Same folder the Dart logger uses, with the app-private dir as fallback. */
+    private fun crashLogDir(): File? {
+        return try {
+            val downloads = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS
+            )
+            val dir = File(downloads, "密册/logs")
+            if (dir.isDirectory || dir.mkdirs()) dir else getExternalFilesDir(null)
+        } catch (_: Throwable) {
+            getExternalFilesDir(null)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        installCrashLogger()
 
         val mediaStore = MediaStoreIndexHandler(this, contentResolver)
         val vaultFiles = VaultFileHandler(this, contentResolver, mediaStore)
@@ -429,9 +483,17 @@ class MainActivity : FlutterFragmentActivity() {
         externalPlayer = null
         videoPlayers.values.forEach { it.release() }
         videoPlayers.clear()
+        // Let the in-flight media.parse() finish before the shared LibVLC goes
+        // away: that probe runs on ioExecutor with the same native libvlc
+        // instance, and releasing it first leaves the parse running against
+        // freed memory (native crash). Capped at 1s so onDestroy cannot ANR.
+        ioExecutor.shutdown()
+        try {
+            ioExecutor.awaitTermination(1, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+        }
         VlcPlayerHandler.releaseLibVlc()
         videoChannel = null
-        ioExecutor.shutdown()
         super.onDestroy()
     }
 

@@ -284,6 +284,10 @@ class VlcPlayerHandler(
             vout.attachViews(IVLCVout.OnNewVideoLayoutListener {
                     _, w, h, visibleW, visibleH, sarNum, sarDen ->
                 if (w <= 0 || h <= 0) return@OnNewVideoLayoutListener
+                // 回调跑在 vout 线程上，可能比 release() 慢一步：这一轮播放已经被
+                // 拆掉（mediaPlayer 置空或被换成新的 MediaPlayer）时直接丢弃，
+                // 否则会往已 release 的 textureEntry/SurfaceTexture 上写几何。
+                if (mediaPlayer !== mp) return@OnNewVideoLayoutListener
                 // **同步**设置缓冲区大小，不要 post 到主线程。
                 //
                 // 这个回调是 PoolAlloc() 里 AndroidWindow_Setup()（几何定型）
@@ -310,6 +314,9 @@ class VlcPlayerHandler(
                 )
                 // eventSink/日志必须回主线程（平台通道调用约定）。
                 mainHandler.post {
+                    // 入队时间早于 release() 的回调要丢掉，否则会给 Dart 补发一个
+                    // 已经 dispose 掉的 texture 的 initialized 事件。
+                    if (mediaPlayer !== mp) return@post
                     logI("video layout: ${w}x$h, visible=${visibleW}x$visibleH, " +
                         "sar=${sarNum}:$sarDen, bufferChanged=$changed, " +
                         "textureId=$textureId")
@@ -323,17 +330,31 @@ class VlcPlayerHandler(
             probeVideoSizeAsync(vlc, filePath, mp)
 
             mp.setEventListener { event ->
-                val type = event.type
-                // 事件对象是复用的，必须在回调里立刻取出需要的字段。
-                val voutCount =
-                    if (type == MediaPlayer.Event.Vout) event.voutCount else 0
-                val length =
-                    if (type == MediaPlayer.Event.LengthChanged) {
-                        event.lengthChanged
-                    } else {
-                        -1L
+                // 这段跑在 libvlc 的事件线程上（不是主线程）：异常一旦逃出去
+                // 就是进程级崩溃，所以整段包起来。
+                try {
+                    val type = event.type
+                    // 事件对象是复用的，必须在回调里立刻取出需要的字段。
+                    val voutCount =
+                        if (type == MediaPlayer.Event.Vout) event.voutCount else 0
+                    val length =
+                        if (type == MediaPlayer.Event.LengthChanged) {
+                            event.lengthChanged
+                        } else {
+                            -1L
+                        }
+                    // **不能在这里直接调 onMediaPlayerEvent**：它会读 mp.length /
+                    // mp.time / mp.isPlaying，而这些是 native 方法，release() 之后
+                    // 再调就是在已释放的 native 句柄上做 JNI 调用（进程崩溃且不留
+                    // Dart 日志，见 ISSUE-015）。所以回到主线程并按"还是当前这一轮
+                    // 播放"校验一次——切片够快时，事件刚好落在 release() 之后。
+                    mainHandler.post {
+                        if (mediaPlayer !== mp) return@post
+                        onMediaPlayerEvent(type, voutCount, length, mp)
                     }
-                mainHandler.post { onMediaPlayerEvent(type, voutCount, length, mp) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "event listener failed: ${e.message}")
+                }
             }
 
             mp.play()
@@ -516,6 +537,12 @@ class VlcPlayerHandler(
         reportedLength: Long,
         mp: MediaPlayer
     ) {
+        // 兜底校验：调用点已经过滤过一次，这里再确认一次——保证将来任何新增调用点
+        // 都不会在一个已经 release() 的 MediaPlayer 上读 native 字段。
+        if (mp !== mediaPlayer) {
+            Log.d(TAG, "dropping stale event for textureId=$textureId")
+            return
+        }
         when (eventType) {
             MediaPlayer.Event.Playing -> {
                 if (!isReady) {
@@ -772,6 +799,14 @@ class VlcPlayerHandler(
         // 已 release"的状态下继续跑，PoolAlloc/LockPicture 可能拿到已释放的
         // Surface，属于未定义行为。
         mp?.stop()
+        // 显式摘掉事件监听：stop() 之后 libvlc 仍会补发 Stopped/TimeChanged，
+        // 摘掉就少一批"入队即过期"的回调（已经入队的由 mediaPlayer !== mp 丢弃）。
+        // 传 null 是 libvlc 的既定用法——VLCObject.setEventListener(null) 会走
+        // nativeDetachEvents()（javap 反编译确认），不是"塞一个空实现"。
+        try {
+            mp?.setEventListener(null)
+        } catch (_: Exception) {
+        }
         try {
             mp?.vlcVout?.detachViews()
         } catch (_: Exception) {

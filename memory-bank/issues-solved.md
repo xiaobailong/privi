@@ -244,3 +244,62 @@
 - 首次记录: 2026-09-22 ／ 验证: `frontend_server` 全包编译（`lib/main.dart`）末行 `... build\_dartcheck.dill 0` +
   `DARTCHECK_EXIT=0`；`flutter analyze` 全仓 149.2s、除历史遗留 warning 外无 error
   （过程中先抓到 1 处漏改的 `_loadWatchdog` 引用并修复，另清掉本次改动引入的 2 个 unused import）
+
+## ISSUE-015 切片过快时进程级崩溃（上一段日志停在 `onPlaying`，下一段直接是新 session，零错误行）
+- 状态: 已修复（VLC 引擎；已定位 + 已加固，真机复现路径待用户回归验证）
+- 症状 / 现场: 用户报"偶现崩了一次"。当天 `密册_log_2026-09-22.txt` 里有三次会话启动：
+  `session=hmioqbag88`(11:34) → `hmizyyp08b`(18:22) → **`hmj05e4e7h`(18:28:46)**；
+  第三次出现在 `18:28:35.027 [VideoPlayer.native] onPlaying: textureId=9` 之后约 11 秒，
+  中间**一条 Dart 错误行都没有**（`FlutterError` / `UncaughtError` / `Exception` / `error` 全零命中），
+  也**没有** `onDestroy: releasing N video players` ⇒ 进程是被"当场带走"的
+- 复发判据: `findstr /n /c:"session=" 密册_log_<日期>.txt` —— 每出现一行
+  `[AppLogger] probe dir=... session=xxx` 就是一次进程重建；再对照**每段末尾是不是正常行**
+  （`onPlaying` / `STATE_READY` / `build:`）：
+  ① 是正常行、且中间没有任何 ERROR/异常行 ⇒ 进程级崩溃（原生或 Java/Kotlin 线程），**别在 Dart 侧找原因**；
+  ② 同时看 `Download/密册/logs/` 有没有 `密册_crash_<日期>.txt`：
+     有 ⇒ 是 Java/Kotlin 线程未捕获异常（堆栈就在文件里）；
+     没有而日志仍然断掉 ⇒ native SIGSEGV，需连电脑 `adb logcat -b crash`（本机 `adb` 在
+     `D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe`）
+- 根因: `VlcPlayerHandler` 把 libvlc 的 **MediaPlayer 事件回调**和 **vout 布局回调**都用
+  `mainHandler.post { ... }` 投到主线程，lambda 里捕获了该轮播放的 `MediaPlayer mp`；
+  而 `resetPlayer()` / `release()` 会 `mp.release()` 并把字段置空 ——
+  **已经排进主线程队列、或正在 libvlc 线程上执行到一半的回调没有任何身份校验**，
+  于是会在 release 之后继续执行 `mp.length` / `mp.time` / `mp.isPlaying`。
+  这三个是 **native 方法**，`VLCObject.release()`（refCount→0 时）只会
+  `setEventListener(null)`（nativeDetachEvents）并释放 native 句柄，**不会**让之后的 native 访问变安全
+  ⇒ 在已释放的 native 句柄上做 JNI 调用 = 进程崩溃（释放/调用交错时"偶现"，因为内存可能还没被复用）
+- 证据:
+  ① 日志时间线（`tmp\密册_log_2026-09-22.txt` 第 490-547 行）: 18:28:23.5 → 18:28:35.0 之间连续
+     创建/销毁 **3 个播放器**（textureId 7→8→9），最后一次 `onPlaying: textureId=9` 后日志断掉；
+     这段正是"事件已入队、播放器马上被 release"的时间窗（用户快速切片）
+  ② 全文 690 行里 `ERROR|Exception|Uncaught|FlutterError` **零命中**（`tmp\grep_log.txt`）
+     ⇒ 排除 Dart 层异常；UI 侧真有异常时 `main.dart` 的 `FlutterError.onError` / `PlatformDispatcher.onError`
+     一定会写日志
+  ③ `javap -p -c` 反编译 `.gradle_home\...\libvlc-all-3.6.4.aar!/classes.jar`（过程见 `tmp\javap_*.txt`）:
+     `public native long getTime()` / `public native long getLength()` / `public native boolean isPlaying()`；
+     `VLCObject.release()` 在引用计数归零时 `invokevirtual setEventListener(null)`；
+     `VLCObject.setEventListener(null)` 会 `nativeDetachEvents()` ⇒ 传 null 是既定 detach 用法
+  ④ 文件里既有的 `probeVideoSizeAsync()` 早就写了 `if (mediaPlayer !== mp) return@post`
+     —— 说明同类隐患此前已经被踩到过，只是事件/布局这两处漏了
+- 修法:
+  `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`
+  ① 事件回调 + 布局回调里的 `mainHandler.post{...}` 均加身份校验
+     `if (mediaPlayer !== mp) return@post`（与 `probeVideoSizeAsync` 一致）；
+  ② 布局回调同步段开头加 `if (mediaPlayer !== mp) return@OnNewVideoLayoutListener`
+     （别往已释放的 SurfaceTexture 写几何）；
+  ③ `onMediaPlayerEvent()` 入口兜一层 `if (mp !== mediaPlayer) return`（防将来新增调用点）；
+  ④ libvlc 事件监听器整段 `try/catch`（它跑在 libvlc 事件线程上，异常逃出去同样是进程崩溃）；
+  ⑤ `resetPlayer()` 在 `stop()` 之后显式 `setEventListener(null)`，减少"入队即过期"的回调
+  `android/app/src/main/kotlin/com/privi/app/MainActivity.kt`
+  ⑥ 新增进程级崩溃兜底 `installCrashLogger()`：`Thread.setDefaultUncaughtExceptionHandler`
+     → 堆栈落盘 `Download/密册/logs/密册_crash_<日期>.txt`（保留原 handler，不改变崩溃行为）；
+  ⑦ `onDestroy()` 改为 `ioExecutor.shutdown()` + `awaitTermination(1s)` **之后**再
+     `VlcPlayerHandler.releaseLibVlc()`（后台 `media.parse()` 用的是同一个 native libvlc 实例）
+- 反例 / 易误判: ①"app 回到解锁页"当成系统杀后台/LMK —— 本次同一时刻日志里**一条 onDestroy 都没有**，
+  且 11 秒后就重建进程，是崩溃后的自动重启；②被 `VDIAG[dart-position-stall]`（位置停在片尾）
+  这类既有 WARN 带偏 —— 它和本次崩溃点无关；③只盯 Dart 的 `engine_fallback`/看门狗 ——
+  Dart 进程内的异常一定会留日志，**没有日志就是原生侧**
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`、
+  `android/app/src/main/kotlin/com/privi/app/MainActivity.kt`
+- 决策: 见 `ADR-020`
+- 首次记录: 2026-09-22 ／ 验证: 见"最近复核"（完整构建 + 真机日志）
