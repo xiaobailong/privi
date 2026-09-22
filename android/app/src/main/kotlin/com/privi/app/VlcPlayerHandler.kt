@@ -28,6 +28,7 @@ class VlcPlayerHandler(
             return sharedLibVlc ?: LibVLC(context, arrayListOf(
                 "--no-audio-time-stretch",
                 "--verbose=0",
+                "--android-display-chroma=RV32",
             )).also { sharedLibVlc = it }
         }
 
@@ -98,10 +99,25 @@ class VlcPlayerHandler(
             mediaRef = media
 
             surface = Surface(textureEntry.surfaceTexture())
+            textureEntry.surfaceTexture().setDefaultBufferSize(1920, 1080)
             val vout: IVLCVout = mp.vlcVout
             vout.setVideoSurface(surface, null)
+            vout.setWindowSize(1920, 1080)
             vout.attachViews()
             logI("video surface attached to textureId=$textureId")
+
+            vout.setOnNewVideoLayoutListener { _, w, h, _, _, _, _ ->
+                if (w <= 0 || h <= 0) return@setOnNewVideoLayoutListener
+                if (videoWidth == w && videoHeight == h) return@setOnNewVideoLayoutListener
+                videoWidth = w
+                videoHeight = h
+                logI("video layout: ${w}x$h, textureId=$textureId")
+                try {
+                    textureEntry.surfaceTexture().setDefaultBufferSize(w, h)
+                } catch (e: Exception) {
+                    logW("setDefaultBufferSize(${w}x$h) failed: ${e.message}")
+                }
+            }
 
             mp.setEventListener { event ->
                 mainHandler.post { onMediaPlayerEvent(event.type, mp) }
