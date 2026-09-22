@@ -628,6 +628,22 @@ for /f "tokens=1,2 delims=/" %%a in ("!REMOTE_TAIL!") do if not "%%b"=="" set "R
 goto :eof
 
 REM ============================================
+REM  检查 gh auth token 是否包含 repo scope
+REM  返回值: GH_HAS_REPO_SCOPE=1 表示有 repo scope，0 表示无
+REM  仅在 GH_EXE 定义且已登录后调用
+REM ============================================
+:check_gh_scopes
+set "GH_HAS_REPO_SCOPE=0"
+if not defined GH_EXE goto :eof
+for /f "tokens=*" %%l in ('call "%GH_EXE%" auth status 2^>^&1 ^| findstr /i "Token.scopes"') do set "TOKEN_LINE=%%l"
+if defined TOKEN_LINE (
+    echo "!TOKEN_LINE!" | findstr /i "repo" >nul 2>&1
+    if !ERRORLEVEL! equ 0 set "GH_HAS_REPO_SCOPE=1"
+)
+set "TOKEN_LINE="
+goto :eof
+
+REM ============================================
 REM  读取当前提交信息（Release 说明与 tag 目标用）
 REM  注意: 不要用带 %%s 之类的 --format 串——写进 .bat 容易被 cmd 当变量展开；
 REM        git log -1 --oneline 正好给出「短 sha + 标题」。
@@ -714,6 +730,14 @@ if !ERRORLEVEL! neq 0 (
     goto :eof
 )
 
+call :check_gh_scopes
+if "!GH_HAS_REPO_SCOPE!"=="0" (
+    echo       [跳过] gh token 缺少 repo scope，无法操作 Release
+    echo        授权方法: gh auth refresh -h github.com -s repo
+    echo        验证: gh auth status ^| findstr Token
+    goto :eof
+)
+
 call :resolve_repo_slug
 call :resolve_git_sha
 
@@ -787,9 +811,26 @@ if "!REL_EXISTS!"=="1" (
     set "REL_EXIT=!ERRORLEVEL!"
     if "!REL_EXIT!"=="0" call "%GH_EXE%" release edit "!RELEASE_TAG!" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest !REL_REPO_ARG!
 ) else (
-    echo       创建 Release !RELEASE_TAG! ^(tag 指向 !GIT_SHA_SHORT!^)...
-    call "%GH_EXE%" release create "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest --target !GIT_SHA! !REL_REPO_ARG!
-    set "REL_EXIT=!ERRORLEVEL!"
+    echo       准备新建 Release !RELEASE_TAG! ^(tag 指向 !GIT_SHA_SHORT!^)...
+    echo       检查提交 !GIT_SHA_SHORT! 是否已推送到 origin...
+    set "COMMIT_ON_REMOTE=0"
+    git ls-remote origin "!GIT_SHA!" >nul 2>&1
+    if !ERRORLEVEL! equ 0 set "COMMIT_ON_REMOTE=1"
+    if "!COMMIT_ON_REMOTE!"=="0" (
+        echo [跳过] 提交 !GIT_SHA_SHORT! 在 origin 上不存在，无法创建 tag
+        echo        gh release create 会在 GitHub 端创建 tag 指向指定提交，
+        echo        但远端尚不存在该提交，会导致 tag 创建失败。
+        echo.
+        echo        修复步骤:
+        echo          1. git push origin !GIT_BRANCH!
+        echo          2. build.bat release
+        echo        APK 仍在本地: !APK_DEST!
+        set "REL_EXIT=1"
+    ) else (
+        echo       已确认，正在创建...
+        call "%GH_EXE%" release create "!RELEASE_TAG!" "!APK_DEST!" "!APK_DEST!.sha256" --title "!RELEASE_TITLE!" --notes-file "!NOTES_FILE!" --latest --target !GIT_SHA! !REL_REPO_ARG!
+        set "REL_EXIT=!ERRORLEVEL!"
+    )
 )
 
 if "!REL_EXIT!"=="0" (
@@ -802,9 +843,9 @@ if "!REL_EXIT!"=="0" (
 ) else (
     echo.
     echo [警告] Release 发布失败 ^(exit=!REL_EXIT!^)，APK 仍在本地: !APK_DEST!
-    echo        - 提交还没 git push 时新建 tag 会失败: 先 git push，再 build.bat release
-    echo        - 权限不足时确认 gh auth status 的 token 有 repo scope
-    echo        - 同版本重发走 upload --clobber，不会因 tag 已存在而失败
+    echo        - 新建 tag 前请确认提交已推送: git push origin，再 build.bat release
+    echo        - 权限问题: gh auth status 确认 Token scopes 包含 repo
+    echo        - 同版本重发: build.bat release 会自动走 upload --clobber
 )
 goto :eof
 
