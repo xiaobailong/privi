@@ -35,6 +35,11 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Drop x86/x86_64 native libs for smaller APK.
+        // Real Android devices are ARM-only since API 26+.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
