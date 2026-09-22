@@ -23,6 +23,20 @@
 - 附带事实校正: 2026-09-22 实测 `taskkill /T /F` 正常（0.7s 返回），
   09-21 记录的「taskkill 一律挂死」**未复现**，保底杀进程仍可用 `Stop-Process`
 - 首次记录: 2026-09-21 ／ 最近复核: 2026-09-22（`OK: WMI 1945ms OSVER= Windows 11 10.0 Build 26100`）
+- 复发 2026-09-22 19:02:47（本轮）: 完整构建的 preflight 里 `scripts\build_wmi_guard.ps1` 返回 **5**，
+  `build_full.log` 打印 `[错误] WMI 无响应`，构建在 **22 秒**内终止（`build_exit.log` = `WMI_FAILED=1`）
+  —— 守卫按设计生效（对比首次事故：直接挂死 5~10 分钟）；
+  **同一天 18:53 的构建 WMI 还是 `rc=0 OK: WMI 1286ms`**，19:02 就挂了，19:06/19:07 连续复测仍 `rc=5`
+  ⇒ 本机 WMI 是"时好时坏"，与构建脚本、代码改动无关，别去改脚本
+- 复测手法（重要，别再踩坑）: 守卫**必须放独立窗口**跑，否则会被下一条终端命令掐断、
+  输出文件停在 0 字节，看起来像"守卫本身没输出"：
+  ```
+  start "" /min cmd /c "cd /d D:\WorkSpace\test\privi && powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_wmi_guard.ps1 -FlutterRoot D:\Tools\DevTools\flutter > tmp\wmi_probe.txt 2>&1"
+  ```
+  然后 `read_files tmp\wmi_probe.txt`：`HANG:` 开头 = 仍挂死；`OK: WMI ...ms` = 已恢复
+- 处置: 重启机器最有效；或管理员 `winmgmt /resetrepository`（本机未执行，属系统级变更）
+- 影响: WMI 挂死期间 `build.bat` 与 `build.bat gradle` **都跑不了**（后者内部也是 `flutter build apk`，`build.bat:848`），
+  但 **git commit / push 不受影响**
 
 ## ISSUE-002 pub get 无限期挂起，看不出是「慢」还是「死」
 - 状态: 已规避
@@ -81,6 +95,32 @@
   只要看到 `daemon has disappeared`，先按本节处置，别去怀疑业务代码
 - 处置后验证: **2026-09-22 17:42:30** `build.bat gradle` → `BUILD_FAILED=0`，
   耗时 252s 走完 `assembleRelease` 并产出 `app-release.apk`（同一次会话里 `-Xmx4G` 那次 303s 崩溃）
+
+### 复发记录 2026-09-22 19:01（`-Xmx3G` 已生效、事前还回收过内存，仍然崩）
+- 现场: 完整构建（`build.bat norelease`）走到 `assembleRelease` 第 **295.6 秒**，
+  `JVM crash log found: android/hs_err_pid20124.log` + `Gradle build daemon disappeared unexpectedly`
+- 崩溃日志原文（`android/hs_err_pid20124.log`）:
+  ```
+  # Native memory allocation (malloc) failed to allocate 2288720 bytes for Chunk::new
+  #  Out of Memory Error (arena.cpp:168), pid=20124
+  # Memory: 4k page, system-wide physical 28422M (1912M free)
+  # TotalPageFile size 54340M (AvailPageFile size 69M)
+  # current process WorkingSet (physical memory assigned to process): 4145M, peak: 4145M
+  ```
+  ⇒ 与 09-21 首次事故**同型**（`arena.cpp` + 申请量同一量级）
+- **重要反例（第二次出现）**: 本次构建前 `MEM OK ... FreeCommitMB=6029`（是 1500 阈值的 4 倍）**仍然崩**；
+  事前还按本节缓解跑过 `-StopDaemons`（Killed=1、释放 581MB、commit free 5808→6702MB），**重试仍崩**
+  ⇒ 阈值判据不可依赖。决定成败的不是"开局有多少余量"，而是"R8 跑到第 5 分钟时，**别的进程**有没有把提交内存吃掉"：
+  崩溃瞬间物理只剩 1912MB、页面文件只剩 **69MB**，而本机物理 28422M ⇒ 约 26GB 被其它进程占用
+- 反例的反面（本次能确认的好消息）: 崩溃**不在 Kotlin 编译阶段** —— 同一次运行里
+  `:app:compileReleaseKotlin` 已成功（R8 已写出 `build/app/outputs/mapping/release/{usage,seeds}.txt`），
+  所以"改完 Kotlin 先跑一次构建"能拿到编译级验证，即使后面 R8 崩在内存上
+- 本轮处置: `scripts\build_mem.ps1 -JavaHome <JDK> -StopDaemons` 回收后重试（见 `ISSUE-001` 复发：本轮重试被 WMI 挡住）
+- 下一步（**未验证**，条件合适时再做）: ①`org.gradle.jvmargs` `-Xmx` 3G→2560m、`-XX:MaxMetaspaceSize` 1G→768m
+  （降预留，与 17:36 那次 "G1 virtual space 预留失败" 同方向）；②构建前关掉 VS Code 的 Java 扩展 / 浏览器等大头进程，
+  或调大系统页面文件（本机提交上限 54340M ≈ 物理 28422M×1.9，R8 峰值需要 5GB 以上余量）
+- 复发判据（补，两条任选）: `findstr /c:"arena.cpp" android\hs_err_pid*.log` 命中 ⇒ 本条目；
+  `findstr /c:"G1 virtual space" android\hs_err_pid*.log` 命中 ⇒ 本条目（同一根因的另一种表现）
 
 ## ISSUE-005 版本号漂移：`.BUILD_NUM` 涨了但 `pubspec.yaml` 没变
 - 状态: 已修复

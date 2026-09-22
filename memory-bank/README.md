@@ -44,6 +44,8 @@
 | 现场现象 / 报错 | 去看 |
 | --- | --- |
 | 构建「卡住不动」：日志 0 字节、CPU 0%、进程杀不掉 | `ISSUE-001`（WMI 挂死）、`ISSUE-002`（看门狗） |
+| 构建 20 秒内就失败、`build_full.log` 写 `[错误] WMI 无响应` | `ISSUE-001`（复测要放独立窗口） |
+| 构建跑了约 5 分钟失败、`daemon disappeared` + `android\hs_err_pid*.log` | `ISSUE-004`（R8 提交内存耗尽，`MEM OK` 不代表安全） |
 | `build.bat` 报「判定卡死」，`build\pub_*.log` 0 字节 | `ISSUE-002`、`PIT-011` |
 | `scripts\build_*.ps1` 全部报「未找到 / 跳过」 | `ISSUE-011`（路径不同步） |
 | `pubspec.yaml` 版本号没变、`.BUILD_NUM` 却涨了 | `ISSUE-005` |
