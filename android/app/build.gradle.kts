@@ -81,7 +81,12 @@ flutter {
     source = "../.."
     // gen_snapshot OOM 缓解：跳过 strip 阶段大幅降低 AOT 编译峰值内存。
     // APK 体积增加约 1-3 MB，但比构建崩溃好得多。
-    extraGenSnapshotOptions.add("--no-strip")
+    //
+    // 注意：Flutter 3.47 起 `flutter {}` 扩展**不再有** `extraGenSnapshotOptions` 属性
+    // （DSL 已移除，写在这里会 "Unresolved reference"），该值改为从 **Gradle project
+    // property** 读（见 flutter_tools/gradle/FlutterPlugin.kt：
+    // project.findProperty("extra-gen-snapshot-options") → --ExtraGenSnapshotOptions）。
+    // 所以 `--no-strip` 现在配置在 android/gradle.properties，别加回这里。
 }
 
 dependencies {
