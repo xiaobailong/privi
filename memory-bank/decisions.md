@@ -292,3 +292,53 @@
   - 本轮记录: `backup_20260922` = `8903ef1`；`main` 由 `8903ef1` 快进到 `4c280c2`（35 files, +3320/−122），
     随后未加修改地推送（`8903ef1..4c280c2  main -> main`）—— 因为 `ISSUE-001`（WMI 挂死）导致
     `main` 上的构建没跑起来，所以这次没有版本号 bump 提交
+
+## ADR-022 VLC 视频几何：**先探测尺寸、再挂 vout**（几何只定一次）
+- 日期: 2026-10-01 | 状态: 已采纳
+- 背景: `ISSUE-016` —— VLC 引擎下非 1920x1080 的片子（竖屏 720x960）画面只显示一小块。
+  旧顺序是「`initialize()` 里立刻用常量 1920x1080 `setDefaultBufferSize()` +
+  `setWindowSize()` 并 attachViews，之后再由后台 `media.parse()` 改尺寸」；而本机实测
+  **布局回调（`OnNewVideoLayoutListener`）一条都没来过**（整份日志零 `video layout:` 行），
+  几何只剩"常量"和"探测"两个来源，顺序一颠倒就自相矛盾。
+- 决策: `initialize()` 拆成「建 MediaPlayer/Media → io 线程探测尺寸 → 主线程
+  `attachViewsAndPlay()`」；探测结果先经 `applyVideoSize()` 落到 `videoWidth/Height`，
+  **同一个尺寸**同时用于 `setDefaultBufferSize()` 与 `setWindowSize()`；探测失败/超时
+  （`PROBE_TIMEOUT_MS = 2000`）才退回常量兜底。探测期间 `play()` / `pause()` 只记录意图
+  （`attachPending` / `playRequested`），挂上视图后统一执行。
+- 理由: ANativeWindow 的两条 vout 路径都在**开 vout 时**（`AndroidWindow_Setup()`）把布局
+  定死，此后每帧只校验缓冲区不小于 fmt —— 缓冲区被改小**不会**触发重算布局，只会裁画面。
+  让几何在 vout 存在之前就正确，是唯一不依赖 VLC 内部行为"重算"的方案。
+- 备选与为何不选: ①探测回来后 `detachViews()` + `attachViews()` 重挂（要赌 libvlc 是否会按
+  新 `setWindowSize` 重建 vout，未验证；还会打断正在播的画面）；②干脆不探测、永远用
+  1920x1080（竖屏片被 pillarbox、宽高比也上报错，方向会被锁成横屏）；③在**主线程**同步
+  `media.parse()`（ANR 风险，原注释已明确禁止）。
+- 影响 / 约束: `initialize()` 的"挂视图 + 起播"变成异步（实测本地文件 33~141ms，最坏到
+  `PROBE_TIMEOUT_MS`）；Dart 侧 15s 加载看门狗足以覆盖。**新增任何"改缓冲区尺寸"的代码都
+  必须同时改 `setWindowSize()`**，否则又会回到老问题。`layoutSizeKnown` 标志随旧探测路径
+  一起删除（它只为"挂上后再探测"服务）。
+- 回归观察点（下轮真机日志）: `video surface attached ... at <宽>x<高>` 应该等于该视频的真实
+  尺寸（竖屏片应是 `720x960`），而不是恒定的 `1920x1080`；日志应出现
+  `probed video size (before attach): ...`。
+
+## ADR-023 长按视频的「打开方式」拆成两个内部入口 + **单条视频**的引擎覆盖
+- 日期: 2026-10-01 | 状态: 已采纳
+- 背景: 原来长按菜单只有一条「应用内播放」（`VideoOpenTarget.internal`），用设置里的引擎。
+  用户需要"就这一个片子用 VLC 在应用内播放"，不想改全局设置。
+- 决策: `VideoOpenTarget` 拆成 `internalDefaultEngine` / `internalVlcEngine`，文案
+  「内部播放（默认引擎）」/「内部播放（VLC 引擎）」；两条入口的引擎**写死**
+  （`kSheetDefaultEngine = PlayerEngine.exoPlayer` / `kVlcEngine`）+ `forceEngineForItem()`，
+  **不读** `settings.playerEngine`；入口把 `initialForcedEngine` 传给 `ViewerScreen` /
+  `GalleryPreviewScreen`，由它们在 `initState` 里对**当前这一条**注册。
+- 修订（2026-10-01，用户反馈）: 第一版让「默认引擎」那条**跟随设置**、并把设置里的引擎名
+  放在副标题消歧。设置本来就是 libVLC 时，两条入口引擎相同、只是一条标着"默认" ——
+  在用户看来就是**两个重复且一样的选项**。改成两条都写死后，副标题固定显示
+  `ExoPlayer（系统解码器）`，任何时候两条都指向不同引擎。
+  副作用（有意为之）: 设置里的引擎只影响"点开视频直接播放"与播放列表，
+  **不再影响**长按菜单这两条捷径。
+- 理由: 覆盖只作用于用户长按的那一条 ⇒ 不写设置、不影响别的视频；`useEngineFallback()` 会
+  清掉强制值，所以「强制 VLC ⇒ 15s 拿不到帧 ⇒ 换默认引擎」这条回退**仍然生效**。
+- 备选与为何不选: ①按"本次播放会话"覆盖（进入该界面后所有视频都用 VLC）—— 语义模糊、
+  会悄悄改变其它视频的行为；②直接把设置改成 VLC（污染全局偏好）；③再加一层
+  "仅此一次 / 记住选择"对话框（本轮不需要）。
+- 影响 / 约束: 新增视频入口若要支持强制引擎，必须把 `initialForcedEngine` 往下传；
+  引擎名文案统一走 `videoEngineLabel()`（设置页仍保留自己的私有实现，未强行合并）。

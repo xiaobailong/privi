@@ -27,10 +27,17 @@ class ViewerScreen extends ConsumerStatefulWidget {
     super.key,
     required this.items,
     required this.initialIndex,
+    this.initialForcedEngine,
   }) : assert(items.length > 0);
 
   final List<MediaItem> items;
   final int initialIndex;
+
+  /// 长按菜单选了「内部播放（VLC 引擎）」时传进来的引擎（`'vlc'`）。
+  ///
+  /// 只作用于 [initialIndex] 这一条（见
+  /// [VideoEngineFallbackState.forceEngineForItem]）：滑到别的视频仍按设置走。
+  final String? initialForcedEngine;
 
   @override
   ConsumerState<ViewerScreen> createState() => _ViewerScreenState();
@@ -71,6 +78,11 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     _playbackSpeed = ref.read(settingsControllerProvider).playerPlaybackSpeed;
     _index = widget.initialIndex.clamp(0, widget.items.length - 1);
     _page = PageController(initialPage: _index);
+    // 长按菜单指定的引擎：只钉住用户选中的这一条，别的 item 仍按设置走。
+    final forcedEngine = widget.initialForcedEngine;
+    if (forcedEngine != null) {
+      forceEngineForItem(_current.id, forcedEngine);
+    }
     // Images count as played as soon as they are on screen; a video bumps its
     // counter once the native player really started (see [_syncVideoBody]).
     if (!_current.isVideo) _recordPlay(_current);

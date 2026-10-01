@@ -18,7 +18,7 @@ class VlcPlayerHandler(
     private val context: Context,
     private val textureEntry: TextureRegistry.SurfaceTextureEntry,
     /**
-     * 只用来把 `media.parse()` 挪出主线程（见 [probeVideoSizeAsync]）。
+     * 只用来把 `media.parse()` 挪出主线程（见 [probeSizeThenAttach]）。
      * 复用 MainActivity 的 IO 线程池，`onDestroy` 关池子时自动收尾。
      */
     private val ioExecutor: Executor,
@@ -58,6 +58,18 @@ class VlcPlayerHandler(
          * 使用的矩形宽，右边会多出一条未初始化像素（纯色细条）。
          */
         private const val BUFFER_WIDTH_ALIGN = 4
+
+        /**
+         * 等真实尺寸的上限（见 [probeSizeThenAttach]）。
+         *
+         * 超时就用兜底几何先挂 vout：宁可回到"先用常量几何"的旧行为，
+         * 也不要让用户停在"视图永远不挂上"的黑屏。
+         *
+         * 实测本地文件 `media.parse(ParseLocal)` 是 33~141ms
+         * （`密册_log_2026-10-01.txt` 三个视频），2s 足够覆盖慢存储，
+         * 又远小于 Dart 侧 15s 的加载看门狗。
+         */
+        private const val PROBE_TIMEOUT_MS = 2000L
 
         @Volatile
         private var sharedLibVlc: LibVLC? = null
@@ -161,13 +173,22 @@ class VlcPlayerHandler(
     private var displayHeight = 0
 
     /**
-     * 布局回调是否已经送回过真实几何。
+     * 尺寸探测还没结束、vout 还没挂上（见 [probeSizeThenAttach]）。
      *
-     * 回调在 vout 线程上写、主线程上的探测兜底读 ⇒ volatile。
-     * 为 true 时探测结果只记日志、不再覆盖（回调给的才是 VLC 真正使用的几何）。
+     * 这期间的 `play()` / `pause()` 只记录意图，等挂上视图再统一执行，
+     * 否则会在"还没有 vout"的状态下起播。
      */
     @Volatile
-    private var layoutSizeKnown = false
+    private var attachPending = false
+
+    /**
+     * 挂上视图后是否起播。
+     *
+     * initialize() 历来是"建好就起播" ⇒ 默认 true；挂视图之前来的
+     * `pause()` 会把它改回 false。
+     */
+    @Volatile
+    private var playRequested = false
 
     private var isReady = false
     private var isEnded = false
@@ -218,19 +239,8 @@ class VlcPlayerHandler(
             val media = Media(vlc, filePath)
             mediaRef = media
 
-            // 先给缓冲区一个**不会小于视频**的初始几何，然后立刻挂 vout。
-            //
-            // 这里**同步等不到**真实尺寸，也不该等：唯一能拿到真实尺寸的
-            // 同步手段是 `media.parse()`，而它会真的把容器打开解析一遍
-            // （本地小文件几毫秒，大/异常容器可以是几百毫秒到数秒），
-            // 而 initialize() 是 MainActivity 在**主线程**上从 MethodChannel
-            // 回调里调进来的 ⇒ 就是 ANR 风险。所以探测挪到后台线程
-            // （[probeVideoSizeAsync]），这里先用兜底值。
-            //
-            // 真正的权威几何由布局回调同步送回来（见 attachViews 处），
-            // 它发生在 PoolAlloc() 里 `AndroidWindow_Setup()`（几何定型）之后、
-            // 第一帧 `AndroidWindow_LockPicture()` 之前 ⇒ 兜底值只在一小段
-            // 窗口里有效。
+            // 兜底几何：探测失败或超时时用它，真实尺寸由探测决定
+            // （见 [probeSizeThenAttach]）。
             //
             // 唯一的硬要求是**不能比视频小**，依据是 C 侧
             // （vlc 3.6.x modules/video_output/android/display.c）：
@@ -250,12 +260,102 @@ class VlcPlayerHandler(
             //     这里的值不影响画面，但同样不能小于视频。
             videoWidth = alignBufferWidth(FALLBACK_BUFFER_WIDTH)
             videoHeight = FALLBACK_BUFFER_HEIGHT
-            // 宽高比依据：回调来之前只能用它，回调一到就会被覆盖。
             displayWidth = videoWidth
             displayHeight = videoHeight
+            attachPending = true
+            // initialize 历来是"建好就起播"；挂视图之前来的 pause() 会改回 false。
+            playRequested = true
 
             mp.media = media
 
+            // 几何和挂视图的顺序见 [probeSizeThenAttach] / [attachViewsAndPlay]。
+            probeSizeThenAttach(vlc, filePath, mp)
+        } catch (e: Exception) {
+            logE("initialize failed, cleaning up: ${e.message}", e)
+            resetPlayer()
+            throw e
+        }
+    }
+
+    /**
+     * 先探测真实尺寸，再挂 vout（几何只定一次）。
+     *
+     * **为什么顺序很重要**
+     *
+     * ANativeWindow 的两条 vout 路径都直接用窗口/缓冲区的当前几何：VLC 在
+     * `PoolAlloc()` 里 `AndroidWindow_Setup()` 时把布局定死（software 路径此后
+     * 每帧只校验 `sw.buf.width < fmt.i_width`，不满足就丢帧），**不会**因为之后
+     * 缓冲区被改小而重算布局。
+     *
+     * 旧顺序是「先用常量 1920x1080 挂 vout → 后台探测再改尺寸」：探测值一旦和
+     * 1920x1080 不一致（竖屏 720x960 这类），缓冲区被改成 720x960，而 vout 仍按
+     * 1920x1080 布局 ⇒ 画面只剩左上角一块（`密册_log_2026-10-01.txt` 第 1 个
+     * 视频的现场）。改成"先探测、再挂视图"后两边几何永远一致：以前只有恰好是
+     * 1920x1080 的片子正确，现在任何尺寸都对。
+     *
+     * 超时（[PROBE_TIMEOUT_MS]）就用兜底几何先起来：宁可回到旧行为，也不要停在
+     * "视图永远不挂上"的黑屏上。
+     *
+     * `media.parse()` 会真的把容器打开解析一遍（实测本地文件 33~141ms），
+     * 所以在 io 线程跑、结果回主线程继续，绝不在主线程上等。
+     */
+    private fun probeSizeThenAttach(vlc: LibVLC, filePath: String, mp: MediaPlayer) {
+        mainHandler.postDelayed({
+            if (mediaPlayer !== mp || !attachPending) return@postDelayed
+            logW("video size probe timed out after ${PROBE_TIMEOUT_MS}ms, " +
+                "attaching with the fallback ${videoWidth}x$videoHeight, " +
+                "textureId=$textureId")
+            attachViewsAndPlay(mp)
+        }, PROBE_TIMEOUT_MS)
+
+        ioExecutor.execute {
+            val probed: IntArray? = try {
+                // 用**独立的 Media 对象**、不复用 [mediaRef]：播放用的 Media 正被
+                // MediaPlayer 持有，再让后台线程对同一个 handle 做 parse 是没必要的
+                // 跨线程共享，出问题很难查。
+                val probeMedia = Media(vlc, filePath)
+                try {
+                    probeVideoSize(probeMedia)
+                } finally {
+                    probeMedia.release()
+                }
+            } catch (e: Exception) {
+                logW("video size probe failed: ${e.message}, textureId=$textureId")
+                null
+            }
+            mainHandler.post {
+                // initialize() 已经被另一次调用/release() 取代了，别再插手。
+                if (mediaPlayer !== mp) return@post
+                if (!attachPending) {
+                    // 兜底超时已经用常量几何把 vout 挂上了：保持现状（旧行为）。
+                    logI("probe result arrived after the fallback attach, keeping " +
+                        "${videoWidth}x$videoHeight, textureId=$textureId")
+                    return@post
+                }
+                if (probed == null) {
+                    logW("video size probe gave nothing, keeping the fallback " +
+                        "${videoWidth}x$videoHeight, textureId=$textureId")
+                } else {
+                    logI("probed video size (before attach): " +
+                        "${probed[0]}x${probed[1]}, sar=${probed[2]}:${probed[3]}, " +
+                        "textureId=$textureId")
+                    // 宽度必须对齐：锁图时每帧比的是 VLC 取整后的 fmt.i_width。
+                    applyVideoSize(alignBufferWidth(probed[0]), probed[1], "probe")
+                }
+                attachViewsAndPlay(mp)
+            }
+        }
+    }
+
+    /**
+     * 定几何 → 挂 vout → 起播。
+     *
+     * 这里用的 [videoWidth]/[videoHeight] 来自探测或兜底（见
+     * [probeSizeThenAttach]）；布局回调（attachViews 的监听器）给的是 VLC 自己
+     * 算好的 fmt，只用来修正上报给 Dart 的宽高比。
+     */
+    private fun attachViewsAndPlay(mp: MediaPlayer) {
+        try {
             val surfaceTexture = textureEntry.surfaceTexture()
             surfaceTexture.setDefaultBufferSize(videoWidth, videoHeight)
 
@@ -281,53 +381,9 @@ class VlcPlayerHandler(
             // android-display(260) 两条路径都会直接放弃打开**，VLC 退化到
             // gles2（或什么都渲染不出来）⇒ 全黑/纯色。
             // 这正是本次黑屏的根因，也是这次提交想修的东西。
-            vout.attachViews(IVLCVout.OnNewVideoLayoutListener {
-                    _, w, h, visibleW, visibleH, sarNum, sarDen ->
-                if (w <= 0 || h <= 0) return@OnNewVideoLayoutListener
-                // 回调跑在 vout 线程上，可能比 release() 慢一步：这一轮播放已经被
-                // 拆掉（mediaPlayer 置空或被换成新的 MediaPlayer）时直接丢弃，
-                // 否则会往已 release 的 textureEntry/SurfaceTexture 上写几何。
-                if (mediaPlayer !== mp) return@OnNewVideoLayoutListener
-                // **同步**设置缓冲区大小，不要 post 到主线程。
-                //
-                // 这个回调是 PoolAlloc() 里 AndroidWindow_Setup()（几何定型）
-                // 之后、第一帧 AndroidWindow_LockPicture() 之前**同步**调进来的
-                // （JNI AWindowHandler_setVideoLayout → Java 监听器，跑在 vout
-                // 线程），而 SurfaceTexture.setDefaultBufferSize() 不受线程限制。
-                // post 到主线程就会和第一帧抢时序：主线程慢一步，前若干帧仍然
-                // 按旧尺寸校验 `sw.buf.width >= fmt.i_width`，直接 return -1 丢帧
-                // —— 表现出来就是开头一段黑屏，甚至长时间黑屏。
-                // 这里给的 w/h 就是 VLC 自己的 fmt（非 ANWP 路径 = fmt.i_width，
-                // ANWP 路径 = i_visible_width，两条都 >= 锁图时的要求），
-                // 所以**不要**再对它做对齐/取整，照抄即可。
-                //
-                // 先立标志再生效：后台的探测兜底看到 true 就不再覆盖
-                // （它读的是 volatile，两边可能交错）。
-                layoutSizeKnown = true
-                val changed = applyVideoSize(
-                    w,
-                    h,
-                    "layout",
-                    emit = false,
-                    visibleWidth = visibleW,
-                    visibleHeight = visibleH
-                )
-                // eventSink/日志必须回主线程（平台通道调用约定）。
-                mainHandler.post {
-                    // 入队时间早于 release() 的回调要丢掉，否则会给 Dart 补发一个
-                    // 已经 dispose 掉的 texture 的 initialized 事件。
-                    if (mediaPlayer !== mp) return@post
-                    logI("video layout: ${w}x$h, visible=${visibleW}x$visibleH, " +
-                        "sar=${sarNum}:$sarDen, bufferChanged=$changed, " +
-                        "textureId=$textureId")
-                    if (changed) emitInitialized()
-                }
-            })
+            vout.attachViews(newVideoLayoutListener(mp))
             logI("video surface attached to textureId=$textureId " +
                 "at ${videoWidth}x$videoHeight")
-
-            // 只是兜底与日志，见方法注释；不要改回同步调用。
-            probeVideoSizeAsync(vlc, filePath, mp)
 
             mp.setEventListener { event ->
                 // 这段跑在 libvlc 的事件线程上（不是主线程）：异常一旦逃出去
@@ -357,24 +413,29 @@ class VlcPlayerHandler(
                 }
             }
 
-            mp.play()
-            logI("play() called for textureId=$textureId")
+            if (playRequested) {
+                mp.play()
+                logI("play() called for textureId=$textureId")
+            } else {
+                logI("play not requested before the views were attached, " +
+                    "staying paused, textureId=$textureId")
+            }
+            attachPending = false
         } catch (e: Exception) {
-            logE("initialize failed, cleaning up: ${e.message}", e)
+            logE("attachViewsAndPlay failed, cleaning up: ${e.message}", e)
             resetPlayer()
-            throw e
         }
     }
 
     /**
      * 用 libvlc 的媒体解析（只解析容器，不解码）拿到第一路视频轨的编码尺寸。
      *
-     * 这**不是**主路径：真实的几何由 [IVLCVout.OnNewVideoLayoutListener] 在
-     * C 侧 PoolAlloc() → AndroidWindow_Setup()（几何已定型）之后、第一帧之前
-     * 同步送回来，那个值才是 VLC 真正用的。这里只是兜底和日志
-     * （用于诊断"回调没来"这一类问题）。
+     * 这是**主路径**（见 [probeSizeThenAttach]）：几何必须在挂 vout 之前定下来，
+     * 所以先在这里解析一次。布局回调（[newVideoLayoutListener]）给的是 VLC 自己
+     * 算好的 fmt，用来在已经在播之后修正上报值。
      *
-     * 因此它**绝对不能**在主线程上调用，见 [probeVideoSizeAsync]。
+     * 因此它**绝对不能**在主线程上调用（`media.parse()` 真的会打开容器解析一遍，
+     * 慢存储上可以是数百毫秒 ⇒ ANR）。
      *
      * @return `[width, height, sarNum, sarDen]`，失败返回 `null`。
      */
@@ -404,60 +465,53 @@ class VlcPlayerHandler(
     }
 
     /**
-     * 在后台线程跑 [probeVideoSize]，结果只用来兜底/记日志。
+     * `attachViews()` 用的布局监听器（必须在 attachViews 时传入，见
+     * [attachViewsAndPlay] 里那段说明：不传任何 vout 路径都不会打开）。
      *
-     * 为什么必须异步：`Media.parse()` 会真的把容器打开解析一遍，本地小文件
-     * 几毫秒，但大容器、损坏容器、慢存储（SD 卡/加密目录）上可以是几百毫秒
-     * 到数秒。而 [initialize] 是 MainActivity 在**主线程**上从 MethodChannel
-     * 回调里调进来的 —— 同步做就是直接把这个耗时算进主线程 ⇒ ANR 风险。
+     * 回调跑在 **vout 线程**上（JNI `AWindowHandler_setVideoLayout` → Java 监听器），
+     * 时机是 `PoolAlloc()` 里 `AndroidWindow_Setup()`（几何定型）之后、第一帧
+     * `AndroidWindow_LockPicture()` 之前 ⇒ 这里**同步**写缓冲区大小，不能 post。
      *
-     * 用**独立的 Media 对象**、不复用 [mediaRef]：播放中的 Media 正被
-     * MediaPlayer 持有，再让后台线程对同一个 handle 做 parse 是没必要的
-     * 跨线程共享，出问题很难查。
-     *
-     * 结果只在布局回调**还没**送到时才被采用（[layoutSizeKnown]）——
-     * 回调给的才是 VLC 真正使用的几何。
+     * [mp] 是这一轮播放的 MediaPlayer：回调可能比 `release()` 慢一步，凡是要碰
+     * native 字段或纹理几何之前都必须按"还是不是这一轮播放"校验一次
+     * （见 ISSUE-015 / ADR-020）。
      */
-    private fun probeVideoSizeAsync(vlc: LibVLC, filePath: String, mp: MediaPlayer) {
-        ioExecutor.execute {
-            val probed: IntArray? = try {
-                val probeMedia = Media(vlc, filePath)
-                try {
-                    probeVideoSize(probeMedia)
-                } finally {
-                    probeMedia.release()
-                }
-            } catch (e: Exception) {
-                logW("video size probe failed: ${e.message}, textureId=$textureId")
-                null
-            }
+    private fun newVideoLayoutListener(
+        mp: MediaPlayer
+    ): IVLCVout.OnNewVideoLayoutListener =
+        IVLCVout.OnNewVideoLayoutListener { _, w, h, visibleW, visibleH, sarNum, sarDen ->
+            if (w <= 0 || h <= 0) return@OnNewVideoLayoutListener
+            // 回调跑在 vout 线程上，可能比 release() 慢一步：这一轮播放已经被
+            // 拆掉（mediaPlayer 置空或被换成新的 MediaPlayer）时直接丢弃，
+            // 否则会往已 release 的 textureEntry/SurfaceTexture 上写几何。
+            if (mediaPlayer !== mp) return@OnNewVideoLayoutListener
+            // **同步**设置缓冲区大小，不要 post 到主线程。
+            //
+            // post 到主线程就会和第一帧抢时序：主线程慢一步，前若干帧仍然
+            // 按旧尺寸校验 `sw.buf.width >= fmt.i_width`，直接 return -1 丢帧
+            // —— 表现出来就是开头一段黑屏，甚至长时间黑屏。
+            // 这里给的 w/h 就是 VLC 自己的 fmt（非 ANWP 路径 = fmt.i_width，
+            // ANWP 路径 = i_visible_width，两条都 >= 锁图时的要求），
+            // 所以**不要**再对它做对齐/取整，照抄即可。
+            val changed = applyVideoSize(
+                w,
+                h,
+                "layout",
+                emit = false,
+                visibleWidth = visibleW,
+                visibleHeight = visibleH
+            )
+            // eventSink/日志必须回主线程（平台通道调用约定）。
             mainHandler.post {
-                // initialize() 已经被另一次调用/release() 取代了，别再插手。
+                // 入队时间早于 release() 的回调要丢掉，否则会给 Dart 补发一个
+                // 已经 dispose 掉的 texture 的 initialized 事件。
                 if (mediaPlayer !== mp) return@post
-                if (probed == null) {
-                    logW("video size probe gave nothing, keeping " +
-                        "${videoWidth}x$videoHeight until the layout callback " +
-                        "arrives, textureId=$textureId")
-                    return@post
-                }
-                logI("probed video size: ${probed[0]}x${probed[1]}, " +
-                    "sar=${probed[2]}:${probed[3]}, textureId=$textureId")
-                if (layoutSizeKnown) {
-                    logI("layout callback already fixed ${videoWidth}x$videoHeight, " +
-                        "ignoring probe result, textureId=$textureId")
-                    return@post
-                }
-                // 回调没来才用它兜底。宽度必须对齐：VLC 的
-                // AndroidWindow_Setup() 会把 fmt.i_width 向上取整到同一倍数，
-                // 锁图时比的是取整后的值。
-                applyVideoSize(
-                    alignBufferWidth(probed[0]),
-                    probed[1],
-                    "probe"
-                )
+                logI("video layout: ${w}x$h, visible=${visibleW}x$visibleH, " +
+                    "sar=${sarNum}:$sarDen, bufferChanged=$changed, " +
+                    "textureId=$textureId")
+                if (changed) emitInitialized()
             }
         }
-    }
 
     /**
      * 更新视频尺寸，并把同一份尺寸用于两处**必须一致**的地方：
@@ -635,6 +689,13 @@ class VlcPlayerHandler(
             logW("play ignored: no player for textureId=$textureId")
             return
         }
+        if (attachPending) {
+            // 尺寸探测还没结束、vout 还没挂（见 [attachViewsAndPlay]）：先记意图，
+            // 挂上视图后统一起播，否则会在"还没有 vout"的状态下 play()。
+            playRequested = true
+            logI("play deferred until the views are attached: textureId=$textureId")
+            return
+        }
         mp.play()
         logI("play: textureId=$textureId")
     }
@@ -643,6 +704,12 @@ class VlcPlayerHandler(
         val mp = mediaPlayer
         if (mp == null) {
             logW("pause ignored: no player for textureId=$textureId")
+            return
+        }
+        if (attachPending) {
+            // 视图还没挂上、播放还没开始：取消掉待执行的起播即可。
+            playRequested = false
+            logI("pause deferred (playback has not started yet): textureId=$textureId")
             return
         }
         mp.pause()
@@ -780,9 +847,10 @@ class VlcPlayerHandler(
         videoHeight = 0
         displayWidth = 0
         displayHeight = 0
-        // 新的一轮播放要从"几何未知"重新开始，否则后台探测的结果会被上一轮
-        // 留下的 true 挡掉。
-        layoutSizeKnown = false
+        // 新的一轮播放要从"等探测"重新开始；已经排进 mainHandler 的探测/超时
+        // 回调靠 mediaPlayer !== mp 丢掉。
+        attachPending = false
+        playRequested = false
 
         val mp = mediaPlayer
         val media = mediaRef

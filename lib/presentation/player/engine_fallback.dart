@@ -36,13 +36,28 @@ mixin VideoEngineFallbackState<T extends ConsumerStatefulWidget>
   /// 已经用掉「换引擎重试」额度的 item：每个 item 只换一次，避免来回重建播放器。
   final Set<String> _engineFallbackUsedItemIds = <String>{};
 
+  /// 长按菜单（「内部播放（VLC 引擎）」）为**某一条**视频指定的引擎。
+  ///
+  /// 只作用于用户明确长按的那一条：滑/切到别的视频仍然按设置走。
+  final Map<String, String> _forcedEngineItemIds = <String, String>{};
+
   Timer? _loadWatchdog;
+
+  /// 给单条视频指定引擎（`'vlc'` / `'exoPlayer'`），覆盖设置里的选择。
+  ///
+  /// 调用方在进入播放界面前调用（见 `viewer_screen` / `gallery_preview_screen`
+  /// 的 `initialForcedEngine`）。
+  void forceEngineForItem(String itemId, String engine) {
+    _forcedEngineItemIds[itemId] = engine;
+  }
 
   /// 传给平台通道的 `playerEngine` 参数：`'vlc'` 或 `'exoPlayer'`。
   ///
-  /// 用户选了 VLC、但这个视频在 VLC 下已经确认拿不到帧时，本屏会话内对**这一个**
-  /// 视频改用默认引擎，而不是反复把用户扔回黑屏。
+  /// 优先级：长按菜单的强制值 → 设置里的引擎（VLC 下已确认拿不到帧的 item
+  /// 改回默认引擎，见 [engineFor] 的说明）。
   String engineFor(String itemId) {
+    final forced = _forcedEngineItemIds[itemId];
+    if (forced != null) return forced;
     final configured = ref.read(settingsControllerProvider).playerEngine;
     if (configured != PlayerEngine.vlc) return kExoPlayerEngine;
     if (_engineFallbackItemIds.contains(itemId)) return kExoPlayerEngine;
@@ -55,7 +70,11 @@ mixin VideoEngineFallbackState<T extends ConsumerStatefulWidget>
       !_engineFallbackItemIds.contains(itemId);
 
   /// 用掉额度：之后 [engineFor] 对该 item 返回 [kExoPlayerEngine]。
+  ///
+  /// 同时清掉强制值：它只决定「第一次用哪个引擎」，看门狗要换引擎时必须让位，
+  /// 否则「强制 VLC ⇒ 拿不到帧 ⇒ 换默认引擎」这条回退永远生效不了。
   void useEngineFallback(String itemId) {
+    _forcedEngineItemIds.remove(itemId);
     _engineFallbackUsedItemIds.add(itemId);
     _engineFallbackItemIds.add(itemId);
   }

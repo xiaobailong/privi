@@ -233,6 +233,58 @@
 - 自检: 状态文件 mtime 是否在推进；目标任务进程（`java.exe`/`dart.exe`）是否还在
 - 首次记录: 2026-09-22（本次全程用它轮询 `build.bat` 进度）
 
+## PIT-024 `findstr` 的文件名里带通配符但**整个路径被引号包住** ⇒ 0 命中（假阴性）
+- 触发条件: 想在一批文件里找关键词，而文件名里有中文/空格，于是写成
+  `findstr /n /c:"Vout" "C:\Users\xxx\Downloads\*_log_2026-10-01.txt"`
+- 错误现象: 退出码 1、**一行输出都没有**（同一批文件里明明有 `Vout`），
+  很容易误判成"日志里没有这个现象" —— 而本次排查的结论恰恰要靠"有没有 `video layout:`"来定
+- 根因: `findstr` 的**搜索参数**支持通配符，但**引号包住整个带通配符的路径**时它按普通
+  文件名处理（找不到该"文件"）⇒ 静默 0 命中；中文文件名又让人不敢去掉引号
+- 正确做法: **先用通配符 copy 到一个 ASCII 名字，再对 ASCII 文件搜**：
+  ```bat
+  copy /y "C:\Users\xxx\Downloads\*_log_2026-10-01.txt" tmp\log.txt
+  findstr /n /c:"video layout" tmp\log.txt
+  ```
+  （`copy` 支持引号内的通配符；`tmp\` 见 `ADR-019`）
+- 反例（别这么写）: `findstr /c:"Vout" "C:\...\*_log.txt"`；或直接用中文文件名去 `findstr`
+- 自检: 先用一个**已知一定存在**的词（如 `INFO`）做正控：正控也 0 命中 ⇒ 是检索手段坏了，不是日志里没有
+- 首次记录: 2026-10-01（本次：`grep_layout.txt`/`grep_events.txt` 空文件，改用 copy 后立刻正常）
+
+## PIT-025 终端回显里的中文可能"看起来是乱码/错字"，**文件其实是好的**
+- 触发条件: 命令输出里带中文（尤其 `type`/`findstr` 回显 + `chcp 65001`），或者被 Cline 的
+  终端抓取截断/半行显示
+- 错误现象: 看到 `几何和挂视图的���序`、整行被截成两段、行尾多出空格等 —— 看着像文件被写坏了，
+  于是想再去"修"一遍（完全没必要，而且真去改反而可能改坏）
+- 正确做法: **用 `read_files` 复核文件真实内容**（它按 UTF-8 读，不受终端代码页/抓取影响）；
+  确认无误就忽略终端里的显示噪声
+- 反例（别这么写）: 依据终端回显断定"文件里的中文坏了"并重新编辑；把终端截断当成"行内容变短"
+- 自检: `read_files` 读同一行 → 与 `git diff` 的显示一致即为正常
+- 首次记录: 2026-10-01（本次改 `VlcPlayerHandler.kt` 时踩到，`read_files` 复核后确认文件正常）
+
+## PIT-026 全新环境（无 `.dart_tool` / `build`）的首次构建：`pub get` 会在 SDK `git fetch --tags` 上"静止" 2 分多钟，别当成卡死
+- 触发条件: 干净工作区（`flutter clean` 之后、或换机器）跑 `build.bat`
+- 错误现象: `build_full.log` 的 pub 心跳行连出
+  `[pub] 已运行 xx s | 日志 NNNN 字节 | 静止 NNs` + `注意: 日志已 NNs 无增长（可能正在下载依赖;
+  若长期为零, 多半是 dart.exe 被安全软件拦截）`；`pub_get_*.log` 停在同一行不动；
+  同时 `tasklist` 里能看到**多个** `git.exe`（其中一个几百 MB）
+- 实测（2026-10-01 首次构建）: 静止在 **141s** 后自行恢复（`日志 4915 字节 | 静止 0s`），
+  整次 `pub get` 182s；触发点是 flutter 工具在 SDK 仓库里跑
+  `git fetch --tags`（`pub_get_codegen.log:27` `executing: [...] git fetch --tags`），
+  与项目依赖、网络连通性都无关（`curl -sI https://github.com` 当时 200/1.4s）
+- 正确做法:
+  ①**看到"静止"先别杀**，等到看门狗给出结论；判活看
+  `tasklist /fi "imagename eq git.exe"` 与 SDK 的 `git fetch` 是否还在；
+  ②`ISSUE-002` 的看门狗是"日志零增长 300s ⇒ 杀"，**真正慢的 `git fetch` 有被误杀的风险**
+  —— 本机实测最坏已到 141s，网络差时可能超 300s；真要复现失败就用 `build.bat` 再跑一次
+  （fetch 的对象已经落地，第二次会快很多）
+- 反例（别这么写）: 看到 `静止 101s` 就 `taskkill` 掉 dart/git，然后写"pub get 卡死"
+  （会误导成 `ISSUE-002` 复发）
+- 附：本机首次构建耗时基线（2026-10-01，Ryzen 7 8745H）：codegen `build_runner` AOT 217s +
+  `assembleRelease` 712.1s，整条 `build.bat norelease` 约 **21 分钟**；`WMI 自检 7572ms rc=0`、
+  `MEM OK FreeCommitMB=18397`，**没有**复发 `ISSUE-001` / `ISSUE-004`
+- 自检: `git.exe` 还在 + 心跳行在推进 ⇒ 正常；只有 `dart.exe` 静默且**无 git.exe** 才按卡死处理
+- 首次记录: 2026-10-01
+
 ## PIT-023 上一轮 `build.bat` 的窗口没关 ⇒ 新构建**完全没跑**（tee 抢不到 `build\build_full.log`）
 - 触发条件: 构建失败后立刻再次 `build.bat`（尤其用 `start /min cmd /c "build.bat ..."` 启动的窗口，
   它在失败后会停 60 秒"窗口将在 60 秒后自动关闭，或按任意键立即关闭"，期间**一直占着日志句柄**）

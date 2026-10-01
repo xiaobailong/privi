@@ -363,3 +363,93 @@
      `build.bat norelease`（或完整 `build.bat`）→ 期望 `BUILD_FAILED=0` + 产出
      `build\app\outputs\flutter-apk\app-release.apk`；装到手机上再按"快速连点下一集"复现路径回归，
      崩溃不再出现、且 `Download/密册/logs/密册_crash_*.txt` 始终不生成即为通过
+
+## ISSUE-016 VLC 引擎下非 16:9 的视频只显示「一小块」画面（几何被裁）
+- 状态: 已修复（`ADR-022`；真机回归待用户确认）
+- 症状 / 现场: 用户报"第一个视频画面显示不完整，只有一小块"。日志
+  （`密册_log_2026-10-01.txt`）三个视频都是 `engine=vlc`：
+  * #1 `39cd4cc5_I_love_sex_toy_000449-000902.mp4` = **720x960**（3:4 竖屏）→ 画面异常
+  * #2 `8a632efc_Babe_...mp4` = 1920x1080 → 正常
+  * #3 `c7242eaf_Sexy_Japanese_...mp4` = 1920x1080 → 正常
+- 复发判据（一条命令，先把日志 copy 成 ASCII 名再 `findstr`，见 `PIT-024`）:
+  `findstr /n /c:"video surface attached" /c:"probed video size" tmp\log.txt` →
+  **`attached ... at` 恒为 `1920x1080`、且与该 textureId 的 `probed video size` 不一致**
+  ⇒ 同一根因仍在（修复后应为该视频的真实尺寸，竖屏片是 `720x960`，并出现新的
+  `probed video size (before attach): ...` 行）
+- 根因: 几何有两个来源、**顺序反了**：
+  ① `initialize()` 立刻用常量 `FALLBACK_BUFFER_WIDTH/HEIGHT = 1920x1080` 调
+     `surfaceTexture.setDefaultBufferSize()` + `vout.setWindowSize()` 并 `attachViews()`；
+  ② 之后才由 io 线程 `media.parse()` 探测出真实尺寸，`applyVideoSize()` 把**缓冲区**
+     改成 720x960 —— 而 vout 已在 1920x1080 的窗口上定型（`PoolAlloc()` →
+     `AndroidWindow_Setup()`），此后每帧只校验 `sw.buf.width < fmt.i_width`，
+     **不会重算布局** ⇒ 画面按 1920x1080 摆放，只有左上角一块落在 720x960 的缓冲里。
+  同时 Dart 拿到的是**可视**尺寸 720x960（`STATE_READY ... size=720x960`），
+  Flutter 侧按 3:4 取样整块缓冲 ⇒ 两边理解不一致、画面被裁。
+  设计上本该由布局回调（`OnNewVideoLayoutListener`）统一这两个值，但本机
+  **整份日志零 `video layout:` 行** ⇒ 该回调从未送达，兜底路径成了唯一来源。
+- 证据:
+  ① `tmp\log.txt`（原 `密册_log_2026-10-01.txt`）第 11/19/21 行（视频 #1）:
+     `video surface attached to textureId=1 at 1920x1080` →
+     `probed video size: 720x960, sar=1:1, textureId=1`（+141ms）→
+     `STATE_READY: textureId=1, duration=253109ms, size=720x960 (buffer 720x960)`；
+  ② #2/#3 的 `probed video size` 与兜底常量**一致**（1920x1080）⇒ 只有 #1 发生
+     "缓冲区被改小"，也只有 #1 出问题，相关性完全吻合；
+  ③ 全日志 `findstr /c:"video layout"` **零命中**（三个视频都没有）；而同一天
+     `Vout event: voutCount=1` 说明 vout 是打开的 ⇒ 不是 `ISSUE-008` 那种全黑；
+  ④ C 侧依据（缓冲区不得小于 fmt / `AndroidWindow_SetupANW()` 的 `setBuffersGeometry`
+     指针可能为空）在 `VlcPlayerHandler` 原注释里已有记录 → 见 `ADR-022`。
+- 修法: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`
+  ① `initialize()` 不再立刻挂视图：建好 `MediaPlayer`/`Media` 后调 `probeSizeThenAttach()`；
+  ② `probeSizeThenAttach()` 在 **io 线程** `media.parse()` 拿尺寸 → 回主线程
+     `applyVideoSize()`（宽度对齐 4）→ `attachViewsAndPlay()`；探测失败/超时
+     （`PROBE_TIMEOUT_MS = 2000`）才用常量兜底先挂；
+  ③ `attachViewsAndPlay()` 用**同一份** `videoWidth/Height` 调 `setDefaultBufferSize()`
+     与 `setWindowSize()`，几何只定一次；
+  ④ 探测期间 `play()` / `pause()` 只写 `attachPending` / `playRequested`，挂上视图后统一起播
+     （不再出现"还没有 vout 就 play"）；
+  ⑤ 删掉旧的 `probeVideoSizeAsync()` 与只为它服务的 `layoutSizeKnown`；布局监听器提取成
+     `newVideoLayoutListener(mp)`（行为不变，仍带 `mediaPlayer !== mp` 身份校验）。
+- 反例 / 易误判: ①当成 `ISSUE-008`（黑屏/纯色）复发 —— 本次画面**有内容**，只是被裁；
+  ②以为 Dart 侧 `AspectRatio` 算错 —— Dart 收到的 720x960 本身没错，错的是原生
+  缓冲/窗口几何；③把"布局回调没来"当成 vout 没打开（`Vout event: voutCount=1` 明确说明开着）。
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`
+- 决策: `ADR-022`
+- 首次记录: 2026-10-01 ／ 最近复核: 2026-10-01（本轮构建验证通过）
+- 验证（2026-10-01 10:06，`build.bat norelease`）:
+  `build\build_exit.log` = `BUILD_FAILED=0 WMI_FAILED=0 NEW_VER=1.0.30+56`；
+  `Running Gradle task 'assembleRelease'... 712.1s` → `build\app\outputs\flutter-apk\app-release.apk`
+  （121.7MB，根目录副本 `privi-1.0.30+56.apk`）；
+  `build\app\tmp\kotlin-classes\release\com\privi\app\VlcPlayerHandler.class` 已产出
+  ⇒ 本次 Kotlin 改动**编译级通过**；R8 `mapping\release\{seeds,usage}.txt` 已写出、
+  `android\hs_err_pid*.log` 无新增（`ISSUE-004` 未复发）
+- 待真机回归（唯一未验证项）: 装 `privi-1.0.30+56.apk` → 打开那个 720x960 的竖屏视频，
+  画面应完整（不再只有一小块）；导出日志应出现
+  `probed video size (before attach): 720x960...` 且 `video surface attached ... at 720x960`
+  （不再是 `at 1920x1080`）
+
+## ISSUE-017 长按菜单里两条「内部播放」在设置为 libVLC 时变成同一个引擎（看着像重复项）
+- 状态: 已修复
+- 症状 / 现场: 用户报"默认设置里就是 VLC 时，两个内部播放器的引擎选项都是 VLC"，
+  长按菜单出现两条内容一样的选项
+- 复发判据: 把 `播放引擎` 设置成 **libVLC**，长按任意视频 →
+  「内部播放（默认引擎）」的副标题必须是 `ExoPlayer（系统解码器）`、
+  「内部播放（VLC 引擎）」必须是 libVLC；两条副标题相同即复发
+  （代码级判据：`video_open_target_sheet.dart` 里两条入口都必须传固定引擎，
+  `findstr /c:"kSheetDefaultEngine" /c:"kExoPlayerEngine" /c:"kVlcEngine" lib\presentation\common\video_open_target_sheet.dart lib\presentation\grid\media_grid_screen.dart lib\presentation\visible\visible_media_grid.dart`）
+- 根因: 第一版实现让「默认引擎」那条**跟随 `settings.playerEngine`**，只用副标题显示
+  引擎名来消歧 —— 设置本来就是 libVLC 时，两条入口的引擎相同、名字却不同 ⇒ 用户看到重复项
+- 修法: 两条入口的引擎**写死**，不再读设置：
+  - `video_open_target_sheet.dart` 新增 `const PlayerEngine kSheetDefaultEngine = PlayerEngine.exoPlayer`，
+    副标题固定显示它；`showVideoOpenTargetSheet()` 去掉 `defaultEngine` 参数
+  - `media_grid_screen.dart` / `visible_media_grid.dart`：`internalDefaultEngine` →
+    `forcedEngine: kExoPlayerEngine`，`internalVlcEngine` → `forcedEngine: kVlcEngine`
+    （经 `initialForcedEngine` 落到 `VideoEngineFallbackState.forceEngineForItem`）
+- 反例 / 易误判: 把"两条一样"当成 `VideoEngineFallbackState` 的强制值失效（其实强制值没问题），
+  或去改设置页的引擎选项（设置页本就应该跟随用户选择）
+- 相关文件: `lib/presentation/common/video_open_target_sheet.dart`、
+  `lib/presentation/grid/media_grid_screen.dart`、`lib/presentation/visible/visible_media_grid.dart`
+- 决策: `ADR-023`（含 2026-10-01 修订）
+- 首次记录: 2026-10-01 ／ 验证: `build.bat gradle` →
+  `build\build_exit.log` = `周四 2026/10/01 10:27:47.51 BUILD_FAILED=0 WMI_FAILED=0 NEW_VER=`，
+  产出 `build\app\outputs\flutter-apk\app-release.apk`（127,631,021B）；
+  Dart 侧 `frontend_server` 末行 `... tmp\_dartcheck.dill 0`（0 error）

@@ -474,6 +474,13 @@ class AppLocalizations {
 
   String get inAppPlayback => '应用内播放';
 
+  /// 长按视频的「打开方式」：用设置里选定的引擎在本应用内播放。
+  String get inAppPlaybackDefaultEngine => '内部播放（默认引擎）';
+
+  /// 长按视频的「打开方式」：本次强制用 libVLC 引擎在本应用内播放
+  /// （默认引擎解不了的片子走这条）。
+  String get inAppPlaybackVlcEngine => '内部播放（VLC 引擎）';
+
   String get externalPlaybackUnsupported => '外部播放不可用';
 
   String get playerEngine => '播放引擎';

@@ -30,11 +30,18 @@ class GalleryPreviewScreen extends ConsumerStatefulWidget {
     required this.items,
     required this.initialIndex,
     this.resolveFile = resolveGalleryAssetFile,
+    this.initialForcedEngine,
   }) : assert(items.length > 0);
 
   final List<GalleryAsset> items;
   final int initialIndex;
   final GalleryAssetFileResolver resolveFile;
+
+  /// 长按菜单选了「内部播放（VLC 引擎）」时传进来的引擎（`'vlc'`）。
+  ///
+  /// 只作用于 [initialIndex] 这一条（见
+  /// [VideoEngineFallbackState.forceEngineForItem]）：滑到别的视频仍按设置走。
+  final String? initialForcedEngine;
 
   @override
   ConsumerState<GalleryPreviewScreen> createState() =>
@@ -68,6 +75,11 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
     super.initState();
     _index = widget.initialIndex.clamp(0, widget.items.length - 1);
     _page = PageController(initialPage: _index);
+    // 长按菜单指定的引擎：只钉住用户选中的这一条，别的 asset 仍按设置走。
+    final forcedEngine = widget.initialForcedEngine;
+    if (forcedEngine != null) {
+      forceEngineForItem(_current.id, forcedEngine);
+    }
     _playbackSpeed = ref.read(settingsControllerProvider).playerPlaybackSpeed;
     unawaited(VideoSystemUi.apply(false));
     _loadCurrent();

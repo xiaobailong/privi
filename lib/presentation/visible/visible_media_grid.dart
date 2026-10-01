@@ -29,6 +29,7 @@ import '../common/video_duration_badge.dart';
 import '../common/video_open_target_sheet.dart';
 import '../import/import_progress_sheet.dart';
 import '../import/import_result_message.dart';
+import '../player/engine_fallback.dart';
 import 'folder_cover_cache.dart';
 import 'gallery_preview_screen.dart';
 
@@ -180,8 +181,10 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     }
   }
 
-  /// Long-press on a video: pick external playback, in-app playback, or
-  /// selection. Non-video items keep the plain selection behaviour.
+  /// Long-press on a video: pick external playback, in-app playback with a
+  /// fixed engine (ExoPlayer / libVLC — **not** the setting, otherwise both
+  /// entries collapse into the same engine), or selection. Non-video items
+  /// keep the plain selection behaviour.
   Future<void> _chooseVideoTarget(GalleryAsset asset) async {
     final external = ref.read(externalPlayerCoordinatorProvider);
     final target = await showVideoOpenTargetSheet(
@@ -189,15 +192,24 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
       externalSupported: external.supported,
     );
     if (!mounted || target == null) return;
-    if (target == VideoOpenTarget.external) {
-      await _openExternalPreview(asset);
-      return;
+    switch (target) {
+      case VideoOpenTarget.external:
+        await _openExternalPreview(asset);
+      case VideoOpenTarget.internalDefaultEngine:
+        await _openPreview(
+          asset,
+          forceInternal: true,
+          forcedEngine: kExoPlayerEngine,
+        );
+      case VideoOpenTarget.internalVlcEngine:
+        await _openPreview(
+          asset,
+          forceInternal: true,
+          forcedEngine: kVlcEngine,
+        );
+      case VideoOpenTarget.selection:
+        _enterSelect(asset.id);
     }
-    if (target == VideoOpenTarget.internal) {
-      await _openPreview(asset, forceInternal: true);
-      return;
-    }
-    _enterSelect(asset.id);
   }
 
   /// Hands [a] over to the system chooser / external player app.
@@ -231,8 +243,10 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
   Future<void> _openPreview(
     GalleryAsset a, {
     bool forceInternal = false,
+    String? forcedEngine,
   }) async {
-    // The long-press chooser passes forceInternal to bypass the setting.
+    // The long-press chooser passes forceInternal / forcedEngine to bypass the
+    // setting and to pin the engine for this one asset.
     if (!forceInternal) {
       final preferExternal =
           ref.read(settingsControllerProvider).playerExternal;
@@ -253,6 +267,7 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
         builder: (_) => GalleryPreviewScreen(
           items: previewItems,
           initialIndex: previewIndex < 0 ? 0 : previewIndex,
+          initialForcedEngine: forcedEngine,
         ),
       ),
     );

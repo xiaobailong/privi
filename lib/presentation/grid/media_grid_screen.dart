@@ -31,6 +31,7 @@ import '../common/rating_filter_bar.dart';
 import '../common/vault_sheet.dart';
 import '../common/video_open_target_sheet.dart';
 import '../import/import_progress_sheet.dart';
+import '../player/engine_fallback.dart';
 import '../player/player_screen.dart';
 import '../viewer/viewer_screen.dart';
 import 'thumbnail_tile.dart';
@@ -127,13 +128,15 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     List<MediaItem> items,
     int index, {
     bool forceInternal = false,
+    String? forcedEngine,
   }) async {
     if (items.isEmpty) return;
     final item = items[index];
     final preferExternal = ref.read(settingsControllerProvider).playerExternal;
 
     // Videos: prefer system app chooser when setting is on (default true).
-    // The long-press chooser passes forceInternal to bypass the setting.
+    // The long-press chooser passes forceInternal / forcedEngine to bypass the
+    // setting and to pin the engine for this one item.
     final external = ref.read(externalPlayerCoordinatorProvider);
     if (!forceInternal &&
         item.isVideo &&
@@ -146,8 +149,11 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ViewerScreen(items: List.of(items), initialIndex: index),
+        builder: (_) => ViewerScreen(
+          items: List.of(items),
+          initialIndex: index,
+          initialForcedEngine: forcedEngine,
+        ),
       ),
     );
   }
@@ -172,8 +178,10 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     return false;
   }
 
-  /// Long-press on a video: pick external playback, in-app playback, or
-  /// selection. Non-video items keep the plain selection behaviour.
+  /// Long-press on a video: pick external playback, in-app playback with a
+  /// fixed engine (ExoPlayer / libVLC — **not** the setting, otherwise both
+  /// entries collapse into the same engine), or selection. Non-video items
+  /// keep the plain selection behaviour.
   Future<void> _chooseVideoTarget(
     MediaItem item,
     List<MediaItem> items,
@@ -185,15 +193,26 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
       externalSupported: external.supported,
     );
     if (!mounted || target == null) return;
-    if (target == VideoOpenTarget.external) {
-      await _openExternally(item);
-      return;
+    switch (target) {
+      case VideoOpenTarget.external:
+        await _openExternally(item);
+      case VideoOpenTarget.internalDefaultEngine:
+        await _openViewer(
+          items,
+          index,
+          forceInternal: true,
+          forcedEngine: kExoPlayerEngine,
+        );
+      case VideoOpenTarget.internalVlcEngine:
+        await _openViewer(
+          items,
+          index,
+          forceInternal: true,
+          forcedEngine: kVlcEngine,
+        );
+      case VideoOpenTarget.selection:
+        ref.read(selectionControllerProvider.notifier).enter(item.id);
     }
-    if (target == VideoOpenTarget.internal) {
-      await _openViewer(items, index, forceInternal: true);
-      return;
-    }
-    ref.read(selectionControllerProvider.notifier).enter(item.id);
   }
 
   Future<void> _playAlbum(List<MediaItem> items) async {
