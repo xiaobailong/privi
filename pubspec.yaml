@@ -1,7 +1,7 @@
 ﻿name: privi
 description: 密册 — personal on-device Android media vault.
 publish_to: "none"
-version: 1.0.60
+version: 1.0.61
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -55,6 +55,13 @@ dependencies:
 dev_dependencies:
   build_runner: ^2.4.13
   drift_dev: ^2.20.3
+  # DO NOT bump to >= 10.2.0 while drift_dev is < 2.32.1: analyzer 10.2.0 turned
+  # the first argument of `references(Albums, #id, ...)` into a `TypeLiteral`
+  # node, which drift_dev 2.31.0 rejects ("This parameter should be a simple
+  # class name") and silently drops the foreign key. Fixed upstream in
+  # drift_dev 2.32.1 ("Fix parsing references() with analyzer 10.2.0 and later");
+  # see memory-bank/ISSUE-020.
+  analyzer: 10.1.0
 
 flutter:
   generate: true

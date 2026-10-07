@@ -104,6 +104,10 @@
 | 设置里的「跳转步长（原『双击跳转』）」秒数以前对播放**没有任何影响** | `ISSUE-019`（现在它就是滑动一档的秒数） |
 | `dart format --set-exit-if-changed` 对本仓库**任何** Dart 文件都报 `Changed` | `PIT-014`（复核 2026-10-07：工作区 CRLF + 新格式化器 tall style） |
 | 改文档后**下一节标题莫名消失**（替换式编辑把锚点行吞了） | `PIT-028`（`new_text` 必须原样带回 `old_text`） |
+| 构建日志 `W drift_dev … This parameter should be a simple class name`（构建仍打印"成功"） | `ISSUE-020`（外键被静默丢弃）、`ADR-029` |
+| 构建日志 `W SDK language version 3.13.0 is newer than analyzer language version 3.12.0` | `ADR-029` ③（仅提示，不处理） |
+| 改 `pubspec.yaml` 的 dev 依赖 / 跑 `flutter pub upgrade` 前要判断 analyzer 会不会被抬上去 | `ISSUE-020`、`ADR-029` |
+| Cline shell 里 `flutter` 不在 PATH / `start … cmd /c "…嵌套引号…"` 报「命令语法不正确」 | `PIT-029` |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

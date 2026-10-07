@@ -514,4 +514,47 @@
 - 决策: `ADR-028`
 - 首次记录: 2026-10-07
 
+## ISSUE-020 build_runner 里 drift_dev 报「This parameter should be a simple class name」= 外键被**静默丢弃**（analyzer ≥10.2.0）
+- 状态: 已规避（dev 依赖里把 `analyzer` 钉在 10.1.0；上游 drift_dev 2.32.1 已修）。修法已落地，**待下一次手工构建用复发判据确认 FK 回归**
+- 症状 / 现场: `build.bat` 的 build_runner 阶段打印两条警告，然后照常写 `Built with build_runner/aot in 172s; wrote 242 outputs.` ⇒ 看起来"只是警告、构建成功"：
+  ```
+  W drift_dev on lib/data/db/tables.dart:
+    line 84, column 47 of package:privi/data/db/tables.dart: This parameter should be a simple class name
+      84 │   TextColumn get albumId => text().references(Albums, #id, onDelete: KeyAction.cascade)();
+       │                                               ^^^^^^
+  （line 85 同样一条，指向 .references(MediaItems, #id, ...)）
+  ```
+  同一次日志开头还有一条 `W SDK language version 3.13.0 is newer than `analyzer` language version 3.12.0. Run flutter packages upgrade.`（见 `ADR-029` ③，那条不处理）
+- 复发判据: `findstr /c:"REFERENCES" lib\data\db\database.g.dart`
+  → **零命中 = 已复发/FK 仍缺失**；正确状态是 `album_id`、`media_id` 两个 `GeneratedColumn` 里各有一条
+  `$customConstraints: 'REFERENCES albums (id) ON DELETE CASCADE'` / `'REFERENCES media_items (id) ON DELETE CASCADE'`。
+  （也可在构建日志里搜 `should be a simple class name`，出现即命中）
+- 根因: drift_dev 2.31.0 解析 `references(表类, #列)` 时用 `final first = args.first; if (first is! Identifier) { 报错; break; }`
+  （`drift_dev\lib\src\analysis\resolver\dart\column.dart:268`，`break` 直接跳出、**不生成约束**）；
+  **analyzer 10.2.0 起（解析器随之升到 `_fe_analyzer_shared` 96.0.0）该位置的裸类名被解析成 `TypeLiteral` 而不是 `Identifier`**
+  ⇒ 判断恒成立、外键既不报错也不生效，从生成代码里彻底消失。
+  上游 drift_dev 2.32.1 的修法（已下载 2.32.1 源码对照）正是同时接受两种节点：
+  `switch (args.first) { Identifier(:final element?) => element, TypeLiteral(:final type) => type.element, _ => null }`
+- 证据:
+  - 构建日志两条 W（`tables.dart:84/85`）；这条消息在 drift_dev 2.31.0 里**只此一处**，且紧跟 `break`（丢弃约束）
+  - `pubspec.lock`: drift 2.31.0 / drift_dev 2.31.0 / analyzer **10.2.0** / `_fe_analyzer_shared` 96.0.0
+    （drift_dev 2.31.0 只要求 `analyzer >=8.1.0 <11.0.0`，所以 pub 把它升到了 10.2.0）
+  - `lib/data/db/database.g.dart:1507` 起 `album_id` / `media_id` 的 `GeneratedColumn` 里**没有** `$customConstraints`
+    （对照 `drift_dev\lib\src\writer\utils\column_constraints.dart:50-72`：`references()` 会拼出 `REFERENCES <表> (<列>) ON DELETE CASCADE`）
+  - drift_dev CHANGELOG 2.32.1: "Fix parsing references() with analyzer 10.2.0 and later."
+- 修法: `pubspec.yaml` 的 `dev_dependencies` 里加 `analyzer: 10.1.0`（附注释说明为什么不能升）；
+  之后按常规流程手工构建一次 —— `build.bat` 里的 `flutter pub get` 会把 lock 里的 analyzer 降回 10.1.0
+  （`_fe_analyzer_shared` 96.0.0 → 95.0.0），build_runner 重新生成 `database.g.dart` 时 FK 应该回来。
+- 反例 / 易误判:
+  - 把这两条 W 当"无关紧要的 lint"忽略 —— 它代表 `album_media` 的 **FOREIGN KEY 真的没了**，
+    而 `database.dart:56` 还开着 `PRAGMA foreign_keys = ON`（等于外键约束全废）
+  - 以为"删相册/删媒体本来就会级联"：当前其实靠 `database.dart:468/475/988` 的显式 delete 兜着，
+    一旦新增依赖级联的路径就会出问题
+  - 顺手 `flutter pub upgrade`（analyzer 又被升回 ≥10.2.0）⇒ 静默复发（`ADR-029` 约束）
+  - 只盯着"构建成功/242 outputs"下结论 —— 生成器报 W 时也可能**少生成内容**
+- 相关文件: `pubspec.yaml`、`lib/data/db/tables.dart`、`lib/data/db/database.dart`、`lib/data/db/database.g.dart`（生成物，gitignore）
+- 决策: `ADR-029`（为什么不直接升 drift/drift_dev）
+- 首次记录: 2026-10-07
+
+
 

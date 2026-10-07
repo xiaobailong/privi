@@ -420,3 +420,20 @@
   `---` 分隔线、代码块围栏都还在；本次就是这样发现并修回 `PIT-009` 标题的
 - 首次记录: 2026-10-07
 
+## PIT-029 Cline 的 shell 里 `flutter` 不在 PATH；`start "" /min cmd /c "…嵌套引号…"` 会立刻报「命令语法不正确」
+- 触发条件: ①想在 Cline 终端直接跑 `flutter ...`（本机 `flutter.bat` 只在 `build.bat` 内部才被加进 PATH）；
+  ②想用 `start "" /min cmd /c "<一段本身带引号的命令>"` 起后台进程（例如"先 set 镜像变量再跑 flutter"）
+- 错误现象: ①`'flutter' is not recognized as an internal or external command, operable program or batch file.`
+  （命令"秒完"，容易被误当成"跑过了、没输出"）；
+  ②`start` 那条只在输出文件里留下一行乱码 `�����﷨����ȷ��`（= 命令语法不正确），后台什么都没起来
+- 正确做法: ①flutter / dart 一律用**全路径**：`"D:\Tools\DevTools\flutter\bin\flutter.bat" ...`、
+  `%FLUTTER_HOME%\bin\cache\dart-sdk\bin\dart.exe`（后者见 `PIT-014`）；
+  ②需要"设置环境变量 + 长任务 + 输出重定向"时，把命令写进 `tmp\xxx.bat`（纯 ASCII 即可），再
+  `start "" /min cmd /c tmp\xxx.bat`，重定向到 `tmp\` 下的文件，之后用 `read_files` 轮询文件内容
+- 反例（别这么写）: `flutter pub upgrade --dry-run`；
+  `start "" /min cmd /c "set X=Y && ""D:\Tools\...\flutter.bat"" pub upgrade --dry-run > tmp\o.txt 2>&1"`
+- 自检: 起完 10~30 秒后用 `read_files tmp\o.txt` 看文件是否在长；首行出现
+  `is not recognized` 或 "命令语法不正确" 的乱码即说明写坏了（`find /c /v "" tmp\o.txt` 也能看行数变化）
+- 首次记录: 2026-10-07
+
+

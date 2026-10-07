@@ -535,3 +535,49 @@
   所以只能逐段对照，不能全局重排）。**未做编译/装机验证**，请手工构建。
 - 首次记录: 2026-10-07
 
+## ADR-029 drift 外键缺陷先「钉 dev 依赖 analyzer 10.1.0」止血，暂不升级 drift/drift_dev
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 构建日志里两条警告（见 `ISSUE-020`）——`drift_dev 2.31.0 + analyzer 10.2.0` 会**静默丢掉**
+  `tables.dart` 里 `references()` 声明的外键（`album_media` 的 FK 从生成代码里消失，而 App 还开着
+  `PRAGMA foreign_keys = ON`）；同一次日志还有一条 `W SDK language version 3.13.0 is newer than
+  analyzer language version 3.12.0`。
+- 决策:
+  ① 立刻修复**只动 dev 依赖**：`pubspec.yaml` 的 `dev_dependencies` 加 `analyzer: 10.1.0`（钉死 + 注释指向 `ISSUE-020`）。
+     运行时代码、主依赖（drift / drift_flutter / sqlite3 / sqlite3_flutter_libs）一律不动。
+  ② **本次不升** drift / drift_dev 到 2.32.1（根治方案），作为独立任务另排。
+  ③ `SDK language version 3.13.0 ... analyzer language version 3.12.0` 这条 W **不处理**（理由见下）。
+  ④ **不回填历史库的外键**：SQLite 无法 `ALTER TABLE` 加 FK（要整表重建），而现有删除路径
+     （`database.dart:468/475/988`）已显式清理 `album_media`；新装库在重新生成代码后自带 FK。
+- 理由:
+  - 升到 drift 2.32.1 + drift_dev 2.32.1 的**级联代价大、且本轮无法验证**（`ADR-027` 下 Cline 不跑构建）：
+    drift 2.32.1 要 `sqlite3 ^3.1.5`、drift_dev 2.32.1 要 `sqlite3 ^3.0.0` + `sqlparser ^0.44.0`
+    ⇒ 要同时把 sqlite3 2.9.4 → 3.x、sqlparser 0.43.1 → 0.44.x 抬上去，还可能连带 drift_flutter /
+    sqlite3_flutter_libs；一次构建 15~25 分钟，失败代价高（`ADR-027`）。
+  - 钉 analyzer 的代价只是"生成器工具链冻结在已知可用组合"：drift_dev 2.31.0 允许
+    `analyzer >=8.1.0 <11.0.0`、source_gen 4.2.4 允许 `>=8.1.1 <15.0.0`、build_runner 2.15.1 允许
+    `>=8.0.0 <14.0.0` —— 三者都接受 10.1.0；且 10.1.0 与 `_fe_analyzer_shared` 95.0.0 已在 pub 缓存里，
+    无需下载新包。
+  - 语言版本那条 W 只是"本机 Flutter/Dart SDK（语言版本 3.13）比锁定的 analyzer（最高 3.12）新"的提示：
+    本包自身语言版本由 `environment.sdk: ">=3.5.0"`（=3.5）决定，代码里没用 3.13 的新语法，
+    生成/分析结果不受影响；真要消掉它得让 analyzer ≥13，即 drift_dev ≥2.34.1（属于 ② 的后续升级）。
+- 备选与为何不选:
+  - **升 drift/drift_dev 到 2.32.1（上游根治）**：见上（级联 + 本轮无法编译验证）；已在 `ISSUE-020` 里写明升级路径与新版本约束。
+  - 升到最新的 drift_dev 2.35.1（要 analyzer ≥13，还能顺带消掉 ③ 那条 W）：跳得更远
+    （`cli_util <0.7`、`sqlparser ^0.45`、sdk >=3.10.0），风险更高。
+  - 把 `references()` 改写成 `customConstraint('REFERENCES albums (id) ON DELETE CASCADE')`：能立刻恢复 DDL，
+    但 drift 侧会**失去外键元数据**（后续 `Migrator`/schema 校验看不到引用），而且是绕开一个上游已修的 bug，属于坏味道。
+  - 忽略警告：FK 悄悄丢失，`PRAGMA foreign_keys = ON` 名存实亡（`ISSUE-020` 的反例）。
+  - 用 `dependency_overrides` 钉 analyzer：能省掉"把 analyzer 变成直接 dev 依赖"的不寻常写法，但 override 是
+    "压过所有约束"的重锤，本场景不需要。
+- 影响 / 约束:
+  - 以后动 `pubspec.yaml` 的 dev 依赖、或想跑 `flutter pub upgrade` 时**必须先回看本 ADR + `ISSUE-020`**：
+    analyzer ≥10.2.0 或 drift_dev 升级都要重新用复发判据验一遍
+    （`findstr /c:"REFERENCES" lib\data\db\database.g.dart` 必须非空）。
+  - `pubspec.lock` 会在下一次 `flutter pub get` 时变化：analyzer 10.2.0 → 10.1.0、`_fe_analyzer_shared`
+    96.0.0 → 95.0.0（其它包不变）。
+  - 本轮验证方式：只跑了**只读**的 `flutter pub upgrade --dry-run`（结论：在 `analyzer: 10.1.0` 约束下解析成功，
+    并把 analyzer 10.2.0 → 10.1.0、`_fe_analyzer_shared` 96.0.0 → 95.0.0 降级；drift / drift_dev 保持 2.31.0 不动）。
+    **未做编译/装机验证**，需手工构建。
+- 首次记录: 2026-10-07
+
+
