@@ -310,6 +310,11 @@
   最后 `git checkout main` 收尾 ⇒ `main` / `dev` / `origin/main` / `origin/dev` 四者同为 `1004a89`、工作区干净。
   同样**没有**新建 backup 分支（当天 `backup_20261007 = e192268` 已存在，按①复用）；
   本次**没有**版本号 bump（未跑构建）：`pubspec.yaml` 仍是 `1.0.60`，下次构建产出 `1.0.61`。
+- 2026-10-07 修订（第三轮推送起，见 `ADR-030`）: 推送约定改为「**只推当前分支**」，
+  所以上面①、⑤两步要**拆成单分支多次推**：先 `git push origin main`；需要同步 `dev` 时再单独
+  `git checkout dev && git merge --ff-only main && git push origin dev`。
+  只推 `main` 时 `dev` / `origin/dev` 落后于 `main` 属**预期**（下轮发版时按上面那条补齐），
+  不再是"必须当场对齐"；`backup_*` 的创建/推送仍按①（用 `git push -u origin backup_YYYYMMDD`，属单分支推送）。
 
 ## ADR-022 VLC 视频几何：**先探测尺寸、再挂 vout**（几何只定一次）
 - 日期: 2026-10-01 | 状态: 已采纳
@@ -578,6 +583,33 @@
   - 本轮验证方式：只跑了**只读**的 `flutter pub upgrade --dry-run`（结论：在 `analyzer: 10.1.0` 约束下解析成功，
     并把 analyzer 10.2.0 → 10.1.0、`_fe_analyzer_shared` 96.0.0 → 95.0.0 降级；drift / drift_dev 保持 2.31.0 不动）。
     **未做编译/装机验证**，需手工构建。
+- 首次记录: 2026-10-07
+
+## ADR-030 推送 git 只推「当前分支」（单分支 refspec；禁止 `--all` / 多分支一次推）
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 之前的习惯是把 `main` / `dev`（必要时还有 `backup_*`）在一条/连续几条命令里一起推完
+  （见 `ADR-021` 的 2026-10-07 两轮记录）；用户 2026-10-07 明确要求「**推送只推当前分支**」，
+  并要求写进项目约定（已落到 `.clinerules/rules.md`）。
+- 决策:
+  ① push 一律显式写**单分支** refspec：`git push origin <当前分支>`（`main` / `dev`）；
+  ② 禁止 `git push --all`、`git push --mirror`、`git push origin main dev`（一条命令推多个分支）；
+  ③ 不主动推 `backup_*` 快照分支（只在 `ADR-021` ①的备份步骤里按需创建/推送）；
+  ④ 推前 `git branch --show-current` 确认当前分支，推后 `git log --oneline -1 --decorate` + `git status -sb` 复核；
+     需要硬证据时 `git ls-remote origin refs/heads/main refs/heads/dev`（一看就知道"没推的分支指针没动"）；
+  ⑤ 本约定只约束"推哪些分支"，不改变「Cline 不自动 commit/push，只有用户当场明确要求才推」。
+- 理由: push 是低频但影响面大的动作（改别人拉取的基线、可能触发远端 Release/Actions）。
+  一次只推一个分支 ⇒ 每条 push 都能一句话说清"动了什么"；少推一个分支的代价是再敲一条命令，
+  多推一个分支的代价是别人拿到你没打算发布的代码。
+- 备选与为何不选: ①沿用"一条命令推多分支"（正是本次要禁止的）；
+  ②只靠 `push.default=simple`（默认确实只推当前分支，但拦不住 `git push --all` / 多 refspec，约束力不足）；
+  ③干脆禁止一切 push（不现实：`ADR-021` 的发版流程必须推 `main` / `dev`）。
+- 影响 / 约束:
+  - `ADR-021` 的发布流程按本约定拆成多次**单分支**推送：先 `git push origin main`；
+    需要同步 `dev` 时再 `git checkout dev && git merge --ff-only main && git push origin dev`；
+  - 只推 `main` 时 `dev` / `origin/dev` 会**故意落后**于 `main`，这是预期状态（下轮发版时补齐）；
+  - 本轮记录（2026-10-07 第三轮）: 在 `main` 上提交 `b2b01f1`（`fix(deps): 钉 analyzer 10.1.0 …`）
+    与本约定的 `docs(rules): 推送 git 只推当前分支（ADR-030）`，**只执行 `git push origin main`**；
+    推送后 `git ls-remote origin refs/heads/dev` 仍为 `cb4c67a`（**未动**），`refs/heads/main` 前进到本轮 HEAD。
 - 首次记录: 2026-10-07
 
 

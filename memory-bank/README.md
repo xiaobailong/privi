@@ -108,6 +108,7 @@
 | 构建日志 `W SDK language version 3.13.0 is newer than analyzer language version 3.12.0` | `ADR-029` ③（仅提示，不处理） |
 | 改 `pubspec.yaml` 的 dev 依赖 / 跑 `flutter pub upgrade` 前要判断 analyzer 会不会被抬上去 | `ISSUE-020`、`ADR-029` |
 | Cline shell 里 `flutter` 不在 PATH / `start … cmd /c "…嵌套引号…"` 报「命令语法不正确」 | `PIT-029` |
+| 推送 git 该推哪些分支 / 能不能 `git push --all` / 一条命令推多个分支 | `ADR-030`（只推当前分支）、`ADR-021`（发版时的分支对齐） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 
