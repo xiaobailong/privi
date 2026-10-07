@@ -342,3 +342,53 @@
   "仅此一次 / 记住选择"对话框（本轮不需要）。
 - 影响 / 约束: 新增视频入口若要支持强制引擎，必须把 `initialForcedEngine` 往下传；
   引擎名文案统一走 `videoEngineLabel()`（设置页仍保留自己的私有实现，未强行合并）。
+
+## ADR-024 私密相册「滑动操作」：自研 `SwipeActionCell` + 「操作」按钮复用长按行为
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 需求 —— 私密相册里的图片/视频项向左滑动后在**右侧**露出「操作」「删除」两个按钮；
+  点「删除」删除本项；点「操作」弹出与长按相同的选项并执行所选功能；
+  同时把视频长按弹框里的「选择」项去掉。
+- 决策:
+  ① **不新增依赖**，自研 `lib/presentation/common/swipe_action_cell.dart`：
+     `AnimationController`（0→1 表示滑开程度）+ `Transform.translate` 平移前景，
+     按钮层用 `PositionedDirectional(end: 0)` 固定在右侧；打开状态由父级持有
+     （`MediaGridScreen._openSwipeId`）⇒ 同屏最多一行展开，手势结束时通过 `onOpenChanged` 回写。
+  ② 按钮语义：删除 = 普通相册 `softDeleteMany([id])`（进回收站）、回收站 `purgeMany([id])`（永久删除），
+     与选中模式下的浮动胶囊完全一致；「操作」= 直接复用长按入口
+     （`_handleItemAction`：视频 → 「打开方式」弹框且只播放这一项；图片 → 进入多选，
+     与"长按图片"原行为一致）。
+  ③ 「选择」项**只从私密相册**的弹框里去掉：`showVideoOpenTargetSheet` 新增 `showSelection = true`
+     参数，`media_grid_screen.dart` 传 `false`；可见库（`visible_media_grid.dart`）保持原样
+     （它的「选择」是长按视频时唯一的进多选入口之一，去掉会削弱功能）。
+- 理由: 滑动操作是"单项、就地"的交互，与选中模式的多选语义正交 ⇒ 用父级单一 `_openSwipeId` 即可保证
+  "同时只开一行"，且不引入依赖；「操作」按钮与长按共用同一个方法，避免两套入口行为漂移。
+- 备选与为何不选: ①`flutter_slidable`（新依赖要过 `pub get`，本机 WMI 不稳；网格窄格样式仍要自己调）；
+  ②`Dismissible`（只能整项划走/回弹，停不到"露出按钮"的中间状态）；
+  ③把「操作」「删除」分放两侧（用户明确要求都在右侧）。
+- 影响 / 约束:
+  - 多选态下禁用滑动（`enabled: !selecting`），已展开的行在进入多选时自动收起；
+  - 网格模式下 cell 宽度只有约 1/3 屏，按钮宽度按 cell 宽度自适应
+    （每格 `0.34×宽`，clamp 到 44~88dp，且总宽 ≤ cell 宽的 78%，保证海报仍可见）；
+    文案只有 2 字（「操作」/「删除」，回收站为 4 字「永久删除」并用 `FittedBox` 缩放）；
+  - 点已展开的行 = 先收起（不打开 viewer）；长按任一项也会先收起已展开的行；
+  - `SwipeActionCell` 放在 `presentation/common/`，可见库以后要接滑动可直接复用。
+- 首次记录: 2026-10-07
+
+## ADR-025 视频进度条两端显示时间：左=当前进度、右=总时长（横竖屏都显示）
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 需求 —— 视频控制条上"在进度条两端显示时间"：左侧播放进度时间，右侧视频总时长。
+  原实现只有一行合并的 `0:12/3:45`（`formatVideoProgress()`），且**只在竖屏**显示
+  （`if (!widget.landscape)`）。
+- 决策: `NativeVideoBottomControls`（`lib/presentation/player/video_player_controls.dart`）把那一行
+  拆成 `Row(mainAxisAlignment: MainAxisAlignment.spaceBetween)` 的两个 `_timeLabel`：
+  左侧 `formatVideoTime(_scrubbing ? positionMs : value.position)`（拖动时跟随 scrub 位置），
+  右侧 `formatVideoTime(value.duration)`；并**去掉 landscape 条件**，横屏同样显示。
+- 理由: 该控件被**三处**播放界面复用（`player_screen.dart:983`、`viewer_screen.dart:677`、
+  `gallery_preview_screen.dart:532`）⇒ 改一处即全部生效；`_timeLabel` 已带
+  `FontFeature.tabularFigures()`，时间数字等宽、秒数跳动时不抖。
+- 备选与为何不选: ①保留 `0:12/3:45` 单标签（正是要改掉的形态）；
+  ②只改竖屏（横屏看不到总长，与"进度条两端"不符）；③把文字叠在 `Slider` 上（挡住滑块、影响命中）。
+- 影响 / 约束: `formatVideoProgress()` 随之**不再被使用**（保留在 `video_player_surface.dart`，
+  与同样未被使用的 `formatVideoDelta()` 并列，未删）；横屏底部控制条因此高约 21dp，
+  若嫌挤，恢复 `if (!widget.landscape)` 即可。`widget.landscape` 仍用于图标切换，未变成死字段。
+- 首次记录: 2026-10-07

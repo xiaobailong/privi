@@ -199,22 +199,25 @@ class _NativeVideoBottomControlsState extends State<NativeVideoBottomControls> {
                       : (next) => unawaited(_finishScrub(next)),
                 ),
               ),
-              if (!widget.landscape)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      _timeLabel(
-                        formatVideoProgress(
-                          _scrubbing
-                              ? Duration(milliseconds: positionMs.round())
-                              : value.position,
-                          value.duration,
-                        ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Left end of the bar: the playhead (follows the scrub
+                    // position while the user is dragging).
+                    _timeLabel(
+                      formatVideoTime(
+                        _scrubbing
+                            ? Duration(milliseconds: positionMs.round())
+                            : value.position,
                       ),
-                    ],
-                  ),
+                    ),
+                    // Right end of the bar: the full length of the video.
+                    _timeLabel(formatVideoTime(value.duration)),
+                  ],
                 ),
+              ),
               const SizedBox(height: AppSpacing.xs),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,

@@ -140,6 +140,21 @@
 - 反例: 把中间那一大串 `+file:///…` 当成错误；不改文件就相信"0 error"（要用负控验证工具真的在检查）
 - 自检: 负控（故意写错的文件）应报出 >0 个 error
 - 来源: `docs/HANDOFF-Flutter工具WMI挂死诊断.md` 第 5 条
+- 复核 2026-10-07（本轮实测：条目里"`dart format` 会挂死"**未复现**）:
+  ```
+  D:\Tools\DevTools\flutter\bin\cache\dart-sdk\bin\dart.exe format --output=none --set-exit-if-changed lib\presentation\common\swipe_action_cell.dart
+  ```
+  **0.04s 返回**（4 个文件一起亦然），可作为**最快的 Dart 语法自检**：
+  语法错会直接报 `Could not format because the source could not be parsed`，
+  纯格式差异只打印 `Changed <file>` 并退出码 1。**挂死的是 `dart analyze`**（分析器 + dartdev 遥测），
+  `dart format` 只做解析/排版 ⇒ 校验 Dart 改动时先试它，比 `frontend_server` 那条命令便宜得多。
+- 路径更正（本轮踩到）: **`<FLUTTER_HOME>\bin\dart.exe` 在本机不存在**（`where dart` 也找不到，`FLUTTER_HOME` 见
+  `build.bat:58` = `D:\Tools\DevTools\flutter`），正确路径是
+  `%FLUTTER_HOME%\bin\cache\dart-sdk\bin\dart.exe`（与 `build_wmi_guard.ps1:67` 一致）。
+  报 `'...\bin\dart.exe' is not recognized` 时**别怀疑 Dart 坏了**，就是路径错。
+- 判读技巧（本轮用到）: `format --output=show <file> > tmp\x.dart` 再 `fc /n <file> tmp\x.dart`，
+  差异里**只出现在自己没改过的段落** ⇒ 说明该文件的旧风格本来就不符合新版 dart format，
+  **不要**对自己的改动做全局重排（`--output=show` 会在末尾多一行 `Formatted 1 file ...`，别当成差异）。
 
 ## PIT-015 批量改动改坏了怎么救：`git checkout -- <路径>` 从 index 还原（不用重写）
 - 触发条件: 脚本/工具批量替换把文件内容改坏（或改错方向）

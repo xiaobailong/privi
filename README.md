@@ -31,6 +31,10 @@
 ### 媒体管理
 
 - 隐藏 / 还原媒体（原子重命名至隐藏目录 `.privateheart_vault`）
+- **滑动操作**：私密相册里把任意图片 / 视频项**向左滑动**，右侧露出「操作」「删除」两个按钮 ——
+  「删除」直接移除该项（普通相册移入回收站、回收站内为永久删除），
+  「操作」打开与长按相同的菜单（视频为「打开方式」，图片为进入多选）；
+  同一时刻只有一行展开，点已展开的行或长按其它项会收起
 - 红心评分 0–3 ❤️，1 心及以上自动入收藏
 - 自定义相册与合集（创建、重命名、排序、解散）
 - 回收站（恢复、永久删除，可配保留天数 1/7/30）
@@ -43,7 +47,8 @@
 
 - 基于 Android Media3 ExoPlayer 的原生播放，支持硬件加速；可在设置切换 **libVLC**（FFmpeg，格式更全）
 - **引擎自动回退**：某文件在当前引擎 15 秒内没画面时，自动换回默认引擎重试一次；仍失败就给出明确错误，不再无限转圈。该回退机制覆盖全部三个视频入口（PlayerScreen / ViewerScreen / GalleryPreviewScreen），每个 item 只回退一次，避免来回重建播放器
-- **长按视频「打开方式」**：长按视频可选择外部播放器、内部默认引擎（ExoPlayer）、内部 VLC 引擎（针对默认引擎解不了的片子），或进入选择模式。两条内部引擎入口分别绑定固定引擎，不受设置影响，避免重复项
+- **长按视频「打开方式」**：长按视频可选择外部播放器、内部默认引擎（ExoPlayer）、内部 VLC 引擎（针对默认引擎解不了的片子）。两条内部引擎入口分别绑定固定引擎，不受设置影响，避免重复项；可见库仍保留「选择」入口，私密相册里视频进多选走 ⋮ 菜单（或直接长按图片）
+- **进度条两端显示时间**：左端为当前播放进度（拖动进度条时实时跟随手指），右端为视频总时长，横竖屏都显示；该控制条同时用于播放器页、私密查看器与可见库预览
 - 无缝连续播放（顺序 / 按播放次数加权随机）
 - 外部播放器调用（如 VLC）
 - 变速播放 0.5x–2x，可配快进快退步长、静音、循环
@@ -112,7 +117,7 @@
 flutter pub get                           # 安装依赖
 flutter gen-l10n                          # 代码生成（l10n）
 flutter pub run build_runner build        # 代码生成（Drift）
-flutter analyze                           # 静态分析
+flutter analyze                           # 静态分析（本机可能挂死，见 memory-bank PIT-014 / PIT-020）
 flutter run                               # 运行
 flutter build apk --release               # 构建 Release APK
 ```
@@ -150,6 +155,7 @@ build.bat clean     # 清理所有构建产物
 | 构建「卡住不动」、日志 0 字节、进程杀不掉 | `ISSUE-001`（本机 WMI 无响应 → 所有 flutter 命令静默挂死） |
 | Gradle 报 `Unresolved reference 'extraGenSnapshotOptions'` | `ISSUE-012` / `ADR-018`（Flutter 3.47 已移除该 DSL，改用 Gradle project property） |
 | `pubspec.yaml` 版本号不递增 | `ISSUE-005` |
+| 私密相册滑动操作 / 进度条时间显示的取舍 | `ADR-024` / `ADR-025` |
 | Gradle 守护进程消失 / `OutOfMemoryError (arena.cpp)` | `ISSUE-004`（编译前内存回收） |
 
 本机实测可用的工具链组合（改 `android/settings.gradle.kts` / wrapper 前先看 `memory-bank/decisions.md`）：

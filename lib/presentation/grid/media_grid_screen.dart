@@ -28,6 +28,7 @@ import '../common/media_details_sheet.dart';
 import '../common/media_grid_scaffold.dart';
 import '../common/quick_rating_sheet.dart';
 import '../common/rating_filter_bar.dart';
+import '../common/swipe_action_cell.dart';
 import '../common/vault_sheet.dart';
 import '../common/video_open_target_sheet.dart';
 import '../import/import_progress_sheet.dart';
@@ -76,6 +77,25 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
   final _searchCtrl = TextEditingController();
   final GlobalKey _overflowKey = GlobalKey();
   final GlobalKey _heartsChipKey = GlobalKey();
+
+  /// Id of the row currently showing its swipe actions (at most one at a time).
+  String? _openSwipeId;
+
+  /// Closes whichever row is swiped open (tap on the poster, action tap, …).
+  void _closeSwipe() {
+    if (_openSwipeId == null) return;
+    setState(() => _openSwipeId = null);
+  }
+
+  void _setSwipeOpen(String itemId, bool open) {
+    setState(() {
+      if (open) {
+        _openSwipeId = itemId;
+      } else if (_openSwipeId == itemId) {
+        _openSwipeId = null;
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -178,10 +198,49 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     return false;
   }
 
-  /// Long-press on a video: pick external playback, in-app playback with a
+  /// Runs the long-press behaviour for one item — shared by the long-press
+  /// gesture and the swipe actions'「操作」button:
+  /// * videos → the open-with sheet (only this item is handed to the player);
+  /// * everything else → enter selection, exactly like long-press does.
+  Future<void> _handleItemAction(
+    MediaItem item,
+    List<MediaItem> items,
+    int index,
+  ) async {
+    if (item.isVideo) {
+      await _chooseVideoTarget(item, items, index);
+      return;
+    }
+    ref.read(selectionControllerProvider.notifier).enter(item.id);
+  }
+
+  /// Deletes one item from the swipe actions: the recycle bin purges it for
+  /// good, every other album moves it there (same pair of behaviours as the
+  /// selection capsule).
+  Future<void> _deleteItem(MediaItem item) async {
+    final repo = ref.read(mediaRepositoryProvider);
+    if (_isRecycle) {
+      await repo.purgeMany([item.id]);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.deletedForeverCount(1))),
+      );
+      return;
+    }
+    await repo.softDeleteMany([item.id]);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.movedToRecycleBinCount(1))),
+    );
+  }
+
+  /// Long-press on a video: pick external playback or in-app playback with a
   /// fixed engine (ExoPlayer / libVLC — **not** the setting, otherwise both
-  /// entries collapse into the same engine), or selection. Non-video items
-  /// keep the plain selection behaviour.
+  /// entries collapse into the same engine). Non-video items keep the plain
+  /// selection behaviour.
+  ///
+  /// The sheet here hides its「选择」entry ([showSelection] false): the grid
+  /// has its own selection entry points (long-press on a photo, the ⋮ menu).
   Future<void> _chooseVideoTarget(
     MediaItem item,
     List<MediaItem> items,
@@ -191,6 +250,7 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     final target = await showVideoOpenTargetSheet(
       context,
       externalSupported: external.supported,
+      showSelection: false,
     );
     if (!mounted || target == null) return;
     switch (target) {
@@ -210,6 +270,9 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
           forceInternal: true,
           forcedEngine: kVlcEngine,
         );
+      // Not reachable while the sheet is asked to hide「选择」above, but the
+      // enum value stays (the Visible grid still offers it) so the switch is
+      // exhaustive and behaviour can be restored with one flag.
       case VideoOpenTarget.selection:
         ref.read(selectionControllerProvider.notifier).enter(item.id);
     }
@@ -773,35 +836,64 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
   }) {
     Widget tileAt(int index) {
       final item = items[index];
-      return ThumbnailTile(
-        key: ValueKey('invisible-media-${item.id}'),
-        item: item,
-        listMode: viewMode == AlbumViewMode.list,
-        selecting: selecting,
-        selected: selected.contains(item.id),
-        onRate: selecting
-            ? null
-            : (rating) => ref
-                .read(ratingControllerProvider.notifier)
-                .setRating(item.id, rating),
-        onLongPress: () {
-          unawaited(HapticFeedback.mediumImpact());
-          final selection = ref.read(selectionControllerProvider.notifier);
-          if (selecting) {
-            selection.toggle(item.id);
-          } else if (item.isVideo) {
-            unawaited(_chooseVideoTarget(item, items, index));
-          } else {
-            selection.enter(item.id);
-          }
-        },
-        onTap: () {
-          if (selecting) {
-            ref.read(selectionControllerProvider.notifier).toggle(item.id);
-          } else {
-            unawaited(_openViewer(items, index));
-          }
-        },
+      return SwipeActionCell(
+        key: ValueKey('invisible-swipe-${item.id}'),
+        // Selection mode owns taps and long-presses, so no swipe then.
+        enabled: !selecting,
+        open: !selecting && _openSwipeId == item.id,
+        onOpenChanged: (open) => _setSwipeOpen(item.id, open),
+        actions: [
+          SwipeAction(
+            icon: Icons.more_horiz,
+            label: context.l10n.actions,
+            onPressed: () =>
+                unawaited(_handleItemAction(item, <MediaItem>[item], 0)),
+          ),
+          SwipeAction(
+            icon: _isRecycle ? Icons.delete_forever : Icons.delete_outline,
+            label:
+                _isRecycle ? context.l10n.deleteForever : context.l10n.delete,
+            destructive: true,
+            onPressed: () => unawaited(_deleteItem(item)),
+          ),
+        ],
+        child: ThumbnailTile(
+          key: ValueKey('invisible-media-${item.id}'),
+          item: item,
+          listMode: viewMode == AlbumViewMode.list,
+          selecting: selecting,
+          selected: selected.contains(item.id),
+          onRate: selecting
+              ? null
+              : (rating) => ref
+                  .read(ratingControllerProvider.notifier)
+                  .setRating(item.id, rating),
+          onLongPress: () {
+            unawaited(HapticFeedback.mediumImpact());
+            _closeSwipe();
+            final selection = ref.read(selectionControllerProvider.notifier);
+            if (selecting) {
+              selection.toggle(item.id);
+            } else if (item.isVideo) {
+              unawaited(_chooseVideoTarget(item, items, index));
+            } else {
+              selection.enter(item.id);
+            }
+          },
+          onTap: () {
+            // A row that is showing its actions closes on tap instead of
+            // opening the viewer.
+            if (_openSwipeId == item.id) {
+              _closeSwipe();
+              return;
+            }
+            if (selecting) {
+              ref.read(selectionControllerProvider.notifier).toggle(item.id);
+            } else {
+              unawaited(_openViewer(items, index));
+            }
+          },
+        ),
       );
     }
 

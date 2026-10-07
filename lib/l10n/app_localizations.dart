@@ -41,6 +41,9 @@ class AppLocalizations {
 
   String get select => '选择';
 
+  /// 媒体项滑出后右侧的「操作」按钮（打开与长按相同的菜单）。
+  String get actions => '操作';
+
   String get selectAll => '全选';
 
   String get search => '搜索';

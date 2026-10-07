@@ -48,9 +48,14 @@ String videoEngineLabel(BuildContext context, PlayerEngine engine) {
 ///
 /// Returns null when the sheet is dismissed without a choice, so callers can
 /// leave the grid untouched in that case.
+///
+/// [showSelection] is false for grids that reach selection some other way
+/// (the invisible grid: long-press selects directly and the row's swipe
+/// actions cover per-item handling), so its video sheet only offers playback.
 Future<VideoOpenTarget?> showVideoOpenTargetSheet(
   BuildContext context, {
   required bool externalSupported,
+  bool showSelection = true,
 }) {
   return showVaultSheet<VideoOpenTarget>(
     context,
@@ -103,13 +108,14 @@ Future<VideoOpenTarget?> showVideoOpenTargetSheet(
               onTap: () => Navigator.of(sheetContext)
                   .pop(VideoOpenTarget.internalVlcEngine),
             ),
-            ListTile(
-              key: const ValueKey('video-open-selection'),
-              leading: const Icon(Icons.check_circle_outline),
-              title: Text(l10n.select),
-              onTap: () =>
-                  Navigator.of(sheetContext).pop(VideoOpenTarget.selection),
-            ),
+            if (showSelection)
+              ListTile(
+                key: const ValueKey('video-open-selection'),
+                leading: const Icon(Icons.check_circle_outline),
+                title: Text(l10n.select),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(VideoOpenTarget.selection),
+              ),
             const SizedBox(height: AppSpacing.sm),
           ],
         ),
