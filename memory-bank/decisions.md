@@ -607,9 +607,10 @@
   - `ADR-021` 的发布流程按本约定拆成多次**单分支**推送：先 `git push origin main`；
     需要同步 `dev` 时再 `git checkout dev && git merge --ff-only main && git push origin dev`；
   - 只推 `main` 时 `dev` / `origin/dev` 会**故意落后**于 `main`，这是预期状态（下轮发版时补齐）；
-  - 本轮记录（2026-10-07 第三轮）: 在 `main` 上提交 `b2b01f1`（`fix(deps): 钉 analyzer 10.1.0 …`）
-    与本约定的 `docs(rules): 推送 git 只推当前分支（ADR-030）`，**只执行 `git push origin main`**；
-    推送后 `git ls-remote origin refs/heads/dev` 仍为 `cb4c67a`（**未动**），`refs/heads/main` 前进到本轮 HEAD。
+  - 本轮记录（2026-10-07 第三轮）: 在 `main` 上提交 `b2b01f1`（`fix(deps): 钉 analyzer 10.1.0 …`）与
+    `docs(rules): 推送 git 只推当前分支（ADR-030）`（= `e682c5f`），**只执行 `git push origin main`**，
+    回执 `cb4c67a..e682c5f  main -> main`；推送后 `git ls-remote origin refs/heads/dev` 仍为 `cb4c67a`
+    （**未动**，见 `PIT-008` 第三轮复核）；本轮之后 memory-bank 的补记提交同样只推 `main`（单分支）。
 - 首次记录: 2026-10-07
 
 

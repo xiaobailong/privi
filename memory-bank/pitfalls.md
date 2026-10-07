@@ -95,6 +95,19 @@
     `8fde665… 1004a89… <作者/时间>  update by push` ⇒ **铁证**。
   本次 `dev` 是 reflog 先出现 `update by push`、ref 文件**滞后十几秒**才刷新。
   ⇒ 复核顺序：ref/reflog 文件 → `git branch -vv` 里 `[origin/xx]` 是否还带 `ahead N` → 最后才看终端回显。
+- 复核 2026-10-07（第三轮：`git ls-remote` 紧跟 push 之后的**假失败**）: `git push origin main` 成功
+  （回执 `cb4c67a..e682c5f  main -> main`，落在 `tmp\push_main.txt`），但同一条命令链里紧随其后的
+  `git ls-remote origin refs/heads/main refs/heads/dev` 报：
+  ```
+  fatal: Could not read from remote repository.
+  Please make sure you have the correct access rights
+  and the repository exists.
+  ```
+  —— **不是**权限/仓库问题：隔几秒重试同一条命令就正常返回
+  （`refs/heads/main = e682c5f`（新）、`refs/heads/dev = cb4c67a`（未动，正是要证明的结论））。
+  ⇒ 判据：**push 的回执行**（`<old>..<new>  <branch> -> <branch>`）才是"推成功"的证据；
+  `ls-remote` 只用于核对"其它分支没被动"，一旦报 `Could not read` 就**等几秒重试**，
+  别改判成"推送失败"、更别重发 push（重发可能掐断仍在跑的传输，同 `PIT-021`）。
 
 ## PIT-009 长构建要放独立窗口 / 分离进程，前台跑会被下一条命令掐断
 - 触发条件: `build.bat` 这类分钟级任务
