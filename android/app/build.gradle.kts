@@ -7,6 +7,25 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Derives the Android versionCode from the version name (memory-bank ADR-026).
+//
+// pubspec.yaml carries a plain three-part version (`version: 1.0.59`) with no
+// `+<build>` suffix, so `flutter build apk` REMOVES `flutter.versionCode` from
+// local.properties (gradle_utils.dart updateLocalProperties -> changeIfNecessary
+// with null), and the Flutter Gradle plugin then falls back to `1`
+// (FlutterPlugin.kt: `getProperty("flutter.versionCode", "1")`). Shipping
+// versionCode 1 after versionCode 59 makes Android reject every update
+// (INSTALL_FAILED_VERSION_DOWNGRADE), so the code is computed here instead:
+//   major*10000 + minor*100 + patch, e.g. 1.0.59 -> 10059 -> 10060 -> ...
+fun versionCodeFromName(versionName: String): Int {
+    // Tolerates a legacy `1.0.30+59` (the `+build` part is ignored) and any
+    // prerelease suffix, e.g. `1.1.0-rc1`.
+    val parts = versionName.split('.', '+', '-')
+    fun segment(index: Int): Int =
+        parts.getOrNull(index)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+    return segment(0) * 10000 + segment(1) * 100 + segment(2)
+}
+
 // Release signing: load key.properties when present (local + CI).
 // Never commit key.properties or *.jks / *.keystore (see .gitignore).
 val keystoreProperties = Properties()
@@ -41,8 +60,10 @@ android {
         minSdk = 26
         // Keep current Play / Play Protect baseline (API 34+ required; 36 is fine).
         targetSdk = 36
-        versionCode = flutter.versionCode
+        // versionCode is derived from the pubspec version - see
+        // versionCodeFromName() above for why `flutter.versionCode` is unusable.
         versionName = flutter.versionName
+        versionCode = versionCodeFromName(flutter.versionName)
     }
 
     signingConfigs {

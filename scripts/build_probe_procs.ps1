@@ -50,7 +50,7 @@ foreach ($f in @(
 # ---- 3) 项目内 pub 相关文件时间戳 ----
 Add ''
 Add '[PROJECT-FILES]'
-foreach ($f in @('.dart_tool\package_config.json', 'pubspec.yaml', '.dart_tool\package_graph.json', '.BUILD_NUM')) {
+foreach ($f in @('.dart_tool\package_config.json', 'pubspec.yaml', '.dart_tool\package_graph.json')) {
     $p = Join-Path (Get-Location).Path $f
     if (Test-Path -LiteralPath $p) {
         $i = Get-Item -LiteralPath $p

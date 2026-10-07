@@ -24,9 +24,6 @@ enum VideoOpenTarget {
   /// Play it in the built-in player with libVLC for this one item, whatever
   /// the settings say (the default engine cannot decode everything).
   internalVlcEngine,
-
-  /// The behaviour long-press had before this chooser existed: start selecting.
-  selection,
 }
 
 /// 引擎在「打开方式」里的显示名，与设置页的 `播放引擎` 文案保持一致。
@@ -49,13 +46,12 @@ String videoEngineLabel(BuildContext context, PlayerEngine engine) {
 /// Returns null when the sheet is dismissed without a choice, so callers can
 /// leave the grid untouched in that case.
 ///
-/// [showSelection] is false for grids that reach selection some other way
-/// (the invisible grid: long-press selects directly and the row's swipe
-/// actions cover per-item handling), so its video sheet only offers playback.
+/// Selection is deliberately absent: every grid reaches it from the row's
+/// swipe actions (the「操作」button) or from the ⋮ menu, so a long-press on a
+/// video is purely about playback.
 Future<VideoOpenTarget?> showVideoOpenTargetSheet(
   BuildContext context, {
   required bool externalSupported,
-  bool showSelection = true,
 }) {
   return showVaultSheet<VideoOpenTarget>(
     context,
@@ -108,14 +104,6 @@ Future<VideoOpenTarget?> showVideoOpenTargetSheet(
               onTap: () => Navigator.of(sheetContext)
                   .pop(VideoOpenTarget.internalVlcEngine),
             ),
-            if (showSelection)
-              ListTile(
-                key: const ValueKey('video-open-selection'),
-                leading: const Icon(Icons.check_circle_outline),
-                title: Text(l10n.select),
-                onTap: () =>
-                    Navigator.of(sheetContext).pop(VideoOpenTarget.selection),
-              ),
             const SizedBox(height: AppSpacing.sm),
           ],
         ),

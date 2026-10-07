@@ -134,14 +134,22 @@
 ## ISSUE-005 版本号漂移：`.BUILD_NUM` 涨了但 `pubspec.yaml` 没变
 - 状态: 已修复
 - 症状 / 现场: 打出来的 APK versionCode 是旧的；历史上多次「版本号漂移」
-- 复发判据: 手动跑 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1 -BuildNumber 999 -Path build\_selftest_pubspec.yaml`
-  （先复制 pubspec.yaml 到该路径）→ 期望输出 `OK=...` 且文件里的 `version:` 真的变了
+- 复发判据: 先 `copy /y pubspec.yaml tmp\_selftest_pubspec.yaml`，再跑
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1 -Path tmp\_selftest_pubspec.yaml`
+  → 期望输出 `OK=1.0.59->1.0.60`（旧格式输入则是 `OK=1.0.30->1.0.31`）且文件里的 `version:` 真的变了
 - 根因: 本机端点安全策略**静默拦截**命令行里含正则 `(\+)\d+` 的 `powershell -Command`：
   `powershell.exe` 以退出码 **786** 静默退出、什么都不输出，`pubspec.yaml` 没被修改
 - 修法: 逻辑放进 `scripts\bump_version.ps1`，用 `-File` 调用；`build.bat` 事后**回读校验**，
   只有校验通过才回写 `.BUILD_NUM`
 - 反例 / 易误判: 用 `powershell -Command` 一行式替换版本号；只看脚本退出码不看文件内容
 - 相关文件: `scripts\bump_version.ps1`、`build.bat`(`:increment_version`)
+- 修订 2026-10-07（版本方案改版，见 `ADR-026`）: 「第二个版本来源」`.BUILD_NUM` 已**整体删除**
+  （文件本体 + `.gitignore` 条目 `/.BUILD_NUM` + `scripts\build_probe_procs.ps1` 第 53 行的探测项）。
+  `bump_version.ps1` 去掉 `-BuildNumber` 参数，改为把 `pubspec.yaml` 版本的最后一段 +1
+  （`1.0.59` → `1.0.60`）；`build.bat :increment_version` 的校验从「等于期望的 build number」
+  改成「递增前后回读 pubspec，版本号必须真的变了」。上面那版 `-BuildNumber 999` 的复发判据已失效，按新命令判。
+  实测: 新格式 `OK=1.0.59->1.0.60`；旧格式输入 `OK=1.0.30->1.0.31`（`+59` 后缀被丢弃、写成三段式）。
+  注意: 去掉 `+build` 会连带触发 `PIT-027`（versionCode 回退成 1），所以 gradle 侧必须同步改。
 
 ## ISSUE-006 断点续传误判：跳过编译、复用上一版 APK
 - 状态: 已修复

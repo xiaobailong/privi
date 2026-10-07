@@ -48,7 +48,9 @@
 | 构建跑了约 5 分钟失败、`daemon disappeared` + `android\hs_err_pid*.log` | `ISSUE-004`（R8 提交内存耗尽，`MEM OK` 不代表安全） |
 | `build.bat` 报「判定卡死」，`build\pub_*.log` 0 字节 | `ISSUE-002`、`PIT-011` |
 | `scripts\build_*.ps1` 全部报「未找到 / 跳过」 | `ISSUE-011`（路径不同步） |
-| `pubspec.yaml` 版本号没变、`.BUILD_NUM` 却涨了 | `ISSUE-005` |
+| `pubspec.yaml` 版本号没变、`.BUILD_NUM` 却涨了 | `ISSUE-005`（`.BUILD_NUM` 已于 2026-10-07 移除） |
+| 版本号格式为什么是 `1.0.59` 而不是 `1.0.30+59` / APK 命名 / 谁负责 versionCode | `ADR-026` |
+| 装 APK 报 `INSTALL_FAILED_VERSION_DOWNGRADE`、`aapt2` 看到 `versionCode='1'` | `PIT-027`、`ADR-026` |
 | Gradle 守护进程消失 / `hs_err_pid*.log` / `OutOfMemoryError (arena.cpp)` | `ISSUE-004` |
 | Gradle：`Unresolved reference 'extraGenSnapshotOptions'` | `ISSUE-012`（已修复）、`ADR-018` |
 | 构建失败但根目录还留着旧 APK，易被当成成功 | `ISSUE-007` |
@@ -86,13 +88,17 @@
 | `findstr` 文件名带通配符又被引号包住 ⇒ 0 命中（假阴性） | `PIT-024`、`PIT-019` |
 | 终端回显里中文像乱码/错字，其实文件是好的 | `PIT-025` |
 | 首次构建（无 `.dart_tool`）时 `pub get` 长时间"日志无增长" | `PIT-026`、`ISSUE-002` |
-| 私密相册「左滑露出操作/删除按钮」怎么实现、会不会影响可见库 | `ADR-024` |
-| 视频长按弹框里少了「选择」项（只在私密相册去掉，可见库保留） | `ADR-024`、`ISSUE-017` |
+| 「左滑露出操作/删除按钮」怎么实现、覆盖哪些相册 | `ADR-024`（修订：私密相册 + 可见库） |
+| 视频长按弹框里没有「选择」项了 / 滑出的「操作」按钮为什么是进多选 | `ADR-024`（修订）、`ISSUE-017` |
+| 收起时还能看见底层的操作/删除按钮（列表模式透出） | `ADR-024`（修订 ③：Opacity + 底层背板） |
+| 给滑出按钮改布局时为什么不能用 `Align` | `ADR-024`（修订 ③：列表高度无界，必须 `Positioned`） |
 | 只想校验 Dart 改动有没有语法错（`dart analyze` 挂死时） | `PIT-014`（复核 2026-10-07：`dart format` 可用） |
 | `'...\bin\dart.exe' is not recognized` / 找不到 dart.exe | `PIT-014`（路径为 `bin\cache\dart-sdk\bin\dart.exe`） |
 | 视频进度条时间显示（左=进度、右=总长；横屏也要）在哪改 | `ADR-025` |
 | 手机插上后 `adb devices` 一直为空（华为/鸿蒙设备） | `ISSUE-018`（纯血鸿蒙走 HDC，不暴露 ADB 接口） |
 | HarmonyOS 7 手机装不了 APK / `hdc` 在哪儿 / `hdc install` 报不支持 | `ISSUE-018`（只收 `.hap/.hsp/.app`） |
+| Cline 要不要自己跑构建 / 能不能跑 `build.bat` | `ADR-027`（默认不跑，构建由用户手工执行） |
+| 不跑构建的前提下「改完怎么自测」 | `ADR-027`、`PIT-014`（`dart format` + `dart analyze` 按文件跑） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

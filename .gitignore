@@ -63,7 +63,6 @@ app.*.map.json
 gradle-wrapper.jar
 /.gradle
 /.gradle_home
-/.BUILD_NUM
 /android/.gradle
 # Kotlin 编译守护进程的会话/日志目录（每次构建都生成，别进 git status）
 /android/.kotlin

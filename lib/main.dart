@@ -45,16 +45,19 @@ Future<void> main() async {
   };
 
   final packageInfo = await PackageInfo.fromPlatform();
-  AppLogger.i('Main', 'Version: ${packageInfo.version}+${packageInfo.buildNumber}');
+  // packageInfo.version is the plain three-part version (e.g. 1.0.59); the
+  // buildNumber is the Android versionCode derived from it (ADR-026) and is
+  // logged for diagnostics only, never appended to the version string.
+  AppLogger.i(
+    'Main',
+    'Version: ${packageInfo.version} (versionCode ${packageInfo.buildNumber})',
+  );
   AppLogger.i('Main', 'Logger: ${AppLogger.diagnostics}');
   final AppRestartService appRestartService =
       const PlatformAppRestartService();
   final ExternalUrlLauncher externalUrlLauncher =
       const AndroidExternalUrlLauncher();
-  final appBuildInfo = AppBuildInfo(
-    version: packageInfo.version,
-    buildNumber: packageInfo.buildNumber,
-  );
+  final appBuildInfo = AppBuildInfo(version: packageInfo.version);
   final prefs = await SharedPreferences.getInstance();
   final container = ProviderContainer(
     overrides: [

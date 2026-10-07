@@ -373,6 +373,22 @@
   - 点已展开的行 = 先收起（不打开 viewer）；长按任一项也会先收起已展开的行；
   - `SwipeActionCell` 放在 `presentation/common/`，可见库以后要接滑动可直接复用。
 - 首次记录: 2026-10-07
+- 修订 2026-10-07（第二轮，用户反馈）:
+  ① **「操作」按钮 = 进入多选**，不再复用长按行为：私密相册与可见库统一调 `enter(id)`/`_enterSelect(id)`，
+     视频也一样 —— 因为长按弹框的「选择」项被彻底移除（见 ②），长按视频只负责播放选择。
+  ② **「选择」项全局移除**：`VideoOpenTarget.selection` 枚举值、`showSelection` 参数、sheet 里的
+     ListTile、以及两处 `switch` 的 case 全部删除（可见库也删，不再只针对私密相册）。
+     进多选的入口变成：行左滑「操作」/ ⋮ 菜单「选择」/ 长按图片。
+  ③ **收起时绝不能看见按钮**（用户能看到底层按钮）：按钮层透明度跟随滑动进度（`Opacity(t)`）
+     + 从右边界滑入（`Transform.translate(Offset(strip * (1 - t), 0))`），
+     并在 Stack 最底铺一层 `ColoredBox(vaultColors.surface)` —— 列表模式的行本来是
+     `Colors.transparent`，没有这层就会透出按钮。
+     **按钮层必须仍是 `PositionedDirectional`，不能换成 `Align`**：`ListView` 给 item 的高度约束无界，
+     `Align` 会撑到 ∞（列表模式下必炸）。
+  ④ 滑动操作已覆盖**两个媒体网格**：`MediaGridScreen`（全部媒体/收藏/回收站/用户相册）与
+     `VisibleMediaGrid`（系统相册）；可见库的「删除」沿用原有流程（确认框 + `PhotoManager.editor.deleteWithIds`，
+     系统可能再弹一次确认），逻辑抽成 `_deleteAssetIds()` 供选中删除与单行删除共用。
+- 修订验证: `dart analyze <4 文件>` → `No issues found!`；`dart format --set-exit-if-changed` 解析通过
 
 ## ADR-025 视频进度条两端显示时间：左=当前进度、右=总时长（横竖屏都显示）
 - 日期: 2026-10-07 | 状态: 已采纳
@@ -392,3 +408,74 @@
   与同样未被使用的 `formatVideoDelta()` 并列，未删）；横屏底部控制条因此高约 21dp，
   若嫌挤，恢复 `if (!widget.landscape)` 即可。`widget.landscape` 仍用于图标切换，未变成死字段。
 - 首次记录: 2026-10-07
+
+## ADR-026 版本号：`pubspec.yaml` 单一来源的三段式 `1.0.x`（去掉 `+build`），versionCode 由 versionName 推导
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 产物一直是 `privi-1.0.30+59.apk` 这种「三段式 `+build`」形式（`pubspec.yaml`
+  里 `version: 1.0.30+59`）：文件名/tag/设置页三处展示不一致，人看不出哪个才是"版本"。
+  要求统一成 `1.0.59`（产物 `privi-1.0.59.apk`），**不带 `+数字`**。
+- 决策:
+  ① `pubspec.yaml` 只留三段式 `version: 1.0.59`，**不再有 `+build` 后缀**；
+  ② `scripts\bump_version.ps1` 改为「最后一段 +1」（`1.0.59` → `1.0.60`），不再需要 `-BuildNumber`；
+  ③ `build.bat :increment_version` 删掉 `.BUILD_NUM`（第二个版本来源），校验改成
+     「回读 pubspec，版本号必须真的变了」（旧命令 `-BuildNumber 999` 已失效，见 `ISSUE-005` 修订）；
+  ④ **Android `versionCode` 在 `android/app/build.gradle.kts` 里由 versionName 推导**：
+     `major*10000 + minor*100 + patch`（`1.0.59` → 10059，每次构建单调递增）；
+  ⑤ 应用内只显示 `1.0.59`（不再显示 `(buildNumber)`），versionCode 只出现在启动日志里。
+- 理由: 版本号只有一个来源（`pubspec.yaml`）才不会有 `ISSUE-005` 那种"两个号漂移"；
+  versionCode 必须单调递增，否则覆盖安装/升级会被系统拒绝。
+- 备选与为何不选:
+  ① **只改文件名、不动 gradle**：pubspec 没有 `+build` 时 `flutter build apk` 会**删掉**
+     `local.properties` 里的 `flutter.versionCode`，Flutter Gradle 插件回退成 **1**
+     ⇒ 装过 versionCode 59 的手机全部报 `INSTALL_FAILED_VERSION_DOWNGRADE`。
+     **这是本次必须改 gradle 的唯一原因**，详见 `PIT-027`；
+  ② 保留 `.BUILD_NUM` 当 versionCode、用 `-PbuildNumber=` 传给 gradle：多一个状态文件、多一条漂移路径；
+  ③ `versionCode = patch`（59 → 60）：主/次版本一升就回退（`1.1.0` → 0），不可取；
+  ④ 继续用 `1.0.30+59`（需求明确不要）。
+- 影响 / 约束:
+  - 改版本号只动 `pubspec.yaml` 一行；**不要再引入第二个版本来源**；
+  - 公式上限：patch ≤ 99、minor ≤ 99，超了要换公式；
+  - 旧 `1.0.30+59` 仍可被 `bump_version.ps1` 解析（正则取前三段、丢弃 `+build`），迁移期不会炸；
+  - 历史 tag `v1.0.30+59` 保留不动；新 tag 形如 `v1.0.60`（`build.bat` 的 `RELEASE_TAG=v!NEW_VER!` 无需改）；
+  - 设置页「关于」与列表项显示 `v1.0.59`；`AppBuildInfo` 的 `buildNumber` 字段已随本次改动移除。
+- 验证状态（2026-10-07）:
+  - **已实测**: ①`bump_version.ps1` → `OK=1.0.59->1.0.60`，旧格式输入 `OK=1.0.30->1.0.31`；
+    ②`flutter build apk` 已把 `android\local.properties` 改成只剩 `flutter.versionName=1.0.59`、
+    **`flutter.versionCode` 被删除**（`PIT-027` 的证据，亲眼在文件里确认）；
+    ③改动的 `.ps1` 仍是 UTF-8 BOM + CRLF、`.bat` 无 BOM、四个 memory-bank 文件无 BOM + CRLF、`bareLF=0`；
+    ④`dart format --output=show` 对比（忽略 EOL）显示本次改的 Dart 代码无额外格式差异。
+  - **未完成（收尾时构建仍在跑）** → **已补测通过（同日 20:40 构建完成后）**:
+    `build.bat gradle` 实际成功（`build\build_exit.log` = `周三 2026/10/07 20:40:02.73 BUILD_FAILED=0 WMI_FAILED=0`），
+    且 `D:\Tools\DevTools\Android\Sdk\build-tools\36.0.0\aapt2.exe dump badging build\app\outputs\flutter-apk\app-release.apk`
+    → `package: name='com.privi.app' versionCode='10059' versionName='1.0.59'`
+    ⇒ 派生公式、命名链路、覆盖安装的 versionCode 单调性**端到端打通**（不再是 `versionCode='1'`）。
+    （收尾途中一度以为构建还没结束，是终端回显滞后导致的误判 —— 以 `build\build_exit.log` 的 mtime/内容为准。）
+- 首次记录: 2026-10-07
+
+## ADR-027 构建一律由用户手工执行，Cline 默认不跑构建（自测 = 静态验证）
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 本仓库构建太慢（全量/首次 15~25 分钟：`build_runner` AOT 200s+、`assembleRelease` 700s 量级），
+  本机还常遇 WMI 静默挂死（`ISSUE-001`）；Cline 每轮"改完就跑构建"会把时间几乎全耗在等待/轮询上，
+  而且容易和用户手工点的那次构建撞车（互删 `build\`、抢 `build_full.log`，见 `PIT-023`）。
+- 决策:
+  ① Cline **不主动运行任何构建类命令**（`build.bat` / `build.bat gradle` / `fast` / `norelease` /
+     `flutter build apk` / `flutter clean` …），只有用户当场明确要求（"跑一下构建"/"build 一下"）才例外；
+  ② 改完的默认自测 = **静态验证**：`dart format --output=none --set-exit-if-changed <改动文件>`（语法）
+     + `dart analyze <改动文件>`（类型/静态；实测可用，几秒出 `No issues found!`；
+     `dart.exe` 全路径 = `%FLUTTER_HOME%\bin\cache\dart-sdk\bin\dart.exe`，见 `PIT-014`）；
+     `.ps1` / `.bat` 改动按 `PIT-002` 校验 BOM 与 CRLF 并用 Parser/静态 grep 自检；
+  ③ 需要构建结论时，Cline 明确说"请你手工跑构建"，之后**只读**
+     `build\build_exit.log`（`BUILD_FAILED=` / `WMI_FAILED=`）与 `build\build_full.log` 尾部，再分析；
+  ④ 发现已有构建在跑（日志 mtime 新 / `java.exe` 在 R8）时**绝不重复启动**。
+- 理由: 把最耗时的一步交回用户手里；对 Dart 侧改动而言静态验证的回归能力足够。
+- 备选与为何不选: ①继续让 Cline 跑 `build.bat gradle`（3~20 分钟/次，WMI 挂死时纯白等，还会与用户构建冲突）；
+  ②只在"大改动"时构建（判定含糊，仍会踩坑）；③用 `flutter analyze` 全量分析（本机易挂，见 `PIT-020`，
+  故采用按文件 `dart analyze`）。
+- 影响 / 约束:
+  - `.clinerules/rules.md` 已改写：原来的"改完必须自测：跑构建…"→"自测 = 静态验证"，
+    "构建入口"那条 → "构建一律由用户手工执行，Cline 默认不跑构建"；
+  - 验证类条目的"复发判据"若依赖构建日志（如 `ISSUE-011` 判据 ③），**只读日志**，不要自己跑；
+  - 用户明确要求构建时不受本约束限制；
+  - 没能做编译级验证的改动，回复里必须写明"未做编译验证，请手工构建"。
+- 首次记录: 2026-10-07
+

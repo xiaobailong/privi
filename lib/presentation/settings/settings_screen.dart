@@ -30,7 +30,7 @@ class SettingsScreen extends ConsumerWidget {
     final backupBusy = ref.watch(
       vaultBackupControllerProvider.select((state) => state.busy),
     );
-    final versionAndBuild = appBuildInfo.versionAndBuild;
+    final version = appBuildInfo.version;
     final notifier = ref.read(settingsControllerProvider.notifier);
 
     return Scaffold(
@@ -407,9 +407,9 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.info_outline),
             title: const Text(AppInfo.name),
             subtitle: Text(
-              'v$versionAndBuild · ${AppInfo.licenseShort}',
+              'v$version · ${AppInfo.licenseShort}',
             ),
-            onTap: () => _showAbout(context, ref, versionAndBuild),
+            onTap: () => _showAbout(context, ref, version),
           ),
           ListTile(
             leading: const Icon(Icons.person_outline),
@@ -483,7 +483,7 @@ class SettingsScreen extends ConsumerWidget {
   void _showAbout(
     BuildContext context,
     WidgetRef ref,
-    String versionAndBuild,
+    String version,
   ) {
     showDialog<void>(
       context: context,
@@ -516,7 +516,7 @@ class SettingsScreen extends ConsumerWidget {
               const Text(AppInfo.about),
               const SizedBox(height: 16),
               Text(
-                context.l10n.versionLabel(versionAndBuild),
+                context.l10n.versionLabel(version),
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
               const SizedBox(height: 4),

@@ -43,6 +43,9 @@ import 'thumbnail_tile.dart';
 /// - Recycle: Restore | More (delete forever)
 /// - Normal: Unhide | Rate | Delete | More (set cover, move, details)
 ///
+/// Swipe a row to the left to reveal「操作」(enter selection) and「删除」
+/// (recycle bin: permanent; any other album: move to the recycle bin).
+///
 /// App bar ⋮ holds Select / Style / Search / Sort.
 class MediaGridScreen extends ConsumerStatefulWidget {
   const MediaGridScreen({
@@ -198,19 +201,12 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     return false;
   }
 
-  /// Runs the long-press behaviour for one item — shared by the long-press
-  /// gesture and the swipe actions'「操作」button:
-  /// * videos → the open-with sheet (only this item is handed to the player);
-  /// * everything else → enter selection, exactly like long-press does.
-  Future<void> _handleItemAction(
-    MediaItem item,
-    List<MediaItem> items,
-    int index,
-  ) async {
-    if (item.isVideo) {
-      await _chooseVideoTarget(item, items, index);
-      return;
-    }
+  /// The swipe actions'「操作」button: enter selection for this item.
+  ///
+  /// Videos included — the video long-press sheet no longer carries a
+  /// 「选择」entry, so this button is the per-item way into multi-select
+  /// (alongside the ⋮ menu). Playback choices stay on long-press.
+  void _handleItemAction(MediaItem item) {
     ref.read(selectionControllerProvider.notifier).enter(item.id);
   }
 
@@ -239,8 +235,8 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
   /// entries collapse into the same engine). Non-video items keep the plain
   /// selection behaviour.
   ///
-  /// The sheet here hides its「选择」entry ([showSelection] false): the grid
-  /// has its own selection entry points (long-press on a photo, the ⋮ menu).
+  /// The sheet has no「选择」entry any more (see [showVideoOpenTargetSheet]):
+  /// selection lives on the row's swipe actions and in the ⋮ menu.
   Future<void> _chooseVideoTarget(
     MediaItem item,
     List<MediaItem> items,
@@ -250,7 +246,6 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     final target = await showVideoOpenTargetSheet(
       context,
       externalSupported: external.supported,
-      showSelection: false,
     );
     if (!mounted || target == null) return;
     switch (target) {
@@ -270,11 +265,6 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
           forceInternal: true,
           forcedEngine: kVlcEngine,
         );
-      // Not reachable while the sheet is asked to hide「选择」above, but the
-      // enum value stays (the Visible grid still offers it) so the switch is
-      // exhaustive and behaviour can be restored with one flag.
-      case VideoOpenTarget.selection:
-        ref.read(selectionControllerProvider.notifier).enter(item.id);
     }
   }
 
@@ -844,10 +834,9 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
         onOpenChanged: (open) => _setSwipeOpen(item.id, open),
         actions: [
           SwipeAction(
-            icon: Icons.more_horiz,
+            icon: Icons.check_circle_outline,
             label: context.l10n.actions,
-            onPressed: () =>
-                unawaited(_handleItemAction(item, <MediaItem>[item], 0)),
+            onPressed: () => _handleItemAction(item),
           ),
           SwipeAction(
             icon: _isRecycle ? Icons.delete_forever : Icons.delete_outline,

@@ -24,6 +24,7 @@ import '../../domain/enums.dart';
 import '../common/floating_action_capsule.dart';
 import '../common/grid_app_menu.dart';
 import '../common/media_grid_scaffold.dart';
+import '../common/swipe_action_cell.dart';
 import '../common/vault_sheet.dart';
 import '../common/video_duration_badge.dart';
 import '../common/video_open_target_sheet.dart';
@@ -43,7 +44,9 @@ List<GalleryAsset> visibleFolderPreviewItems(Iterable<GalleryAsset> items) {
 
 /// Visible folder browser (hide flow).
 ///
-/// Tap opens media; long-press selects for Hide / Share / Delete.
+/// Tap opens media; long-press selects for Hide / Share / Delete. Swipe a row
+/// to the left to reveal「操作」(enter selection) and「删除」(delete from the
+/// device — the system may add its own confirm).
 class VisibleMediaGrid extends ConsumerStatefulWidget {
   const VisibleMediaGrid({
     super.key,
@@ -74,8 +77,27 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
   bool _searchOpen = false;
   final _searchCtrl = TextEditingController();
 
+  /// Id of the row currently showing its swipe actions (at most one at a time).
+  String? _openSwipeId;
+
   bool get _selecting => _selection.isSelecting;
   Set<String> get _selected => _selection.selected;
+
+  /// Closes whichever row is swiped open (tap on the tile, action tap, …).
+  void _closeSwipe() {
+    if (_openSwipeId == null) return;
+    setState(() => _openSwipeId = null);
+  }
+
+  void _setSwipeOpen(String assetId, bool open) {
+    setState(() {
+      if (open) {
+        _openSwipeId = assetId;
+      } else if (_openSwipeId == assetId) {
+        _openSwipeId = null;
+      }
+    });
+  }
 
   void _exitSelect() => _selection.exit();
 
@@ -207,8 +229,6 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
           forceInternal: true,
           forcedEngine: kVlcEngine,
         );
-      case VideoOpenTarget.selection:
-        _enterSelect(asset.id);
     }
   }
 
@@ -626,8 +646,15 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     await Share.shareXFiles(paths);
   }
 
-  Future<void> _deleteSelected() async {
-    final ids = _selected.toList();
+  Future<void> _deleteSelected() => _deleteAssetIds(_selected.toList());
+
+  /// Swipe-action delete for one asset (same confirm + MediaStore removal as
+  /// the selection capsule).
+  Future<void> _deleteAsset(GalleryAsset asset) => _deleteAssetIds([asset.id]);
+
+  /// Removes [ids] from the system gallery: confirm dialog, then
+  /// [PhotoManager.editor.deleteWithIds] (the system may add its own confirm).
+  Future<void> _deleteAssetIds(List<String> ids) async {
     if (ids.isEmpty) return;
     final confirm = await showDialog<bool>(
       context: context,
@@ -720,28 +747,55 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
         );
       }
       final asset = items[index];
-      return _LazyThumbTile(
-        key: ValueKey('visible-media-${asset.id}'),
-        asset: asset,
-        listMode: viewMode == AlbumViewMode.list,
-        selected: _selected.contains(asset.id),
-        selectMode: _selecting,
-        onTap: () {
-          if (_selecting) {
-            _toggle(asset.id);
-          } else {
-            unawaited(_openPreview(asset));
-          }
-        },
-        onLongPress: () {
-          if (_selecting) {
-            _toggle(asset.id);
-          } else if (asset.isVideo) {
-            unawaited(_chooseVideoTarget(asset));
-          } else {
-            _enterSelect(asset.id);
-          }
-        },
+      return SwipeActionCell(
+        key: ValueKey('visible-swipe-${asset.id}'),
+        // Selection mode owns taps and long-presses, so no swipe then.
+        enabled: !_selecting,
+        open: !_selecting && _openSwipeId == asset.id,
+        onOpenChanged: (open) => _setSwipeOpen(asset.id, open),
+        actions: [
+          SwipeAction(
+            icon: Icons.check_circle_outline,
+            label: context.l10n.actions,
+            onPressed: () => _enterSelect(asset.id),
+          ),
+          SwipeAction(
+            icon: Icons.delete_outline,
+            label: context.l10n.delete,
+            destructive: true,
+            onPressed: () => unawaited(_deleteAsset(asset)),
+          ),
+        ],
+        child: _LazyThumbTile(
+          key: ValueKey('visible-media-${asset.id}'),
+          asset: asset,
+          listMode: viewMode == AlbumViewMode.list,
+          selected: _selected.contains(asset.id),
+          selectMode: _selecting,
+          onTap: () {
+            // A row that is showing its actions closes on tap instead of
+            // opening the preview.
+            if (_openSwipeId == asset.id) {
+              _closeSwipe();
+              return;
+            }
+            if (_selecting) {
+              _toggle(asset.id);
+            } else {
+              unawaited(_openPreview(asset));
+            }
+          },
+          onLongPress: () {
+            _closeSwipe();
+            if (_selecting) {
+              _toggle(asset.id);
+            } else if (asset.isVideo) {
+              unawaited(_chooseVideoTarget(asset));
+            } else {
+              _enterSelect(asset.id);
+            }
+          },
+        ),
       );
     }
 

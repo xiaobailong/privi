@@ -344,3 +344,28 @@
   重名还会覆盖上一次的排查证据）
 - 自检: `git status --porcelain` 里除真实改动外**不应有 `??` 项**；`dir /b tmp` 只应有本次要用的文件
 - 首次记录: 2026-09-22（本次任务落地 `tmp\` 规范）
+
+## PIT-027 `pubspec.yaml` 的 `version:` 不带 `+N` 时，Flutter 会**删掉** `local.properties` 的 `flutter.versionCode`，插件回退为 1 ⇒ 覆盖安装报 `INSTALL_FAILED_VERSION_DOWNGRADE`
+- 触发条件: 把 `pubspec.yaml` 写成三段式（`version: 1.0.59`，没有 `+59`），然后 `flutter build apk`
+- 错误现象: 构建成功、日志一行警告都没有，但产出的 APK `versionCode='1'`；
+  手机上装着旧版（如 versionCode 59）时 `adb install -r` 直接失败
+  `INSTALL_FAILED_VERSION_DOWNGRADE`，系统安装器/应用商店同样拒绝升级
+- 源码依据:
+  `flutter_tools\lib\src\android\gradle_utils.dart:1184-1215` —
+  `changeIfNecessary('flutter.versionCode', buildNumber)`，`buildNumber` 为 null 时走
+  `settings.values.remove(key)`（**删键**，不是留旧值）；
+  `flutter_tools\gradle\src\main\kotlin\FlutterPlugin.kt:131-134` —
+  `rootProjectLocalProperties.getProperty("flutter.versionCode", "1")`（缺键 → `"1"`）
+- 正确做法: 别用 `flutter.versionCode`，在 `android/app/build.gradle.kts` 里按版本名自己算
+  （实现见 `ADR-026`，`versionCodeFromName()` 定义在 `plugins {}` 之后、`android {}` 之前）:
+  ```kotlin
+  versionName = flutter.versionName
+  versionCode = versionCodeFromName(flutter.versionName) // major*10000 + minor*100 + patch
+  ```
+- 反例（别这么写）: 只改 `pubspec.yaml` 就去打包发布；把 `versionCode = flutter.versionCode` 留着
+  （本机 `android\local.properties` 里会看到 `flutter.versionCode=59` 是**上一次**构建留下的残留，
+  下一次 `flutter build apk` 就会把它删掉 —— 拿它当"现在还是 59"会误判）
+- 自检: `D:\Tools\DevTools\Android\Sdk\build-tools\36.0.0\aapt2.exe dump badging build\app\outputs\flutter-apk\app-release.apk | findstr versionCode`
+  → 期望 `versionCode='10059' versionName='1.0.59'`，出现 `versionCode='1'` 即命中本坑
+- 首次记录: 2026-10-07
+

@@ -41,6 +41,11 @@ class SwipeAction {
 /// The child is translated with [Transform], which moves its hit area too, so
 /// the revealed buttons stay tappable while the poster only occupies its
 /// remaining (clipped) part.
+///
+/// While the row is closed nothing of the action strip is visible: the strip's
+/// opacity follows the drag and it is slid out of the cell, and an opaque
+/// backing is painted over it, so list rows — which paint themselves
+/// transparent — cannot show the buttons through.
 class SwipeActionCell extends StatefulWidget {
   const SwipeActionCell({
     super.key,
@@ -155,25 +160,45 @@ class _SwipeActionCellState extends State<SwipeActionCell>
 
         return Stack(
           children: [
+            // Opaque backing: list rows paint themselves transparent, so
+            // without this the action strip would show through a closed row.
+            Positioned.fill(
+              child: ColoredBox(color: context.vaultColors.surface),
+            ),
             PositionedDirectional(
               end: 0,
               top: 0,
               bottom: 0,
               width: strip,
-              child: Row(
-                children: [
-                  for (final action in actions)
-                    SizedBox(
-                      width: actionWidth,
-                      child: _SwipeActionButton(
-                        action: action,
-                        onTap: () {
-                          _settle(false);
-                          action.onPressed();
-                        },
+              child: AnimatedBuilder(
+                animation: _controller,
+                child: Row(
+                  children: [
+                    for (final action in actions)
+                      SizedBox(
+                        width: actionWidth,
+                        child: _SwipeActionButton(
+                          action: action,
+                          onTap: () {
+                            _settle(false);
+                            action.onPressed();
+                          },
+                        ),
                       ),
+                  ],
+                ),
+                // Fade + slide in from the right edge, so a closed row is
+                // indistinguishable from a plain tile.
+                builder: (context, child) {
+                  final t = _controller.value;
+                  return Opacity(
+                    opacity: t,
+                    child: Transform.translate(
+                      offset: Offset(strip * (1 - t), 0),
+                      child: child,
                     ),
-                ],
+                  );
+                },
               ),
             ),
             AnimatedBuilder(

@@ -43,3 +43,5 @@
 - 编码约定：`memory-bank/*.md` = UTF-8（**无 BOM**）+ CRLF，与 `README.md`、`.clinerules/` 保持一致。
 - 新增/改名 `scripts\` 下的辅助脚本、或改动 `build.bat` 的脚本路径时，
   必须回看 `ISSUE-011`（"静默降级"事故）并跑它的复发判据。
+  注意判据 ①② 是静态命令（`findstr` / `dir`），**可以直接跑**；判据 ③ 要读 `build\build_full.log`，
+  只**读**日志即可 —— 不要为了它自己跑构建（构建由用户手工执行，见 `.clinerules/rules.md` / `ADR-027`）。

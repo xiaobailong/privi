@@ -339,7 +339,9 @@ if not exist "local.properties" (
 goto :eof
 
 REM ============================================
-REM  递增版本号（根目录 BUILD 文件 + pubspec.yaml 联动）
+REM  递增版本号（pubspec.yaml 是唯一来源：1.0.x）
+REM  每次构建把最后一段 +1（1.0.59 -> 1.0.60），不再有 +build 后缀；
+REM  Android versionCode 由 android/app/build.gradle.kts 从 versionName 推导。
 REM ============================================
 :increment_version
 echo.
@@ -351,23 +353,20 @@ if not exist "pubspec.yaml" (
     goto :eof
 )
 
-REM ---- 初始化 BUILD_NUM 文件（从 pubspec.yaml 提取当前 build number） ----
-if not exist ".BUILD_NUM" (
-    for /f "tokens=2 delims=+" %%n in ('findstr /c:"version: " pubspec.yaml') do (
-        echo %%n> ".BUILD_NUM"
-    )
-    if not exist ".BUILD_NUM" echo 0> ".BUILD_NUM"
+REM ---- 先记录旧版本号，递增后比对 ----
+REM  旧方案有 .BUILD_NUM 和 pubspec.yaml 两个来源，容易漂移（ISSUE-005）；
+REM  现在只认 pubspec.yaml，校验方式改为「版本号必须真的变了」。
+set "OLD_VER="
+for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "OLD_VER=%%v"
+if not defined OLD_VER (
+    echo [错误] 无法从 pubspec.yaml 解析 version 行
+    set "BUMP_FAILED=1"
+    goto :eof
 )
 
-REM ---- 读取并递增 ----
-set /p B=<".BUILD_NUM"
-set /a BN=B+1 2>nul
-if not defined BN set /a BN=1
-set "NEW_BUILD_NUM=%BN%"
-
-REM ---- 更新 pubspec.yaml：只替换 + 号后面的数字，不动版本名 ----
+REM ---- 更新 pubspec.yaml：版本最后一段 +1 ----
 REM  必须用 -File 调脚本，不能用 powershell -Command 一行式！
-REM  本机安全策略会拦截命令行里含正则 (\+)\d+ 的 -Command 调用：powershell 以退出码
+REM  本机安全策略会拦截命令行里含正则的 -Command 调用：powershell 以退出码
 REM  786 静默退出，pubspec.yaml 不会被修改（历史版本号漂移就是这么来的）。
 if not exist "%~dp0scripts\bump_version.ps1" (
     echo [错误] 缺少版本号更新脚本: %~dp0scripts\bump_version.ps1
@@ -376,26 +375,27 @@ if not exist "%~dp0scripts\bump_version.ps1" (
     set "BUMP_FAILED=1"
     goto :eof
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bump_version.ps1" -BuildNumber %BN% -Path "pubspec.yaml"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bump_version.ps1" -Path "pubspec.yaml"
 set "BUMP_EXIT=%ERRORLEVEL%"
 
-REM ---- 回读校验：pubspec.yaml 的 build number 必须真的等于 %BN% ----
-set "VER_CODE="
-for /f "tokens=2 delims=+" %%n in ('findstr /c:"version: " pubspec.yaml') do set "VER_CODE=%%n"
-if not "!VER_CODE!"=="%BN%" (
-    echo [错误] pubspec.yaml 版本号未更新：期望 +%BN%，实际 +!VER_CODE!（PowerShell 退出码 !BUMP_EXIT!）
+REM ---- 回读校验：版本号必须真的变了，否则按失败处理 ----
+REM  脚本退出码正常但文件没变 = 闸门失效（历史版本号漂移就是这样漏过去的）。
+set "NEW_VER="
+for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "NEW_VER=%%v"
+if not defined NEW_VER (
+    echo [错误] pubspec.yaml 版本号未更新（PowerShell 退出码 %BUMP_EXIT%）
+    echo        排查：build\build_full.log；或手动修改 pubspec.yaml 的 version: 行
+    set "BUMP_FAILED=1"
+    goto :eof
+)
+if "!NEW_VER!"=="!OLD_VER!" (
+    echo [错误] pubspec.yaml 版本号未递增：仍是 !NEW_VER!（PowerShell 退出码 %BUMP_EXIT%）
     echo        排查：build\build_full.log；或手动修改 pubspec.yaml 的 version: 行
     set "BUMP_FAILED=1"
     goto :eof
 )
 
-REM ---- 确认成功后才回写 .BUILD_NUM，避免两个版本号再次漂移 ----
-echo %BN%> ".BUILD_NUM"
-
-REM ---- 读取更新后的版本号用于显示和日志 ----
-for /f "tokens=2 delims=: " %%v in ('findstr /c:"version: " pubspec.yaml') do set "NEW_VER=%%v"
-
-echo       版本号已更新: %NEW_VER%
+echo       版本号已更新: !OLD_VER! -^> !NEW_VER!
 goto :eof
 
 REM ============================================
