@@ -16,6 +16,10 @@ String formatPlaybackSpeed(double speed) {
 
 const videoControlsAutoHideDelay = Duration(seconds: 3);
 
+/// 播放区横向滑动多少逻辑像素折算**一档**跳转，一档 = `AppSettings.playerSeekSeconds`
+/// 秒（与设置页的「快进/快退步长」同一个值）。
+const double videoSwipeSeekStepPx = 48;
+
 class AutoHideVideoControls extends StatefulWidget {
   const AutoHideVideoControls({
     super.key,
@@ -98,6 +102,80 @@ class _AutoHideVideoControlsState extends State<AutoHideVideoControls> {
       onPointerUp: _onPointerReleased,
       onPointerCancel: _onPointerReleased,
       child: widget.child,
+    );
+  }
+}
+
+/// 播放区横向滑动（右滑快进 / 左滑快退）时叠在画面中央的提示：
+/// 方向图标 + 相对位移 + 跳转后的「目标时间/总时长」。
+class VideoSwipeSeekIndicator extends StatelessWidget {
+  const VideoSwipeSeekIndicator({
+    super.key,
+    required this.delta,
+    required this.position,
+    required this.duration,
+  });
+
+  /// 相对当前播放位置的位移：正数 = 快进，负数 = 快退（已按视频长度裁剪）。
+  final Duration delta;
+
+  /// 跳转后的目标位置，用于显示「目标/总长」。
+  final Duration position;
+
+  /// 视频总时长。
+  final Duration duration;
+
+  @override
+  Widget build(BuildContext context) {
+    final forward = !delta.isNegative;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(AppRadii.card),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.md,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  forward ? Icons.fast_forward : Icons.fast_rewind,
+                  color: Colors.white,
+                  size: 30,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  forward ? context.l10n.fastForward : context.l10n.rewind,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              formatVideoDelta(delta),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+            Text(
+              formatVideoProgress(position, duration),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -491,7 +569,7 @@ class _VideoSettingsSheetState extends State<_VideoSettingsSheet> {
                 ),
                 const SizedBox(height: AppSpacing.md),
               ],
-              Text(context.l10n.doubleTapSeek),
+              Text(context.l10n.seekStepSeconds),
               const SizedBox(height: AppSpacing.xs),
               SegmentedButton<int>(
                 segments: [

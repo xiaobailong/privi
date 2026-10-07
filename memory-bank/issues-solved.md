@@ -491,3 +491,27 @@
 - 相关文件: 无（环境事实）；README 的「安装（APK）」已加鸿蒙提示
 - 首次记录: 2026-10-07
 
+## ISSUE-019 设置里的「双击跳转」秒数对播放**没有任何影响**（双击手势从未实现）
+- 状态: 已修复（2026-10-07：该值改为「快进/快退步长」，驱动播放区横向滑动）
+- 症状 / 现场: 设置 → 播放设置 →「双击跳转 3/5/10/15s」，改了以后播放视频时**双击画面什么都不发生**；
+  该秒数对进度条拖动、对任何 seek 步进也都不起作用（纯摆设）
+- 复发判据: `findstr /s /n /c:"playerSeekSeconds" /c:"onDoubleTap" lib\*.dart`
+  → 改动前只有：`settings_controller.dart`（读写）+ `player_screen.dart` / `viewer_screen.dart` /
+  `gallery_preview_screen.dart` 里把 `settings.playerSeekSeconds` 传给**设置弹框**自用；
+  `onDoubleTap` 全仓库只命中 `zoomable_media_image.dart`（图片缩放，与视频无关）；
+  Kotlin 侧 `findstr /i /c:"doubleTap" android\app\src\main\java\*.kt` **零命中**
+  ⇒ 没有任何代码消费它 = 无实现（不是"被别的功能覆盖了"）
+- 根因: 第一版「双击跳转」功能的遗留 —— 设置项、持久化、设置弹框都做完了，
+  但**双击手势本身从未接上**（`PlayerScreen` 画面层当时只有 `onTap: _toggleChrome`）
+- 修法: **不新增设置项**，把这一个值复用为「快进/快退步长」：播放区横向滑动每滑过
+  `videoSwipeSeekStepPx`(48dp) 算一档、一档 = `settings.playerSeekSeconds` 秒；
+  设置页文案 `doubleTapSeek = '双击跳转'` → `seekStepSeconds = '快进/快退步长'`（getter 同步改名）
+- 反例 / 易误判: ①以为"设置项存在 ⇒ 功能生效"（存下来 ≠ 有人读）；
+  ②以为要**新建**一个「滑动步长」设置（同一个语义，再建一个就又多了个来源，正是 `ADR-026` 反对的模式）
+- 相关文件: `lib/application/settings/settings_controller.dart`、
+  `lib/presentation/player/player_screen.dart`、`lib/presentation/player/video_player_controls.dart`、
+  `lib/presentation/viewer/viewer_screen.dart`、`lib/presentation/visible/gallery_preview_screen.dart`
+- 决策: `ADR-028`
+- 首次记录: 2026-10-07
+
+

@@ -162,6 +162,18 @@
 - 判读技巧（本轮用到）: `format --output=show <file> > tmp\x.dart` 再 `fc /n <file> tmp\x.dart`，
   差异里**只出现在自己没改过的段落** ⇒ 说明该文件的旧风格本来就不符合新版 dart format，
   **不要**对自己的改动做全局重排（`--output=show` 会在末尾多一行 `Formatted 1 file ...`，别当成差异）。
+- 复核 2026-10-07（`--set-exit-if-changed` 在**本仓库任何 Dart 文件**上都会报 `Changed`）:
+  `git ls-files --eol lib/presentation/player/player_screen.dart` → **`i/lf w/crlf`**
+  （工作区是 CRLF、索引是 LF），且 Dart 3.7+ 的「tall style」格式化器会重排大量旧代码。
+  决定性对照：把 **HEAD 版本**导出到 `tmp\` 后跑同一条命令，同样报 `Changed`
+  （`tmp\head_fmt.txt` = `Changed tmp\ps_head.dart` / `Changed tmp\vc_head.dart`）
+  ⇒ 这条命令在本仓库只能当**语法**校验用（解析失败会明确报
+  `Could not format because the source could not be parsed`），**不能**当作「格式已通过」的判据。
+  想确认自己**新写的那几行**是否合规：`dart format --output=show <file> > tmp\x.dart`，
+  然后只读自己动过的那几行去对照（本次据此改掉了 1 处续行缩进 + 2 处 doc 注释前缺空行），
+  与 `ADR-026` 的做法一致：**只对齐自己的段落，绝不全局重排**。
+  另：`format --output=show` 写进文件后与原文件字节数差 ~280B 属正常（tall style 的重排量），
+  不要用文件大小判断"有没有被格式化"。
 
 ## PIT-015 批量改动改坏了怎么救：`git checkout -- <路径>` 从 index 还原（不用重写）
 - 触发条件: 脚本/工具批量替换把文件内容改坏（或改错方向）
@@ -254,6 +266,16 @@
   用 `read_files` 读到空就断定命令失败
 - 自检: 状态文件 mtime 是否在推进；目标任务进程（`java.exe`/`dart.exe`）是否还在
 - 首次记录: 2026-09-22（本次全程用它轮询 `build.bat` 进度）
+- 复发 2026-10-07（同一根因，新症状）: 用 `timeout /t 25` 当"等一会儿"的轮询，
+  **把上一条正在前台跑的 `dart analyze` 一起掐死**了 —— `tmp\analyze3.txt` 停在 2 行
+  （`Analyzing player_screen.dart, ...` + `Failed to init NativeSymbolResolver ...`），
+  容易被误判成"分析器又挂了"（`PIT-020`）。
+  正确做法（本轮验证有效）: 长任务放**独立窗口**
+  ```
+  start "" /min cmd /c "cd /d D:\WorkSpace\test\privi && D:\Tools\DevTools\flutter\bin\cache\dart-sdk\bin\dart.exe analyze <files> > tmp\analyze5.txt 2>&1"
+  ```
+  之后**只用 `read_files` 读输出文件**（不再发任何等待类命令），独立窗口不会被终端回收；
+  实测 3 个文件的 analyze 几十秒内就把 `1 issue found.` 写完（`tmp\analyze4.txt`）。
 
 ## PIT-024 `findstr` 的文件名里带通配符但**整个路径被引号包住** ⇒ 0 命中（假阴性）
 - 触发条件: 想在一批文件里找关键词，而文件名里有中文/空格，于是写成

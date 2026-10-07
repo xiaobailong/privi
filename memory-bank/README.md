@@ -100,6 +100,9 @@
 | HarmonyOS 7 手机装不了 APK / `hdc` 在哪儿 / `hdc install` 报不支持 | `ISSUE-018`（只收 `.hap/.hsp/.app`） |
 | Cline 要不要自己跑构建 / 能不能跑 `build.bat` | `ADR-027`（默认不跑，构建由用户手工执行） |
 | 不跑构建的前提下「改完怎么自测」 | `ADR-027`、`PIT-014`（`dart format` + `dart analyze` 按文件跑） |
+| 播放区「右滑快进 / 左滑快退」怎么接、为什么只加在 `PlayerScreen` | `ADR-028` |
+| 设置里的「跳转步长（原『双击跳转』）」秒数以前对播放**没有任何影响** | `ISSUE-019`（现在它就是滑动一档的秒数） |
+| `dart format --set-exit-if-changed` 对本仓库**任何** Dart 文件都报 `Changed` | `PIT-014`（复核 2026-10-07：工作区 CRLF + 新格式化器 tall style） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

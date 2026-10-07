@@ -765,7 +765,14 @@ class AppLocalizations {
 
   String get playerSettings => '播放设置';
 
-  String get doubleTapSeek => '双击跳转';
+  /// 播放区横向滑动的步长：滑过一档就前进/后退这么多秒。
+  String get seekStepSeconds => '快进/快退步长';
+
+  /// 播放区右滑（快进）时画面中央的提示。
+  String get fastForward => '快进';
+
+  /// 播放区左滑（快退）时画面中央的提示。
+  String get rewind => '快退';
 
   String get playbackSpeed => '播放速度';
 

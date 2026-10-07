@@ -488,3 +488,41 @@
   - 没能做编译级验证的改动，回复里必须写明"未做编译验证，请手工构建"。
 - 首次记录: 2026-10-07
 
+## ADR-028 播放区横向滑动快进/快退：只加在 `PlayerScreen`，一档 = 已有的「快进/快退步长」
+- 日期: 2026-10-07 | 状态: 已采纳
+- 背景: 需求 —— 播放视频时在**播放区**右滑快进、左滑快退。
+- 决策:
+  ① 手势只加在 `PlayerScreen` 的画面层：`_buildVideo` 里给 `NativeVideoViewport` 套
+     `GestureDetector`（`onHorizontalDragStart/Update/End/Cancel`），原有的 `onTap: _toggleChrome` 保留
+     （tap 与横向拖拽在手势竞技场里互不干扰）；
+  ② 拖动过程中**不 seek**：只累计位移 + 显示画面中央提示 `VideoSwipeSeekIndicator`
+     （方向图标 + 相对位移 + 「目标/总长」，复用本体已有但一直没人用的
+     `formatVideoDelta()` / `formatVideoProgress()`，见 `ADR-025`），**松手才跳一次**；
+  ③ 档位映射：`累计位移 ÷ videoSwipeSeekStepPx(48dp)` 四舍五入 = 档数，
+     一档 = `AppSettings.playerSeekSeconds`（即 `ISSUE-019` 里那个**以前没人读**的值），
+     目标位置裁剪到 `0 ~ duration`，提示里显示的是**裁剪后**的真实位移（到头时显示 `0:00`）；
+  ④ 设置页文案 `双击跳转` → `快进/快退步长`（getter `doubleTapSeek` → `seekStepSeconds`），
+     与 README「可配快进快退步长」的既有说法对齐。
+- 理由: 三个视频界面里 `ViewerScreen` / `GalleryPreviewScreen` 的**横向滑动已经被 `PageView` 用作翻页**，
+  抢来做 seek 会直接废掉"滑到上/下一条"；只有 `PlayerScreen`（播放列表页）的横向手势是空的
+  ⇒ 加这里收益最大、冲突最小（成本：该手势在这两个界面不生效）。
+- 备选与为何不选:
+  ① 三个界面都加（与 PageView 打架，要再加"屏幕中部才生效"之类的判定，复杂且易误触）；
+  ② 用 `onPanUpdate` 自己判定方向（等于重写手势竞技场，`onHorizontalDrag*` 已足够）；
+  ③ 新建一个"滑动步长"设置项（多一个持久化字段 + 多一个 UI 项，与现值语义重复）；
+  ④ 拖动中实时 seek（更跟手，但对 ExoPlayer / libVLC 都是每帧一次 seek，体验反而更差）。
+- 影响 / 约束:
+  - 画面层结构已变为 `GestureDetector → Stack(StackFit.expand)[NativeVideoViewport, IgnorePointer(HUD)]`；
+    以后往画面层加浮层要放进这个 Stack；HUD **必须** `IgnorePointer`，否则会吃掉拖拽；
+  - 底部控制条（`NativeVideoBottomControls`，含 `Slider`）在 Stack 的**更上层**，它的水平拖动优先，
+    未被破坏（`ADR-025` 的时间标签也照旧）；
+  - Android 10+ 手势导航的**左右边缘**滑动仍归系统返回，边缘约 20dp 内的滑动不会落到播放器 —— 平台行为；
+  - 档数只在 `video.value.isInitialized && duration > 0` 时累计（加载中/出错/时长未知时整段忽略）；
+  - 日志：真正跳转时写一条 `PlayerScreen | Swipe seek: item=..., steps=N (Ns each), from=...ms to=...ms`。
+- 静态验证（`ADR-027`）: `dart analyze` 三个改动文件 → 仅剩 1 条**既存**告警
+  （`player_screen.dart:145 The declaration '_clearOrientationLock' isn't referenced`，
+  HEAD 版本同一处也已存在，非本次引入）；新写的段落已按 `dart format --output=show` 的输出对齐
+  （见 `PIT-014` 复核 2026-10-07：本仓库任何 Dart 文件跑 `--set-exit-if-changed` 都会报 `Changed`，
+  所以只能逐段对照，不能全局重排）。**未做编译/装机验证**，请手工构建。
+- 首次记录: 2026-10-07
+
