@@ -301,6 +301,15 @@
     **没有**新建 `backup_YYYYMMDD`：当天快照 `backup_20261007 = e192268` 已存在，按"同名不覆盖、直接复用"。
     注：本次提交的 `pubspec.yaml` 是 `1.0.60`（上一轮验证 `bump_version.ps1` 的实测运行把 1.0.59 抬到了 1.0.60），
     而已成功构建的产物是 `1.0.59`（versionCode 10059）；版本号只增不减，下次构建产出 `1.0.61`。
+- 2026-10-07 记录（第二轮：播放区横向滑动快进/快退）: 工作区一次性提交 `1004a89`
+  （`feat: 播放区右滑快进/左滑快退（一档 = 设置的跳转步长）+ memory-bank 回填`，8 files, +268/−3），
+  `git push origin main` ⇒ `origin/main` = `1004a89`（`refs/remotes/origin/main` 立刻刷新，可见）；
+  再 `git checkout dev` + `git merge --ff-only main`（`8fde665..1004a89  Fast-forward`，同样 8 files）
+  + `git push origin dev` ⇒ `refs/remotes/origin/dev` 的 reflog 出现
+  `8fde665…1004a89… update by push`（ref 文件滞后十几秒才刷新 —— 复核手法见 `PIT-008` 复核第二轮）；
+  最后 `git checkout main` 收尾 ⇒ `main` / `dev` / `origin/main` / `origin/dev` 四者同为 `1004a89`、工作区干净。
+  同样**没有**新建 backup 分支（当天 `backup_20261007 = e192268` 已存在，按①复用）；
+  本次**没有**版本号 bump（未跑构建）：`pubspec.yaml` 仍是 `1.0.60`，下次构建产出 `1.0.61`。
 
 ## ADR-022 VLC 视频几何：**先探测尺寸、再挂 vout**（几何只定一次）
 - 日期: 2026-10-01 | 状态: 已采纳

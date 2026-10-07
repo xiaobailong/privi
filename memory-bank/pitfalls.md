@@ -86,6 +86,15 @@
   `push_main.txt` = `ae4b5e1..6f48328  main -> main`、`push_dev.txt` = `8e1ea91..6f48328  dev -> dev`。
   易误判点：①`push_*.txt` **空文件 ≠ 失败**（命令仍在跑）；②因此重发命令会**掐断正在进行的 push**
   （同 `PIT-021` 的"等待被提前掐断"）；③判断是否真失败，等第二个文件出现后再看内容，不要看文件是否存在
+- 复核 2026-10-07（第二轮：换成**不碰终端**的复核手段）: `git push origin main` 的终端回显只有
+  `Active code page: 65001`（等于没输出），紧接着读 `.git\refs\remotes\origin\dev` 还是**旧值** `8fde665…`
+  —— 差一点判成"push 没生效"。**不要**为此重发命令（会掐断正在跑的 push，同 `PIT-021`）。
+  最稳的判据是**完全不用终端**，直接 `read_files` 读 git 自己的记录：
+  - `.git\refs\remotes\origin\<branch>`：push 成功后就是新提交号（`main` 这次立刻可见）；
+  - `.git\logs\refs\remotes\origin\<branch>`（reflog）：最后一行为
+    `8fde665… 1004a89… <作者/时间>  update by push` ⇒ **铁证**。
+  本次 `dev` 是 reflog 先出现 `update by push`、ref 文件**滞后十几秒**才刷新。
+  ⇒ 复核顺序：ref/reflog 文件 → `git branch -vv` 里 `[origin/xx]` 是否还带 `ahead N` → 最后才看终端回显。
 
 ## PIT-009 长构建要放独立窗口 / 分离进程，前台跑会被下一条命令掐断
 - 触发条件: `build.bat` 这类分钟级任务
@@ -396,5 +405,18 @@
   下一次 `flutter build apk` 就会把它删掉 —— 拿它当"现在还是 59"会误判）
 - 自检: `D:\Tools\DevTools\Android\Sdk\build-tools\36.0.0\aapt2.exe dump badging build\app\outputs\flutter-apk\app-release.apk | findstr versionCode`
   → 期望 `versionCode='10059' versionName='1.0.59'`，出现 `versionCode='1'` 即命中本坑
+- 首次记录: 2026-10-07
+
+## PIT-028 替换式编辑 md 时，`old_text` 捎带了下一节标题、`new_text` 却没带回 ⇒ 标题被静默吃掉
+- 触发条件: 用「锚定下一节开头」的方式在文档中间插入内容，例如
+  `old_text = "\n## PIT-009 <标题>"`、`new_text = "<新段落>"`（没把标题写回去）
+- 错误现象: 目标标题行被删掉、正文还在 ⇒ 文档结构坏掉（本节内容挂到了上一节名下）；
+  编辑工具的 diff 回显里其实有 `-90: ## PIT-009 …` 这一行，很容易被当成"行号位移"而忽略
+- 正确做法: **`new_text` 必须原样带回 `old_text` 的全部既有行**（`new_text = 新内容 + old_text`），
+  或干脆用 `insert_line`（纯插入，绝不改既有行）
+- 反例: `old_text = "## PIT-009 …"` / `new_text = "<新段落>"`（标题就没了）；
+  以整节标题作锚点又只写回正文
+- 自检: 每次编辑后 **`read_files` 回读改动区域**（含上下各 3 行），确认相邻标题、
+  `---` 分隔线、代码块围栏都还在；本次就是这样发现并修回 `PIT-009` 标题的
 - 首次记录: 2026-10-07
 
