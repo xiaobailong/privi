@@ -292,6 +292,15 @@
   - 本轮记录: `backup_20260922` = `8903ef1`；`main` 由 `8903ef1` 快进到 `4c280c2`（35 files, +3320/−122），
     随后未加修改地推送（`8903ef1..4c280c2  main -> main`）—— 因为 `ISSUE-001`（WMI 挂死）导致
     `main` 上的构建没跑起来，所以这次没有版本号 bump 提交
+  - 2026-10-07 记录（本轮推送，全按本 ADR 走）: 工作区一次性提交 `6f48328`
+    （三段式版本号 + versionCode 推导 + 可见库滑动操作 + 记忆库/`.clinerules`，20 files, +386/−168），
+    `git push origin main` → `ae4b5e1..6f48328  main -> main`；
+    再 `git checkout dev` + `git merge --ff-only main`（`8e1ea91..6f48328  Fast-forward`，26 files）
+    + `git push origin dev` → `8e1ea91..6f48328  dev -> dev` ⇒ `main`/`dev` 回到同一提交 `6f48328`
+    （此前 `main` 领先 `dev` 6 个提交，这次一并补齐）。
+    **没有**新建 `backup_YYYYMMDD`：当天快照 `backup_20261007 = e192268` 已存在，按"同名不覆盖、直接复用"。
+    注：本次提交的 `pubspec.yaml` 是 `1.0.60`（上一轮验证 `bump_version.ps1` 的实测运行把 1.0.59 抬到了 1.0.60），
+    而已成功构建的产物是 `1.0.59`（versionCode 10059）；版本号只增不减，下次构建产出 `1.0.61`。
 
 ## ADR-022 VLC 视频几何：**先探测尺寸、再挂 vout**（几何只定一次）
 - 日期: 2026-10-01 | 状态: 已采纳
