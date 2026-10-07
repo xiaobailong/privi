@@ -17,6 +17,12 @@
 
 **系统要求：** Android 8.0+（API 26）。所有媒体数据完全保留在设备本地。
 
+> **⚠️ 纯血鸿蒙（HarmonyOS NEXT / HarmonyOS 5.0 及以上，含 HarmonyOS 7）不支持安装 APK。**
+> 这类设备使用 **HDC** 调试协议（不是 ADB，`adb devices` 看不到它），应用包格式为 `.hap/.hsp/.app`，
+> `hdc install` 也只接受这三种包。本仓库只产出 Android APK，请安装到 Android 手机 / 平板，
+> 或 Android 模拟器。华为设备只有系统仍为 Android 底座（HarmonyOS 4.x 及更早）时才能侧载 APK。
+> 详见 [memory-bank ISSUE-018](./memory-bank/issues-solved.md)。
+
 > 官方 GitHub Release APK 使用**永久签名密钥**（各版本签名一致）。首次安装新签名应用时，Google Play Protect 可能提示"未知应用"——点击**仍然安装**即可。
 
 ---
@@ -141,6 +147,18 @@ build.bat clean     # 清理所有构建产物
 首次使用需修改 `build.bat` 顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径。
 
 发布 Release 依赖 `gh` CLI（`winget install --id GitHub.cli`），未安装或未登录时自动跳过。
+Release 仅从 `main` 分支发布，且要求当前提交**已推送到 origin**（否则只出包不发 Release，可事后跑 `build.bat release` 补发）。
+
+### 安装到手机（Android）
+
+```bash
+adb devices -l                        # 确认设备在线（需开启 USB 调试并授权）
+adb install -r privi-<version>.apk    # 覆盖安装（保留数据）
+adb install -r -d privi-<version>.apk # 允许版本号降级
+```
+
+> 纯血鸿蒙（HarmonyOS NEXT / HarmonyOS 5.0 及以上）**不支持 ADB 与 APK**，
+> `adb devices` 永远看不到它（它走 HDC），只能用 Android 设备安装 —— 详见上文的鸿蒙提示与 `ISSUE-018`。
 
 ### 构建排查
 

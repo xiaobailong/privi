@@ -91,6 +91,8 @@
 | 只想校验 Dart 改动有没有语法错（`dart analyze` 挂死时） | `PIT-014`（复核 2026-10-07：`dart format` 可用） |
 | `'...\bin\dart.exe' is not recognized` / 找不到 dart.exe | `PIT-014`（路径为 `bin\cache\dart-sdk\bin\dart.exe`） |
 | 视频进度条时间显示（左=进度、右=总长；横屏也要）在哪改 | `ADR-025` |
+| 手机插上后 `adb devices` 一直为空（华为/鸿蒙设备） | `ISSUE-018`（纯血鸿蒙走 HDC，不暴露 ADB 接口） |
+| HarmonyOS 7 手机装不了 APK / `hdc` 在哪儿 / `hdc install` 报不支持 | `ISSUE-018`（只收 `.hap/.hsp/.app`） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

@@ -453,3 +453,33 @@
   `build\build_exit.log` = `周四 2026/10/01 10:27:47.51 BUILD_FAILED=0 WMI_FAILED=0 NEW_VER=`，
   产出 `build\app\outputs\flutter-apk\app-release.apk`（127,631,021B）；
   Dart 侧 `frontend_server` 末行 `... tmp\_dartcheck.dill 0`（0 error）
+
+## ISSUE-018 纯血鸿蒙手机（HarmonyOS 7 / HDC）在 Windows 上 `adb devices` 永远为空，而且装不了 APK
+- 状态: 已规避（根因是设备/系统事实：装 APK 只能用 Android 设备）
+- 症状 / 现场: 手机已开调试、插好 USB，`adb devices -l` 只有 `List of devices attached` 一行、**无设备**；
+  重启 adb server（`kill-server` / `start-server`）无效；Windows 里看到的是
+  `USB\VID_12D1&PID_1101\8HH0226911023008` = "USB Composite Device"（华为 VID_12D1），
+  其 `DEVPKEY_Device_BusReportedDeviceDesc` = **`HDC Device`**（不是 ADB Interface）
+- 复发判据（5 秒定论）: 两条命令对照 —— `hdc list targets` **有设备序列号**、`adb devices` **为空**
+  ⇒ 本条目（鸿蒙原生设备），不要再折腾 adb / USB 驱动 / USB 模式
+  （辅助判据：`Get-PnpDevice` 查 `DEVPKEY_Device_BusReportedDeviceDesc`，输出 `HDC Device`；
+  注意别用 `powershell -Command` 一行式，会被静默拦 —— 见 `PIT-001`，存成 `.ps1` 用 `-File` 跑）
+- 根因: 纯血鸿蒙（HarmonyOS NEXT 系列，本次实测 HarmonyOS **7.0.0.109 / API 26**）**不含 AOSP 层**，
+  调试协议是 **HDC**（HarmonyOS Device Connector）而**不暴露 ADB 接口**；
+  应用包格式是 `.hap/.hsp/.app`，**系统不认 APK**（不是"驱动没装好"）
+- 证据（2026-10-07 实测）: `hdc list targets` → `8HH0226911023008`；
+  `hdc shell param get const.product.model` → `HLS-AL00`（HUAWEI Mate 60）；
+  `const.product.software.version` → `HLS-AL00 7.0.0.109(SP9C00E109R5P4)`；
+  `const.ohos.apiversion` → `26`；`const.product.devicetype` → `phone`；
+  `hdc help` 的 install 段原文：`src examples: single or multiple packages and directories (.hap .hsp .app)`
+- 修法 / 规避:
+  ① 安装 APK 只能换 **Android 设备 / 平板 / 模拟器**（`adb install -r privi-<ver>.apk`）；
+  ② 本机 hdc 全路径 = `D:\Tools\DevTools\hmos\command-line-tools\sdk\default\openharmony\toolchains\hdc.exe`
+     （`where hdc` **找不到**，PATH 里没有；查鸿蒙设备必须用全路径）；
+  ③ 真要在纯血鸿蒙上用这个应用，得另做 **HarmonyOS 原生（.hap）** 版本 —— 本仓库只有 Flutter/Android 构建，不产出 hap
+- 反例 / 易误判: ①以为「调试模式没开 / USB 驱动缺失 / USB 模式不对」，反复重启 adb、装驱动、切 USB 模式（全是白费）；
+  ②把 `hdc` 当 adb 用（`hdc install xxx.apk` 直接报不支持）；
+  ③看到设备管理器里有华为设备就以为"已经连上了"
+- 相关文件: 无（环境事实）；README 的「安装（APK）」已加鸿蒙提示
+- 首次记录: 2026-10-07
+
