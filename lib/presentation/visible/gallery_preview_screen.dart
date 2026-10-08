@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../../application/providers.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/gallery_service.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../data/services/video_resume_service.dart';
 import '../common/keep_vault_unlocked.dart';
 import '../common/zoomable_media_image.dart';
 import '../player/engine_fallback.dart';
@@ -134,6 +136,17 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
           await c.dispose();
           return;
         }
+        final savedMs = VideoResumeService.getPositionMs(
+          ref.read(sharedPreferencesProvider),
+          item.id,
+        );
+        if (savedMs != null && savedMs > 0) {
+          AppLogger.i(
+            'GalleryPreviewScreen',
+            'Restoring resume position: item=${item.id}, saved=${savedMs}ms',
+          );
+          await c.seekTo(Duration(milliseconds: savedMs));
+        }
         c.onCompleted = () {
           if (!mounted) return;
           _onNativeVideoEnded(item.id);
@@ -254,7 +267,24 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
     final c = _video;
     _video = null;
     _completedForId = null;
-    if (c != null) await c.dispose();
+    if (c != null) {
+      final pos = c.value.position.inMilliseconds;
+      final dur = c.value.duration.inMilliseconds;
+      final id = _current.id;
+      if (pos > 0 && dur > 0) {
+        await VideoResumeService.savePositionMs(
+          ref.read(sharedPreferencesProvider),
+          id,
+          pos,
+          dur,
+        );
+        AppLogger.d(
+          'GalleryPreviewScreen',
+          'Saved resume position (stop): item=$id, pos=${pos}ms, dur=${dur}ms',
+        );
+      }
+      await c.dispose();
+    }
   }
 
   @override
@@ -264,6 +294,21 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
     _video = null;
     _completedForId = null;
     if (c != null) {
+      final pos = c.value.position.inMilliseconds;
+      final dur = c.value.duration.inMilliseconds;
+      final id = _current.id;
+      if (pos > 0 && dur > 0) {
+        VideoResumeService.savePositionMs(
+          ref.read(sharedPreferencesProvider),
+          id,
+          pos,
+          dur,
+        );
+        AppLogger.d(
+          'GalleryPreviewScreen',
+          'Saved resume position (dispose): item=$id, pos=${pos}ms, dur=${dur}ms',
+        );
+      }
       c.dispose();
     }
     unawaited(VideoSystemUi.restore());

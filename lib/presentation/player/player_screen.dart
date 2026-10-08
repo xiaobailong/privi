@@ -7,10 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/media/rating_controller.dart';
 import '../../application/player/external_player_coordinator.dart';
 import '../../application/player/player_controller.dart';
+import '../../application/providers.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../data/services/video_resume_service.dart';
 import '../../domain/models/media_item.dart';
 import '../common/keep_vault_unlocked.dart';
 import 'engine_fallback.dart';
@@ -243,6 +245,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         'Disposing native player: item=${previousItemId ?? '-'}, '
         'textureId=${c.textureId}, request=$_videoRequest',
       );
+      final pos = c.value.position.inMilliseconds;
+      final dur = c.value.duration.inMilliseconds;
+      if (previousItemId != null && pos > 0 && dur > 0) {
+        await VideoResumeService.savePositionMs(
+          ref.read(sharedPreferencesProvider),
+          previousItemId,
+          pos,
+          dur,
+        );
+        AppLogger.d(
+          'PlayerScreen',
+          'Saved resume position: item=$previousItemId, '
+          'pos=${pos}ms, dur=${dur}ms',
+        );
+      }
       c.removeListener(_onNativeVideoValueChanged);
       await c.dispose();
     }
@@ -536,6 +553,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       if (_isStaleLoad(request, item)) {
         await controller.dispose();
         return;
+      }
+      final savedMs = VideoResumeService.getPositionMs(
+        ref.read(sharedPreferencesProvider),
+        item.id,
+      );
+      if (savedMs != null && savedMs > 0) {
+        AppLogger.i(
+          'PlayerScreen',
+          'Restoring resume position: item=${item.id}, saved=${savedMs}ms',
+        );
+        await controller.seekTo(Duration(milliseconds: savedMs));
       }
       controller.onCompleted = () {
         if (!mounted) return;

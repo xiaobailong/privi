@@ -197,6 +197,7 @@ class VlcPlayerHandler(
     private var lastPositionMs = 0L
     private var lastVolume = 1f
     private var lastSpeed = 1f
+    private var pendingSeekMs = -1L
 
     override val textureId: Long get() = textureEntry.id()
 
@@ -416,6 +417,11 @@ class VlcPlayerHandler(
             if (playRequested) {
                 mp.play()
                 logI("play() called for textureId=$textureId")
+                if (pendingSeekMs >= 0) {
+                    mp.time = pendingSeekMs
+                    logI("re-applied pending seek after play: textureId=$textureId, positionMs=$pendingSeekMs")
+                    pendingSeekMs = -1L
+                }
             } else {
                 logI("play not requested before the views were attached, " +
                     "staying paused, textureId=$textureId")
@@ -722,9 +728,10 @@ class VlcPlayerHandler(
             logW("seekTo ignored: no player for textureId=$textureId")
             return
         }
-        // durationMs 未知时不能拿它去裁剪，否则 seek 会被压回 0。
-        mp.time = clampPosition(positionMs)
-        lastPositionMs = clampPosition(mp.time)
+        val clamped = clampPosition(positionMs)
+        mp.time = clamped
+        lastPositionMs = clamped
+        pendingSeekMs = clamped
         logD("seekTo: textureId=$textureId, positionMs=$positionMs")
     }
 
@@ -851,6 +858,7 @@ class VlcPlayerHandler(
         // 回调靠 mediaPlayer !== mp 丢掉。
         attachPending = false
         playRequested = false
+        pendingSeekMs = -1L
 
         val mp = mediaPlayer
         val media = mediaRef

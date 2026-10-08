@@ -13,6 +13,7 @@ import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/native_video_controller.dart';
+import '../../data/services/video_resume_service.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
 import '../common/keep_vault_unlocked.dart';
@@ -97,10 +98,25 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   void dispose() {
     _videoRequest++;
     final c = _video;
+    final id = _videoId;
     _video = null;
     _videoId = null;
     _completedForId = null;
     if (c != null) {
+      final pos = c.value.position.inMilliseconds;
+      final dur = c.value.duration.inMilliseconds;
+      if (id != null && pos > 0 && dur > 0) {
+        VideoResumeService.savePositionMs(
+          ref.read(sharedPreferencesProvider),
+          id,
+          pos,
+          dur,
+        );
+        AppLogger.d(
+          'ViewerScreen',
+          'Saved resume position (dispose): item=$id, pos=${pos}ms, dur=${dur}ms',
+        );
+      }
       c.dispose();
     }
     unawaited(VideoSystemUi.restore());
@@ -195,6 +211,17 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       await c.dispose();
       return;
     }
+    final savedMs = VideoResumeService.getPositionMs(
+      ref.read(sharedPreferencesProvider),
+      item.id,
+    );
+    if (savedMs != null && savedMs > 0) {
+      AppLogger.i(
+        'ViewerScreen',
+        'Restoring resume position: item=${item.id}, saved=${savedMs}ms',
+      );
+      await c.seekTo(Duration(milliseconds: savedMs));
+    }
     c.onCompleted = () {
       if (!mounted) return;
       _onVideoEnded(item.id);
@@ -276,10 +303,25 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
 
   Future<void> _detachVideo() async {
     final c = _video;
+    final id = _videoId;
     _video = null;
     _videoId = null;
     _completedForId = null;
     if (c != null) {
+      final pos = c.value.position.inMilliseconds;
+      final dur = c.value.duration.inMilliseconds;
+      if (id != null && pos > 0 && dur > 0) {
+        await VideoResumeService.savePositionMs(
+          ref.read(sharedPreferencesProvider),
+          id,
+          pos,
+          dur,
+        );
+        AppLogger.d(
+          'ViewerScreen',
+          'Saved resume position: item=$id, pos=${pos}ms, dur=${dur}ms',
+        );
+      }
       await c.dispose();
     }
     if (mounted) setState(() {});
