@@ -47,7 +47,7 @@ class VideoSwipeSeekLayer extends ConsumerStatefulWidget {
 
 class _VideoSwipeSeekLayerState extends ConsumerState<VideoSwipeSeekLayer> {
   /// 判定"这次到底是横滑还是竖滑"的横向位移阈值（逻辑像素）。
-  static const double _slop = 6;
+  static const double _slop = 4;
 
   /// 本次滑动累计的横向位移（逻辑像素，右正左负）。
   double _px = 0;
