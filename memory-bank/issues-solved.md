@@ -515,7 +515,7 @@
 - 首次记录: 2026-10-07
 
 ## ISSUE-020 build_runner 里 drift_dev 报「This parameter should be a simple class name」= 外键被**静默丢弃**（analyzer ≥10.2.0）
-- 状态: 已规避（dev 依赖里把 `analyzer` 钉在 10.1.0；上游 drift_dev 2.32.1 已修）。修法已落地，**待下一次手工构建用复发判据确认 FK 回归**
+- 状态: 已修复（dev 依赖钉 `analyzer` 10.1.0；上游 drift_dev 2.32.1 也修了）。**2026-10-08 由真机构建实测确认 FK 已回归**（见下"复核"）
 - 症状 / 现场: `build.bat` 的 build_runner 阶段打印两条警告，然后照常写 `Built with build_runner/aot in 172s; wrote 242 outputs.` ⇒ 看起来"只是警告、构建成功"：
   ```
   W drift_dev on lib/data/db/tables.dart:
@@ -527,7 +527,8 @@
   同一次日志开头还有一条 `W SDK language version 3.13.0 is newer than `analyzer` language version 3.12.0. Run flutter packages upgrade.`（见 `ADR-029` ③，那条不处理）
 - 复发判据: `findstr /c:"REFERENCES" lib\data\db\database.g.dart`
   → **零命中 = 已复发/FK 仍缺失**；正确状态是 `album_id`、`media_id` 两个 `GeneratedColumn` 里各有一条
-  `$customConstraints: 'REFERENCES albums (id) ON DELETE CASCADE'` / `'REFERENCES media_items (id) ON DELETE CASCADE'`。
+  `defaultConstraints: GeneratedColumn.constraintIsAlways('REFERENCES albums (id) ON DELETE CASCADE')`
+  （`media_id` 对应 `… media_items (id) …`）—— 实测正确形态见 `database.g.dart:1507-1521`。
   （也可在构建日志里搜 `should be a simple class name`，出现即命中）
 - 根因: drift_dev 2.31.0 解析 `references(表类, #列)` 时用 `final first = args.first; if (first is! Identifier) { 报错; break; }`
   （`drift_dev\lib\src\analysis\resolver\dart\column.dart:268`，`break` 直接跳出、**不生成约束**）；
@@ -539,9 +540,15 @@
   - 构建日志两条 W（`tables.dart:84/85`）；这条消息在 drift_dev 2.31.0 里**只此一处**，且紧跟 `break`（丢弃约束）
   - `pubspec.lock`: drift 2.31.0 / drift_dev 2.31.0 / analyzer **10.2.0** / `_fe_analyzer_shared` 96.0.0
     （drift_dev 2.31.0 只要求 `analyzer >=8.1.0 <11.0.0`，所以 pub 把它升到了 10.2.0）
-  - `lib/data/db/database.g.dart:1507` 起 `album_id` / `media_id` 的 `GeneratedColumn` 里**没有** `$customConstraints`
-    （对照 `drift_dev\lib\src\writer\utils\column_constraints.dart:50-72`：`references()` 会拼出 `REFERENCES <表> (<列>) ON DELETE CASCADE`）
+  - 修法前（analyzer 10.2.0 那次构建）：`database.g.dart` 里 `album_id` / `media_id` 的 `GeneratedColumn`
+    **没有** `defaultConstraints`（对照 `drift_dev\lib\src\writer\utils\column_constraints.dart:50-72`：
+    `references()` 会拼出 `REFERENCES <表> (<列>) ON DELETE CASCADE`）
   - drift_dev CHANGELOG 2.32.1: "Fix parsing references() with analyzer 10.2.0 and later."
+  - **复核 2026-10-08（真机构建 `privi-1.0.62`，构建时间 23:49）**：`pubspec.lock` =
+    `analyzer 10.1.0` + `_fe_analyzer_shared 95.0.0`；`build\build_full.log` 里
+    `should be a simple class name` **零命中**；`database.g.dart:1507-1521` 两条
+    `defaultConstraints: GeneratedColumn.constraintIsAlways('REFERENCES albums (id) ON DELETE CASCADE')` /
+    `… media_items (id) …` ⇒ **FK 已回归，本条目闭环**
 - 修法: `pubspec.yaml` 的 `dev_dependencies` 里加 `analyzer: 10.1.0`（附注释说明为什么不能升）；
   之后按常规流程手工构建一次 —— `build.bat` 里的 `flutter pub get` 会把 lock 里的 analyzer 降回 10.1.0
   （`_fe_analyzer_shared` 96.0.0 → 95.0.0），build_runner 重新生成 `database.g.dart` 时 FK 应该回来。
@@ -555,6 +562,55 @@
 - 相关文件: `pubspec.yaml`、`lib/data/db/tables.dart`、`lib/data/db/database.dart`、`lib/data/db/database.g.dart`（生成物，gitignore）
 - 决策: `ADR-029`（为什么不直接升 drift/drift_dev）
 - 首次记录: 2026-10-07
+
+## ISSUE-021 「左右滑动快进/快退」真机上完全没生效（功能只在 PlayerScreen，而用户看视频的界面是 ViewerScreen）
+- 状态: 已修复（改法见下；**待手工构建后在真机验证**）
+- 症状 / 现场: 装 `privi-1.0.61` / `privi-1.0.62` 后在**查看器**（私密库点视频进入的全屏查看器）里
+  左右滑动画面：既不快进/快退，**也不翻页**（`ViewerScreen` 在视频时把 `PageView` 设成
+  `NeverScrollableScrollPhysics`）⇒ 看着像"这个功能根本不存在"
+- 复发判据: 先分清"在哪个界面"，再看同一次滑动：
+  1) 日志里**没有任何 `PlayerScreen` 行** ⇒ 用的是 `ViewerScreen` / `GalleryPreviewScreen`
+     （这两个界面平时不打日志）；
+  2) 搜 `Swipe seek gesture end`：**一行都没有** ⇒ 手势没到播放层（该界面没挂这一层 / 命中测试问题）；
+     有这行但 `horizontal=false` 或 `steps=0` ⇒ 位移/方向判定问题（阈值 12dp、一档 48dp）；
+  3) 有 `Swipe seek:` 而没有位置变化 ⇒ 问题在原生 seek（与本条无关，查 `seekTo` 链路）
+- 根因（两层）:
+  ① **功能只做在 `PlayerScreen` 上**（`ADR-028` 当年的取舍），而看私密视频的正常路径是
+     `私密相册 → media_grid_screen.dart:175 → ViewerScreen`；真机日志证明用户走的就是 Viewer；
+  ② `ADR-028` 的前提"viewer 的横滑已被 `PageView` 占用"**对视频不成立**：
+     `viewer_screen.dart:503` / `gallery_preview_screen.dart:424` 是
+     `item.isVideo ? NeverScrollableScrollPhysics` —— 视频时 `PageView` 根本不接管横滑，
+     那条路径上的横滑**一直空着没人用**；
+  ③ 另有历史毛病（`1004a89` 那版，即使只在播放列表页也不该那样）：`GestureDetector` 默认
+     `deferToChild` ⇒ 只有"视频画面矩形"能命中，上下黑边/控制条缝隙落空；`onHorizontalDrag*`
+     走手势竞技场可能被抢；且**没有任何日志**，出问题只能靠猜
+- 证据:
+  - `C:\Users\766698\Downloads\密册_log_2026-10-08.txt`（131 行）：`findstr /c:"PlayerScreen"` **0 命中**、
+    `findstr /c:"Swipe seek"` **0 命中**；同时 `[Main] Version: 1.0.62 (versionCode 10062)`
+    ⇒ 构建是新的、但手势一行日志都没有（= 那版代码里 Viewer 没有这一层）
+  - 同日志里视频都是 `[VideoPlayer] Creating native player … engine=vlc`、路径在
+    `/storage/emulated/0/.privateheart_vault/new/`（私密库）⇒ 走的是 Viewer 那条入口
+  - 两次 `[VideoPlayer] seekTo(...)` 前**没有** `Swipe seek:` 行 ⇒ 那是查看器底部进度条划出来的，不是滑动
+  - `viewer_screen.dart:503`、`gallery_preview_screen.dart:424`（`NeverScrollableScrollPhysics`）；
+    `TextureBox.hitTestSelf => true`（`flutter\lib\src\rendering\texture.dart:95`）
+- 修法: 把滑动逻辑抽成**共用层** `lib/presentation/player/video_swipe_seek.dart` 的 `VideoSwipeSeekLayer`
+  （`Listener` + `HitTestBehavior.opaque` + 原始指针事件 + 方向锁 12dp + 只跟第一根手指 +
+  长度未知时只提示不跳转 + 每次滑动一行诊断日志），然后三处视频界面都挂上：
+  `PlayerScreen`、`ViewerScreen`、`GalleryPreviewScreen`（各自外面仍套原来的
+  `GestureDetector(onTap: _toggleChrome)`，跳转接各自的 `_seekTo`）；
+  图片仍交给 `PageView` 翻页，视频路径本来就不翻页 ⇒ 互不冲突。
+- 反例 / 易误判:
+  - 只看"`PlayerScreen` 里改好了"就以为修完 —— **先确认用户实际操作的是哪个界面/入口**
+    （日志里有没有 `PlayerScreen` 行），否则改的是用户根本不用的界面（本轮就绕了一圈）
+  - 以为"viewer 的横滑被 `PageView` 抢"（视频时 physics = `NeverScrollableScrollPhysics`，不抢）
+  - 以为"`Texture` 不吃手势所以整块死的"（错：`hitTestSelf=true`）
+  - 手势类改动**必须真机滑一次** —— `dart analyze` 覆盖不到（`ADR-027`）
+- 相关文件: `lib/presentation/player/video_swipe_seek.dart`（共用层）、
+  `lib/presentation/player/player_screen.dart`、`lib/presentation/viewer/viewer_screen.dart`、
+  `lib/presentation/visible/gallery_preview_screen.dart`、
+  `lib/presentation/player/video_player_controls.dart`（`videoSwipeSeekStepPx` / 提示）
+- 决策: `ADR-028`（两次修订：先换原始指针 + `opaque`；再抽成共用层覆盖三个界面）
+- 首次记录: 2026-10-07 ／ 最近复核: 2026-10-08（据真机日志定位到"界面不对"，并覆盖三个界面）
 
 
 

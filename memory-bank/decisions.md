@@ -539,6 +539,28 @@
   （见 `PIT-014` 复核 2026-10-07：本仓库任何 Dart 文件跑 `--set-exit-if-changed` 都会报 `Changed`，
   所以只能逐段对照，不能全局重排）。**未做编译/装机验证**，请手工构建。
 - 首次记录: 2026-10-07
+- 2026-10-07 修订（真机反馈「左右滑动快进/快退没生效」，见 `ISSUE-021`）：
+  手势机制由 `GestureDetector(onHorizontalDrag*)` 换成
+  **`Listener`（原始指针事件）+ `HitTestBehavior.opaque`** + 方向锁（12dp / 竖向占优不接管）+ 每次滑动一行诊断日志。
+  理由：①原挂法只有"视频画面矩形"能命中，上下黑边与控制条缝隙里的滑动全部落空
+  （`GestureDetector` 默认 `deferToChild`，而 `TextureBox.hitTestSelf=true` 只管画面本身）；
+  ②`onHorizontalDrag*` 走手势竞技场，可能被同方向识别器抢走。
+  约束（后续改动必须遵守）：这段逻辑**不要**换回 `GestureDetector` 的 drag 回调；
+  向上层（`AutoHideVideoControls` 等）加 `Listener`/`GestureDetector` 时注意别把这段原始指针流吃掉
+  （`IgnorePointer`/`translucent` 可以，`AbsorbPointer`/`opaque` 会挡）；改完**必须真机滑一次**，
+  只看 `dart analyze` 覆盖不到（本轮教训）。
+- 2026-10-08 修订（真机日志证明上面"只加在 `PlayerScreen`"这个决定的前提是错的，见 `ISSUE-021`）：
+  滑动快进/快退**不再是 `PlayerScreen` 专属**，抽成共用层
+  `lib/presentation/player/video_swipe_seek.dart` 的 `VideoSwipeSeekLayer`，
+  在 `PlayerScreen` / `ViewerScreen` / `GalleryPreviewScreen` 三处都挂上。
+  为什么能这么改：本节备选①里"与 `PageView` 打架"只对**图片**成立 ——
+  `viewer_screen.dart:503` / `gallery_preview_screen.dart:424` 在 `item.isVideo` 时把 `PageView` 的
+  physics 设成 `NeverScrollableScrollPhysics`（视频本来就不翻页），那条路径上的横滑一直是空的；
+  图片仍交回 `PageView` 翻页，不受影响。
+  约束（后续改动必须遵守）：以后任何"全屏播放视频"的界面，视频层直接套 `VideoSwipeSeekLayer`
+  （`controller` + `itemId` + `onSeek` + 画面 child），**不要**再各自写一份
+  `GestureDetector(onHorizontalDrag*)`；`ISSUE-021` 的复发判据仍按日志文本
+  `Swipe seek gesture end` / `Swipe seek:` 搜（日志 tag 从 `PlayerScreen` 改为 `VideoSwipeSeek`）。
 
 ## ADR-029 drift 外键缺陷先「钉 dev 依赖 analyzer 10.1.0」止血，暂不升级 drift/drift_dev
 - 日期: 2026-10-07 | 状态: 已采纳

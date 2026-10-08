@@ -109,6 +109,7 @@
 | 改 `pubspec.yaml` 的 dev 依赖 / 跑 `flutter pub upgrade` 前要判断 analyzer 会不会被抬上去 | `ISSUE-020`、`ADR-029` |
 | Cline shell 里 `flutter` 不在 PATH / `start … cmd /c "…嵌套引号…"` 报「命令语法不正确」 | `PIT-029` |
 | 推送 git 该推哪些分支 / 能不能 `git push --all` / 一条命令推多个分支 | `ADR-030`（只推当前分支）、`ADR-021`（发版时的分支对齐） |
+| 左右滑动快进/快退「没生效」（查看器 / 可见库预览 / 播放列表页三处都要） | `ISSUE-021`（三界面共用 `VideoSwipeSeekLayer`）、`ADR-028`（两次修订） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

@@ -16,6 +16,7 @@ import '../common/keep_vault_unlocked.dart';
 import 'engine_fallback.dart';
 import 'video_player_controls.dart';
 import 'video_player_surface.dart';
+import 'video_swipe_seek.dart';
 
 typedef VideoFileProbe = Future<bool> Function(String path);
 
@@ -71,11 +72,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   String? _orientationLockedItemId;
   bool _orientationOverridden = false;
 
-  /// 播放区横向滑动快进/快退：本次滑动累计的横向位移（逻辑像素，右正左负）。
-  double _swipeSeekPx = 0;
-
-  /// 累计位移折算出的跳转档数（正 = 快进、负 = 快退，0 = 不显示提示）。
-  int _swipeSeekSteps = 0;
+  // 播放区横向滑动快进/快退见 `VideoSwipeSeekLayer`（三个视频界面共用同一实现，
+  // 背景与踩坑见 memory-bank `ISSUE-021` / `ADR-028`）。
   final Map<String, int> _ratingOverrides = {};
 
   @override
@@ -185,78 +183,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (video != null) await video.seekTo(position);
   }
 
-  // ---- 播放区横向滑动：右滑快进、左滑快退（一档 = 设置里的「快进/快退步长」）----
-
-  int _swipeSeekStepSeconds() =>
-      ref.read(settingsControllerProvider).playerSeekSeconds;
-
-  /// [steps] 档跳转后的目标位置，按视频长度裁剪到 `0 ~ duration`。
-  Duration _swipeSeekTarget(NativeVideoValue value, int steps) {
-    final durationMs = value.duration.inMilliseconds;
-    final targetMs = value.position.inMilliseconds +
-        steps * _swipeSeekStepSeconds() * Duration.millisecondsPerSecond;
-    return Duration(milliseconds: targetMs.clamp(0, durationMs));
-  }
-
-  void _onSwipeSeekStart() {
-    if (_swipeSeekPx == 0 && _swipeSeekSteps == 0) return;
-    setState(() {
-      _swipeSeekPx = 0;
-      _swipeSeekSteps = 0;
-    });
-  }
-
-  /// 只累计位移与提示，**不**在拖动过程中 seek：松手才真正跳转，避免每帧
-  /// 都去调原生 seek 造成卡顿。
-  void _onSwipeSeekUpdate(DragUpdateDetails details) {
-    final video = _nVideo;
-    if (video == null || !video.value.isInitialized) return;
-    // 时长未知（还没探到）时无法裁剪目标位置，整段忽略。
-    if (video.value.duration <= Duration.zero) return;
-    final px = _swipeSeekPx + details.delta.dx;
-    final steps = (px / videoSwipeSeekStepPx).round();
-    if (px == _swipeSeekPx && steps == _swipeSeekSteps) return;
-    setState(() {
-      _swipeSeekPx = px;
-      _swipeSeekSteps = steps;
-    });
-  }
-
-  /// [commit] 为真时按滑出的档数跳转（0 档 / 取消 / 引擎就绪前都不跳），
-  /// 无论是否跳转都会收起提示。
-  void _endSwipeSeek({required bool commit}) {
-    final steps = _swipeSeekSteps;
-    final video = _nVideo;
-    if (_swipeSeekPx != 0 || steps != 0) {
-      setState(() {
-        _swipeSeekPx = 0;
-        _swipeSeekSteps = 0;
-      });
-    }
-    if (!commit || steps == 0) return;
-    if (video == null || !video.value.isInitialized) return;
-    final target = _swipeSeekTarget(video.value, steps);
-    AppLogger.i(
-      'PlayerScreen',
-      'Swipe seek: item=${_nVideoItemId ?? '-'}, steps=$steps '
-          '(${_swipeSeekStepSeconds()}s each), '
-          'from=${video.value.position.inMilliseconds}ms '
-          'to=${target.inMilliseconds}ms',
-    );
-    unawaited(_seekTo(target));
-  }
-
-  /// 横向滑动提示（`_swipeSeekSteps == 0` 时为空）。
-  Widget _swipeSeekOverlay(NativeVideoValue value) {
-    final steps = _swipeSeekSteps;
-    if (steps == 0) return const SizedBox.shrink();
-    final target = _swipeSeekTarget(value, steps);
-    return VideoSwipeSeekIndicator(
-      delta: target - value.position,
-      position: target,
-      duration: value.duration,
-    );
-  }
+  // 播放区横向滑动快进/快退见 `VideoSwipeSeekLayer`
+  // （`lib/presentation/player/video_swipe_seek.dart`，三个视频界面共用）。
 
   Future<void> _openSettings(PlayerUiState ui) async {
     final settings = ref.read(settingsControllerProvider);
@@ -933,19 +861,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
     return GestureDetector(
       onTap: _toggleChrome,
-      // 播放区横向滑动：右滑快进、左滑快退（见 memory-bank ADR-028）。
-      onHorizontalDragStart: (_) => _onSwipeSeekStart(),
-      onHorizontalDragUpdate: _onSwipeSeekUpdate,
-      onHorizontalDragEnd: (_) => _endSwipeSeek(commit: true),
-      onHorizontalDragCancel: () => _endSwipeSeek(commit: false),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          NativeVideoViewport(controller: c, fitMode: _fitMode),
-          IgnorePointer(
-            child: Center(child: _swipeSeekOverlay(c.value)),
-          ),
-        ],
+      // 播放区横向滑动：右滑快进 / 左滑快退（与查看器、可见库预览共用同一实现）。
+      child: VideoSwipeSeekLayer(
+        controller: c,
+        itemId: _nVideoItemId,
+        onSeek: _seekTo,
+        child: NativeVideoViewport(controller: c, fitMode: _fitMode),
       ),
     );
   }

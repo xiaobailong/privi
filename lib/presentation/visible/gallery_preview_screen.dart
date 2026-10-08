@@ -15,6 +15,7 @@ import '../common/zoomable_media_image.dart';
 import '../player/engine_fallback.dart';
 import '../player/video_player_controls.dart';
 import '../player/video_player_surface.dart';
+import '../player/video_swipe_seek.dart';
 
 typedef GalleryAssetFileResolver = Future<File?> Function(GalleryAsset asset);
 
@@ -468,7 +469,13 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
     if (_current.isVideo && video != null && video.value.isInitialized) {
       return GestureDetector(
         onTap: _toggleChrome,
-        child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+        // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、查看器共用同一实现）。
+        child: VideoSwipeSeekLayer(
+          controller: video,
+          itemId: _current.id,
+          onSeek: _seekTo,
+          child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+        ),
       );
     }
     if (_file != null && !_current.isVideo) {

@@ -20,6 +20,7 @@ import '../common/zoomable_media_image.dart';
 import '../player/engine_fallback.dart';
 import '../player/video_player_controls.dart';
 import '../player/video_player_surface.dart';
+import '../player/video_swipe_seek.dart';
 
 /// Fullscreen swipe viewer with zoom, video, rating, unhide.
 class ViewerScreen extends ConsumerStatefulWidget {
@@ -613,7 +614,13 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     }
     return GestureDetector(
       onTap: _toggleChrome,
-      child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+      // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、可见库预览共用同一实现）。
+      child: VideoSwipeSeekLayer(
+        controller: video,
+        itemId: item.id,
+        onSeek: _seekTo,
+        child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+      ),
     );
   }
 
