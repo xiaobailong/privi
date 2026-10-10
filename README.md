@@ -1,3 +1,5 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 # 密册
 
 个人使用、完全在本地的 **Android 媒体保险库**。将照片和视频从系统相册中隐藏，支持 **1–3 颗红心**评分、收藏、播放列表，以及**图案 / PIN + 生物识别**锁。仅支持深色主题。仅提供 APK 侧载安装，不使用云存储、账号或分析服务。
@@ -209,6 +211,11 @@ adb install -r -d privi-<version>.apk # 允许版本号降级
 
 ## 感谢
 
+> This is an optional voluntary donation to support project development.
+> Donation is NOT required to use this software and grants no commercial license.
+
 如果这个工具帮到了您，欢迎随意赞赏！
 
 ![赞助](img/pay.jpg)
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
