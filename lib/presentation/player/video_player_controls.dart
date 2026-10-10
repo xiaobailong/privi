@@ -18,7 +18,7 @@ const videoControlsAutoHideDelay = Duration(seconds: 3);
 
 /// 播放区横向滑动多少逻辑像素折算**一档**跳转，一档 = `AppSettings.playerSeekSeconds`
 /// 秒（与设置页的「快进/快退步长」同一个值）。
-const double videoSwipeSeekStepPx = 24;
+const double videoSwipeSeekStepPx = 12;
 
 class AutoHideVideoControls extends StatefulWidget {
   const AutoHideVideoControls({

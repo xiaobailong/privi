@@ -47,7 +47,7 @@ class VideoSwipeSeekLayer extends ConsumerStatefulWidget {
 
 class _VideoSwipeSeekLayerState extends ConsumerState<VideoSwipeSeekLayer> {
   /// 判定"这次到底是横滑还是竖滑"的横向位移阈值（逻辑像素）。
-  static const double _slop = 4;
+  static const double _slop = 2;
 
   /// 本次滑动累计的横向位移（逻辑像素，右正左负）。
   double _px = 0;
@@ -99,9 +99,9 @@ class _VideoSwipeSeekLayerState extends ConsumerState<VideoSwipeSeekLayer> {
     final px = _px + event.delta.dx;
     if (!_locked) {
       // 方向锁：横向位移还没过阈值时先不判定；竖向明显占优时才只跟踪、不接管
-      // （用 < 而非 <=：水平和垂直位移相等时也视为横滑，更宽容）。
+      // （竖向需达横向 5 倍才视为竖滑，日常横滑即使略有倾斜也能触发）。
       if (px.abs() < _slop) return;
-      if (px.abs() < _dy.abs()) return;
+      if (px.abs() * 5 < _dy.abs()) return;
       _locked = true;
     }
     final steps = (px / videoSwipeSeekStepPx).round();
