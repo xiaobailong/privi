@@ -103,13 +103,21 @@
 | 播放区「右滑快进 / 左滑快退」怎么接、为什么只加在 `PlayerScreen` | `ADR-028` |
 | 设置里的「跳转步长（原『双击跳转』）」秒数以前对播放**没有任何影响** | `ISSUE-019`（现在它就是滑动一档的秒数） |
 | `dart format --set-exit-if-changed` 对本仓库**任何** Dart 文件都报 `Changed` | `PIT-014`（复核 2026-10-07：工作区 CRLF + 新格式化器 tall style） |
-| 改文档后**下一节标题莫名消失**（替换式编辑把锚点行吞了） | `PIT-028`（`new_text` 必须原样带回 `old_text`） |
+| 改文档后**下一节标题莫名消失**（替换式编辑把锚点行吞了）/ 两行被**粘成一行** | `PIT-028`（复核 2026-10-10：`new_text` 必须原样带回 `old_text` 每一行含行尾） |
 | 构建日志 `W drift_dev … This parameter should be a simple class name`（构建仍打印"成功"） | `ISSUE-020`（外键被静默丢弃）、`ADR-029` |
 | 构建日志 `W SDK language version 3.13.0 is newer than analyzer language version 3.12.0` | `ADR-029` ③（仅提示，不处理） |
 | 改 `pubspec.yaml` 的 dev 依赖 / 跑 `flutter pub upgrade` 前要判断 analyzer 会不会被抬上去 | `ISSUE-020`、`ADR-029` |
 | Cline shell 里 `flutter` 不在 PATH / `start … cmd /c "…嵌套引号…"` 报「命令语法不正确」 | `PIT-029` |
 | 推送 git 该推哪些分支 / 能不能 `git push --all` / 一条命令推多个分支 | `ADR-030`（只推当前分支）、`ADR-021`（发版时的分支对齐） |
 | 左右滑动快进/快退「没生效」（查看器 / 可见库预览 / 播放列表页三处都要） | `ISSUE-021`（三界面共用 `VideoSwipeSeekLayer`）、`ADR-028`（两次修订） |
+| 视频播完后拖进度条回开头：不播放、进度条自己弹回结尾 / `VDIAG[dart-position-stall] position stuck` | `ISSUE-022` |
+| 「播完后重播」为什么要重建播放器 / 能不能用 `seekTo(0)+play()` 或原生 `stop()+play()` 复活 | `ISSUE-022`、`ADR-031` |
+| 单击打开的视频播完会**自动切下一个**（想停在最后一帧）/ 哪个入口还保留连播 | `ADR-032`（只有 `PlayerScreen` 连播） |
+| 「循环播放」开关为什么看不到效果（其实是空操作） | `ADR-032`（影响 / 已知限制） |
+| 打开视频进度条**一上来就在结尾** / 点开"秒完"自动跳下一个（随机复现，8 次里 3~4 次） | `ISSUE-023`（`VDIAG[spurious-end]`；原生根因未定位，应用层自愈） |
+| 怎么判断"真的播完" vs 起播就报结束（`STATE_ENDED` 的 position 是自己打印的 duration） | `ISSUE-023` |
+| `read_files` 读同一文件的局部行范围回 `[outdated - see the latest file content]`（拿不到内容） | `PIT-030` |
+| 一条命令里嵌套第二个 `powershell -Command "...$l[...]"` 报 `Missing type name after '['`（`$l` 被外层展开） | `PIT-030` |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

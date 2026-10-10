@@ -51,6 +51,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   String? _videoError;
   String? _videoErrorItemId;
   String? _completedForId;
+
+  /// 「播完后重播」的起点：只有原生播放器**已经播完**时才会记录（拖进度条 /
+  /// 滑动快进时），等 [_loadVideoInner] 重建播放器时按 item id 消费一次
+  /// （见 `memory-bank/issues-solved.md` 的 `ISSUE-022`）。
+  String? _replayItemId;
+  int? _replayStartMs;
+
+  /// 已经因为"起播竞态"自动重建过的 item（同一屏内只救一次，见 `ISSUE-023`）。
+  final Set<String> _spuriousRecoveredIds = <String>{};
   int _videoRequest = 0;
   String? _loadingItemId;
   bool? _nativeInitialized;
@@ -180,9 +189,49 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (video != null) unawaited(video.setVolume(muted ? 0 : 1));
   }
 
+  /// 原生侧**刚起播**就报"播完"（起播竞态，见 `ISSUE-023`）：不算播完。
+  ///
+  /// 重建播放器并从当前位置继续（本屏的播放状态归播放列表控制器，所以只走
+  /// 「重建 + 用记下的起点」这条路，不额外去改 playing）。同一个 item 只自动救
+  /// 一次，第二次起按原来的"跳下一个"处理。
+  void _onSpuriousCompletion(MediaItem item, NativeVideoController video) {
+    if (!mounted) return;
+    final pos = video.value.position;
+    if (!_spuriousRecoveredIds.add(item.id)) {
+      AppLogger.w(
+        'PlayerScreen',
+        'Spurious end repeated for ${item.id}: advancing as before',
+      );
+      video.giveUpOnStartupGlitch();
+      _completedForId = item.id;
+      ref.read(playerControllerProvider.notifier).onItemCompleted();
+      return;
+    }
+    AppLogger.w(
+      'PlayerScreen',
+      'Spurious end right after start (${pos.inMilliseconds}ms): recreating '
+      'the player and continuing from there, item=${item.id}',
+    );
+    _replayItemId = item.id;
+    _replayStartMs = pos.inMilliseconds;
+    // 让 `_loadVideoInner` 走"重建"分支（它按 `_completedForId` 判定）。
+    _completedForId = item.id;
+    unawaited(
+      _loadVideo(item, ref.read(playerControllerProvider).playing, force: true),
+    );
+  }
+
   Future<void> _seekTo(Duration position) async {
     final video = _nVideo;
-    if (video != null) await video.seekTo(position);
+    if (video == null) return;
+    // 播完之后拖进度条：原生 input 已经结束，seek 起不来画面（`ISSUE-022`）。
+    // 这里不改播放状态（本屏的播放状态归播放列表控制器管），只记下目标位置：
+    // 用户按播放触发重建播放器时，从这儿继续。
+    if (video.mediaEnded && position < video.value.duration) {
+      _replayItemId = _nVideoItemId;
+      _replayStartMs = position.inMilliseconds;
+    }
+    await video.seekTo(position);
   }
 
   // 播放区横向滑动快进/快退见 `VideoSwipeSeekLayer`
@@ -492,15 +541,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         if (playing && !currentVideo.value.isPlaying) {
           if (_completedForId == item.id) {
             _completedForId = null;
-            AppLogger.d('PlayerScreen', 'Replaying completed video: ${item.id}');
-            await currentVideo.seekTo(Duration.zero);
+            AppLogger.d('PlayerScreen',
+                'Replaying completed video (recreating native player): ${item.id}');
+            await _disposeNativeVideo();
+          } else {
+            AppLogger.d('PlayerScreen', 'Resuming video: ${item.id}');
+            await currentVideo.play();
+            await currentVideo.setPlaybackSpeed(_playbackSpeed);
+            return;
           }
-          AppLogger.d('PlayerScreen', 'Resuming video: ${item.id}');
-          await currentVideo.play();
-          await currentVideo.setPlaybackSpeed(_playbackSpeed);
         } else if (!playing && currentVideo.value.isPlaying) {
           AppLogger.d('PlayerScreen', 'Pausing video: ${item.id}');
           await currentVideo.pause();
+          return;
         }
       } catch (error, stackTrace) {
         AppLogger.e('PlayerScreen',
@@ -509,8 +562,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           _videoError = error.toString();
           _videoErrorItemId = item.id;
         });
+        return;
       }
-      return;
+      if (_nVideoItemId == item.id && _nVideo != null) {
+        return;
+      }
     }
 
     // Need to load a new video
@@ -549,21 +605,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       }
       AppLogger.i('PlayerScreen',
           'Configuring native video: ${item.id}, engine=$engine, playing=$playing');
-      await _configureNativeVideo(controller, playing: playing);
-      if (_isStaleLoad(request, item)) {
-        await controller.dispose();
-        return;
-      }
-      final savedMs = VideoResumeService.getPositionMs(
-        ref.read(sharedPreferencesProvider),
-        item.id,
-      );
+      // 「播完后重播」记下的起点优先于持久化的续播位置（前者是用户刚刚拖到
+      // 的地方，后者可能是更早的残留；见 `ISSUE-022`）。消费即清空。
+      final replayStartMs = _replayItemId == item.id ? _replayStartMs : null;
+      _replayItemId = null;
+      _replayStartMs = null;
+      final savedMs = replayStartMs ??
+          VideoResumeService.getPositionMs(
+            ref.read(sharedPreferencesProvider),
+            item.id,
+          );
       if (savedMs != null && savedMs > 0) {
         AppLogger.i(
           'PlayerScreen',
           'Restoring resume position: item=${item.id}, saved=${savedMs}ms',
         );
         await controller.seekTo(Duration(milliseconds: savedMs));
+      }
+      await _configureNativeVideo(controller, playing: playing);
+      if (_isStaleLoad(request, item)) {
+        await controller.dispose();
+        return;
       }
       controller.onCompleted = () {
         if (!mounted) return;
@@ -579,6 +641,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         );
         ref.read(playerControllerProvider.notifier).onItemCompleted();
       };
+      // 起播竞态（原生 input 刚起来就报结束）不是真的播完：重建播放器继续，
+      // 而不是把播放列表往后推一格（见 `ISSUE-023`）。
+      controller.onSpuriousCompletion = () =>
+          _onSpuriousCompletion(item, controller);
       controller.onError = () {
         if (!mounted) return;
         AppLogger.e('PlayerScreen',

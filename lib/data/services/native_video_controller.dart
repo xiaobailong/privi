@@ -205,6 +205,61 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   DateTime? _positionStalledSince;
   bool _positionStallLogged = false;
 
+  /// True once the native side reported `completed` for this controller.
+  ///
+  /// Deliberately **not** cleared by [seekTo] or [play]: a native input that has
+  /// reached the end cannot be revived by a seek (libVLC keeps the finished
+  /// input, ExoPlayer parks in `STATE_ENDED`; the log for `ISSUE-022` shows
+  /// `seekTo(0)` + `play()` producing no `Playing` event at all). Callers that
+  /// want to watch the clip again must recreate the player and start it at the
+  /// wanted position.
+  bool get mediaEnded => _mediaEnded;
+  bool _mediaEnded = false;
+
+  /// A `completed` event whose playhead is still nowhere near the end is the
+  /// start-up glitch documented in `ISSUE-023`, not a finished playback.
+  ///
+  /// The 250 ms position poll guarantees that a *real* end is reported with a
+  /// playhead within about one poll interval of the duration, so both conditions
+  /// below are false for genuine completions (a short clip whose real end lands
+  /// closer than this tolerance to the last poll is unaffected too).
+  static const int _kSpuriousEndToleranceMs = 1500;
+
+  /// Called instead of [onCompleted] when the native input dies right after
+  /// start-up while the playhead is still far from the end（`ISSUE-023`）.
+  ///
+  /// Listeners are expected to recreate the player and keep playing from
+  /// [value]`.position`; the controller deliberately does **not** touch
+  /// `isCompleted`/`position` in that case, so a UI that ignores this callback
+  /// still sees the old behaviour (the event is treated as a completion).
+  VoidCallback? onSpuriousCompletion;
+
+  bool _isStartupGlitch(int posMs) =>
+      onSpuriousCompletion != null &&
+      !_mediaEnded &&
+      _durationMs > 0 &&
+      posMs < _durationMs - _kSpuriousEndToleranceMs &&
+      posMs * 10 < _durationMs * 9;
+
+  /// Gives up on [onSpuriousCompletion] handling: mark the playback as finished
+  /// so the UI behaves like a normal end (bar at the end, and pressing play
+  /// recreates the player instead of poking the dead input — see `mediaEnded`).
+  ///
+  /// Used by the screens when the glitch hits the same clip twice in a row
+  /// (`ISSUE-023`): the file is then treated as unplayable-by-VLC rather than
+  /// restarting it forever.
+  void giveUpOnStartupGlitch() {
+    if (_disposed) return;
+    _mediaEnded = true;
+    _nativePlaying = false;
+    _stopPositionTimer();
+    value = value.copyWith(
+      isPlaying: false,
+      isCompleted: true,
+      position: value.duration,
+    );
+  }
+
   Timer? _positionTimer;
 
   VoidCallback? onCompleted;
@@ -354,15 +409,41 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
           );
           break;
         case 'completed':
+          final glitchPosMs = value.position.inMilliseconds;
+          if (_isStartupGlitch(glitchPosMs)) {
+            // 起播竞态：原生 input 刚起来就报结束、位置离结尾还很远
+            // （见 [onSpuriousCompletion] / `ISSUE-023`）。**不能**当成"播完"，
+            // 否则进度条会立刻停在结尾、视频也不播。
+            AppLogger.w(
+              'VideoPlayer.diag',
+              'VDIAG[spurious-end] native input ended at ${glitchPosMs}ms of '
+              '${_durationMs}ms right after start (ISSUE-023): asking the UI to '
+              'recreate the player, textureId=$textureId',
+            );
+            _nativePlaying = false;
+            _stopPositionTimer();
+            value = value.copyWith(isPlaying: false);
+            onSpuriousCompletion!.call();
+            break;
+          }
           AppLogger.i('VideoPlayer', 'Playback completed, textureId=$textureId');
           _nativePlaying = false;
+          // Latch it: the native input is finished for good (see [mediaEnded]).
+          _mediaEnded = true;
           _stopPositionTimer();
-          value = value.copyWith(
-            isPlaying: false,
-            isCompleted: true,
-            position: value.duration,
-          );
-          onCompleted?.call();
+          if (!value.isCompleted) {
+            value = value.copyWith(
+              isPlaying: false,
+              isCompleted: true,
+              position: value.duration,
+            );
+            onCompleted?.call();
+          } else {
+            value = value.copyWith(
+              isPlaying: false,
+              isCompleted: true,
+            );
+          }
           break;
         case 'error':
           final data = call.arguments as Map?;
@@ -623,11 +704,13 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
       status.position.inMilliseconds,
       durationMs: status.duration.inMilliseconds,
     );
+    final ended = status.duration > Duration.zero &&
+        contentMs >= status.duration.inMilliseconds;
+    if (ended) _mediaEnded = true;
     value = value.copyWith(
       position: Duration(milliseconds: contentMs),
       isPlaying: status.isPlaying,
-      isCompleted: status.duration > Duration.zero &&
-          contentMs >= status.duration.inMilliseconds,
+      isCompleted: ended,
     );
     return true;
   }
@@ -665,7 +748,10 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
       'textureId': textureId,
       'positionMs': timelineMs,
     });
-    value = value.copyWith(position: Duration(milliseconds: contentMs));
+    value = value.copyWith(
+      position: Duration(milliseconds: contentMs),
+      isCompleted: durationMs > 0 && contentMs >= durationMs,
+    );
   }
 
   Future<void> setVolume(double volume) async {

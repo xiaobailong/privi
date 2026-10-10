@@ -63,7 +63,14 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
   bool _imageZoomed = false;
   late int _index;
   int _loadRequest = 0;
-  DateTime? _ignoreAutoAdvanceUntil;
+
+  /// 「播完后重播」要落到的起点（毫秒）。一次性：`_loadCurrentBody` 读走即清空
+  /// （见 [ISSUE-022] / `memory-bank/issues-solved.md`）。
+  int? _pendingStartMs;
+
+  /// 已经因为"起播竞态"自动重建过的 item（同一界面内只救一次，见 `ISSUE-023`）。
+  final Set<String> _spuriousRecoveredIds = <String>{};
+
   bool _programmaticPopAllowed = false;
   bool _muted = false;
   bool _looping = false;
@@ -131,26 +138,35 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
         await c.setLooping(_looping);
         await c.setVolume(_muted ? 0 : 1);
         await c.setPlaybackSpeed(_playbackSpeed);
-        await c.play();
-        if (!mounted || request != _loadRequest) {
-          await c.dispose();
-          return;
-        }
-        final savedMs = VideoResumeService.getPositionMs(
-          ref.read(sharedPreferencesProvider),
-          item.id,
-        );
+
+        final pendingStartMs = _pendingStartMs;
+        _pendingStartMs = null;
+        final savedMs = pendingStartMs ??
+            VideoResumeService.getPositionMs(
+              ref.read(sharedPreferencesProvider),
+              item.id,
+            );
         if (savedMs != null && savedMs > 0) {
           AppLogger.i(
             'GalleryPreviewScreen',
             'Restoring resume position: item=${item.id}, saved=${savedMs}ms',
           );
           await c.seekTo(Duration(milliseconds: savedMs));
+        } else {
+          await c.seekTo(Duration.zero);
+        }
+        await c.play();
+        if (!mounted || request != _loadRequest) {
+          await c.dispose();
+          return;
         }
         c.onCompleted = () {
           if (!mounted) return;
           _onNativeVideoEnded(item.id);
         };
+        // 起播竞态（原始 input 刚起来就报结束）另走一条路：重建播放器继续播，
+        // 而不是把进度条丢在结尾（见 `ISSUE-023`）。
+        c.onSpuriousCompletion = () => _onSpuriousCompletion(item, c);
         setState(() {
           _video = c;
           _file = file;
@@ -245,22 +261,47 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
     await _loadCurrent();
   }
 
-  void _markUserSeek() {
-    _ignoreAutoAdvanceUntil = DateTime.now().add(
-      const Duration(milliseconds: 800),
-    );
-  }
-
+  /// 单击打开的视频播完后**停在最后一帧，不自动切下一个**（`ADR-032`）。
+  ///
+  /// 想继续看由用户自己操作：「下一个」按钮 / 左右滑 / 拖进度条重播。
+  /// 播放列表页（`PlayerScreen`，从「播放」入口进的那个）仍然连播，不受这里影响。
   void _onNativeVideoEnded(String itemId) {
     if (!mounted) return;
-    if (_looping) return;
-    final now = DateTime.now();
-    if (_ignoreAutoAdvanceUntil != null &&
-        !now.isAfter(_ignoreAutoAdvanceUntil!)) return;
+    AppLogger.i(
+      'GalleryPreviewScreen',
+      'Video ended, staying on this item (no auto-advance): $itemId',
+    );
     _completedForId = itemId;
-    final nextIndex = _index + 1;
-    if (nextIndex >= widget.items.length) return;
-    unawaited(_showItem(nextIndex));
+    // 停在最后一帧时把控制条显示出来，否则用户只看到一张静止画面、无从下手
+    // （`AutoHideVideoControls` 的定时器之后会再把它收起来）。
+    if (!_chrome) setState(() => _chrome = true);
+  }
+
+  /// 原生侧**刚起播**就报"播完"（起播竞态，见 `ISSUE-023`）：这不是真的播完。
+  ///
+  /// 直接重建播放器并从已知位置（`video.value.position`，也就是续播目标/0）
+  /// 继续，否则用户看到的就是"进度条停在结尾、视频也不播"。
+  ///
+  /// 同一个 item 只自动救一次：真是坏文件（起播即结束）时第二次起按"播完"处理，
+  /// 避免无限重建。
+  void _onSpuriousCompletion(GalleryAsset item, NativeVideoController video) {
+    if (!mounted || _current.id != item.id) return;
+    final pos = video.value.position;
+    if (!_spuriousRecoveredIds.add(item.id)) {
+      AppLogger.w(
+        'GalleryPreviewScreen',
+        'Spurious end repeated for ${item.id}: accepting it as finished',
+      );
+      video.giveUpOnStartupGlitch();
+      _onNativeVideoEnded(item.id);
+      return;
+    }
+    AppLogger.w(
+      'GalleryPreviewScreen',
+      'Spurious end right after start (${pos.inMilliseconds}ms): recreating '
+      'the player and continuing from there, item=${item.id}',
+    );
+    unawaited(_replayFromPosition(pos));
   }
 
   Future<void> _stopVideo() async {
@@ -387,18 +428,51 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
 
   Future<void> _playFromCurrentPosition(NativeVideoController video) async {
     final value = video.value;
-    if (value.isCompleted ||
+    if (video.mediaEnded ||
+        value.isCompleted ||
         (value.duration > Duration.zero && value.position >= value.duration)) {
-      await video.seekTo(Duration.zero);
+      // 已经播到结尾：必须**重建**原生播放器，seek/play 都唤不醒一个结束了的
+      // input（`ISSUE-022`）。位置还在结尾之前时（用户先把进度条拖回来再按
+      // 播放）就从那儿继续，否则从头重播。
+      final from = value.duration > Duration.zero &&
+              value.position < value.duration
+          ? value.position
+          : Duration.zero;
+      await _replayFromPosition(from);
+      return;
     }
     await video.play();
     await video.setPlaybackSpeed(_playbackSpeed);
   }
 
+  /// 重建原生播放器并从 [position] 起播 —— 「播完后重播」唯一可行的路径。
+  ///
+  /// 不重建的话，原生播放器会停在最后一帧：libVLC 结束的 input 上 `seekTo` +
+  /// `play()` 不产生 `Playing` 事件（日志里 `play: textureId=2` 之后什么都没有、
+  /// `getStatus` 一直 `isPlaying=false`），这一点已由真机日志确认（`ISSUE-022`）。
+  Future<void> _replayFromPosition(Duration position) async {
+    AppLogger.i(
+      'GalleryPreviewScreen',
+      'Replaying finished video from ${position.inMilliseconds}ms '
+      '(recreating native player): ${_current.id}',
+    );
+    _completedForId = _current.id;
+    // 起点显式传给重建后的加载流程（不能只靠进度条上的位置：那是**旧**播放器
+    // 的状态，重建后归零）。
+    _pendingStartMs = position.inMilliseconds;
+    await _loadCurrent();
+  }
+
   Future<void> _seekTo(Duration position) async {
     final video = _video;
     if (video == null) return;
-    _markUserSeek();
+    // 播完之后拖进度条 / 滑动快进：原生 input 已经结束，直接 seek 不会起播，
+    // 用户看到的就是「拖回开头 → 不播、进度条还弹回结尾」。
+    // 这里改成重建播放器并从目标位置起播（见 `ISSUE-022`）。
+    if (video.mediaEnded && position < video.value.duration) {
+      await _replayFromPosition(position);
+      return;
+    }
     await video.seekTo(position);
   }
 

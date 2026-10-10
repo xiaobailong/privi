@@ -758,8 +758,19 @@ class VlcPlayerHandler(
         logD("setPlaybackSpeed: textureId=$textureId, speed=$speed")
     }
 
+    /**
+     * 当前位置。
+     *
+     * `isEnded` 时**不能**回 `durationMs`：用户播完以后把进度条拖回前面，
+     * [seekTo] 只改了 `mp.time`，而 VLC 已经结束的 input 上读回的是 0；若这里
+     * 仍回 `durationMs`，Dart 侧 250ms 的位置轮询会把进度条**弹回结尾**
+     * （症状：拖到开头 → 不播、直接跳到结尾，见 memory-bank `ISSUE-022`）。
+     * `lastPositionMs` 由 EndReached / seekTo / TimeChanged 维护，正是「最后一次
+     * 已知位置」：播完未拖动时它等于 `durationMs`（与旧行为一致），拖动后就是
+     * 用户拖到的位置。
+     */
     override fun getPosition(): Long {
-        if (isEnded) return durationMs
+        if (isEnded) return lastPositionMs
         val mp = mediaPlayer ?: return 0L
         return clampPosition(mp.time)
     }
@@ -813,7 +824,9 @@ class VlcPlayerHandler(
             durationMs = mp.length.coerceAtLeast(0L)
         }
 
-        val position = clampPosition(mp.time)
+        // 与 getPosition() 同口径：播完之后拖过进度条，mp.time 已经不可信
+        // （VLC 结束的 input 上读回 0/旧值），不能拿它把 Dart 侧的位置抹掉。
+        val position = getPosition()
         logI("getStatus: textureId=$textureId, isReady=$isReady, " +
             "isPlaying=${mp.isPlaying}, duration=${durationMs}ms, " +
             "position=$position, size=${videoWidth}x$videoHeight, " +

@@ -635,4 +635,100 @@
     （**未动**，见 `PIT-008` 第三轮复核）；本轮之后 memory-bank 的补记提交同样只推 `main`（单分支）。
 - 首次记录: 2026-10-07
 
+## ADR-031 「播完后重播」一律**重建原生播放器**（不在原生里 `stop()+play()` 复活已结束的 input）
+- 日期: 2026-10-10 | 状态: 已采纳
+- 背景: `ISSUE-022` —— 视频播完后拖进度条回开头，不播放、进度条还弹回结尾。
+  拆下来有三个独立缺陷：原生 `getPosition()` 在 `isEnded` 时报 `durationMs`（位置说谎）；
+  播完后 `seekTo(0)+play()` 起不来（input 已结束）；Dart 侧"重播要重建"的分支被
+  `seekTo()` 清掉 `isCompleted` 而跳过。修 ①② 之后还剩一个选择：**怎么让播完的视频重新播**。
+- 决策:
+  ① 「播完后重播」（拖进度条回前面 / 按播放 / 滑动快进快退）统一走**重建**：
+     `_stopVideo()+_loadCurrent()`（gallery）、`_detachVideo()+_syncVideo()`（viewer）、
+     `_disposeNativeVideo()+loadVideo()`（player screen，已有）；
+  ② 重播起点用**一次性显式参数**传递（gallery/viewer 的 `_pendingStartMs`；
+     player screen 的 `_replayItemId/_replayStartMs`，按 item id 消费），
+     优先于 `VideoResumeService` 里持久化的续播位置；
+  ③ `NativeVideoController` 用**每实例闩锁** `mediaEnded` 表达"这条原生 input 已经结束"，
+     `seekTo()` / `play()` 都不清它 —— 界面据此判定必须重建，而不是靠 `value.isCompleted`
+     （拖进度条会把它清掉）；
+  ④ 原生侧只做**真实性**修复：`getPosition()` 的 `isEnded` 分支回 `lastPositionMs`，
+     `status().position` 改用 `getPosition()`；**不加** `stop()+play()`。
+- 理由:
+  - 重建走的是"正常打开视频"完全同一条链路（日志里每一轮真实加载都是它），
+    已在真机验证过成百次；而 `MediaPlayer.stop()` 之后不 `detachViews` 直接再 `play()`
+    在这台设备/这个 libvlc-all 版本上**没有任何实测证据**，风险是 vout 不重建 ⇒ 黑屏
+    （本仓库已经被黑屏/几何问题坑过：`ISSUE-008`、`ISSUE-016`、`ADR-022`）。
+  - `Cline` 默认不跑构建（`ADR-027`），这类"要么好要么黑屏"的平台行为改成重建路径后，
+    改动本身不需要装机验证就能判定逻辑正确性（只是多一次 ~0.2~0.5s 的加载）。
+  - 显式起点（②）是必要的：重建后新控制器位置归零，靠"读旧进度条位置"或
+    "读持久化续播值"都不确定（后者可能是更早的残留；拖到 0 时还不会写盘）。
+- 备选与为何不选:
+  - **原生 `play()` 里 `if (isEnded) { stop(); play(); time = lastPositionMs }`**：
+    最省 Dart 改动、无加载延迟，但依赖未验证的 libVLC 行为（见上）；记为"以后想在真机上试"的选项。
+  - **`seekTo(0)+play()`（旧 `ViewerScreen` 的写法）**：日志已证明无效
+    （`play: textureId=N` 之后无 `Playing`/`onPlaying`，`getStatus` 恒 `isPlaying=false`）。
+  - **保持 `isCompleted` 闩锁不清、只用它判定**：也是可行的最小改法，但它把
+    "已播完"和"要重建"两种语义挤在一个字段里，进度条拖动/`applyStatus` 都会动它，
+    正是 `ISSUE-022` 根因 ③ 的坑；独立闩锁更不容易被后续改动踩坏。
+  - **播完后禁用进度条/播放按钮**：退化成功能缺失，用户要的就是重播。
+- 影响 / 约束（后续改动必须注意）:
+  - 新写"播完后重新播放"的代码**不要**用 `seekTo(0)+play()`，用 `mediaEnded` + 重建；
+  - `mediaEnded` 是**每实例**闩锁：控制器 dispose 后新实例自然为 false，
+    不要为了"复位"去清它（清了界面就会重新掉回空转的 seek+play 路径）；
+  - 三个界面的重播都要带显式起点，别再依赖 `VideoResumeService` 的往返
+    （它在 ≥95% 时会删键，看似方便，实则是隐蔽的不确定性）；
+  - 真机验证要点（待手工构建）：播完 →（a）拖回开头应**立即重新播放**；
+    （b）拖到中间再按播放应从中途继续；（c）进度条不应弹回结尾；
+    日志应出现 `Replaying finished video from <N>ms (recreating native player)` +
+    新的 `Creating native player` / `onPlaying`。
+- 首次记录: 2026-10-10
+
+## ADR-032 单击打开的视频播完**停在最后一帧**，不自动切下一个（只有「播放」入口的播放列表页连播）
+- 日期: 2026-10-10 | 状态: 已采纳
+- 背景: 用户 2026-10-10 明确要求：「如果是**单击打开**的文件，播放完毕后不要自动切换下一个文件」。
+  改动前两个"单击打开"的界面（私密相册 → `ViewerScreen`、可见库 → `GalleryPreviewScreen`）
+  在 `onCompleted` 里都会 `_showItem(index + 1)` 自动连播，并靠
+  `_ignoreAutoAdvanceUntil`（800ms / 新加载 2s）抑制"刚拖完进度条就到结尾"造成的误连播。
+- 决策:
+  ① `ViewerScreen._onVideoEnded` / `GalleryPreviewScreen._onNativeVideoEnded` 改为"停在最后一帧"：
+     记 `_completedForId` + 把控制条显示出来，**不再** `_showItem(next)`；
+  ② 随之**删掉**已经没人读的 `_ignoreAutoAdvanceUntil` 字段与 `_markUserSeek()`（两个界面各一套）
+     —— 它存在的唯一目的就是抑制自动连播，留着只会变成"写而不读"的死代码
+     （`dart analyze` 的 `unused_field` 会报，而且下次排查会被它误导）；
+  ③ `PlayerScreen`（从「播放」/「播放全部」入口进的播放列表页）**保持连播**：
+     它的连播由 `PlayerController.onItemCompleted() → next()` 驱动，与上面两个界面无关；
+  ④ 「上一个 / 下一个」按钮、左右滑翻页、拖进度条重播（`ISSUE-022`）全部保留
+     —— 用户要的是"别自己切"，不是"不能切"。
+- 理由:
+  - 单击打开 = "我要看这一个"；在相册里随手点开一段视频却一直被带走到别的文件，
+    位置与上下文都丢（尤其可见库里相邻的都是同一文件夹的其它文件）。
+  - 要连续观看本来就有显式入口（「播放」→ `PlayerScreen`，还带顺序/随机选择），
+    把两种意图分开，比"一个行为两种期望"更好维护。
+  - 删 `_ignoreAutoAdvanceUntil` 而不是留着：它是为抑制自动连播而生；
+    没有自动连播之后，留下就是会误导下一个人的死代码。
+- 备选与为何不选:
+  - **加参数 `autoAdvance`（默认 false，长按「内部播放」传 true）**：长按菜单的「内部播放」
+    也只是"看这一个"（`ADR-023`），没有任何入口需要 true ⇒ 参数会变成永远为 false 的摆设；
+    真要连播应该走 `PlayerScreen`。
+  - **加设置项（"播完自动下一个"开关）**：默认关闭只是把问题藏起来；而且设置里已经有
+    语义混乱的「循环播放」（见下），不宜再加。以后确实要开关时，再按"默认关"补。
+  - **可见库也保留连播**：可见库目前没有「播放」入口（`visible_media_grid.dart` 不推
+    `PlayerScreen`）。以后若要连播，应**新增显式的「播放」按钮** → `PlayerScreen`，
+    而不是恢复这里的自动切下一个。
+- 影响 / 约束（后续改动必须注意）:
+  - 以后在这两个界面写 `onCompleted` 相关逻辑时**不要**恢复 `_showItem(next)`；
+  - 唯一保留连播的是 `PlayerScreen`（`PlayerController.onItemCompleted()`）：
+    改连播行为请去 `lib/application/player/player_controller.dart`；
+  - **已知限制**：「循环播放」开关（视频设置面板）仍是**空操作** ——
+    `NativeVideoController.setLooping()` 一直是 `// Not directly supported ... ignore`；
+    改良前它唯一可见的效果就是"别自动切下一个"，而现在的默认行为就是停住，
+    所以这个开关彻底看不出效果。真要实现循环需要原生支持
+    （ExoPlayer `REPEAT_MODE_ONE`，或 libVLC 结束后 `stop()+play()` —— 后者见 `ADR-031` 的顾虑），
+    不要用"每轮重播都重建播放器"去凑（每轮循环会闪一次加载态）；
+  - 真机验证要点（待手工构建）：单击打开一段视频 → 播完应停在最后一帧、控制条出现、
+    **不跳下一个**；日志应出现 `Video ended, staying on this item (no auto-advance): <itemId>`。
+- 相关文件: `lib/presentation/viewer/viewer_screen.dart`、`lib/presentation/visible/gallery_preview_screen.dart`（改动）；
+  `lib/presentation/player/player_screen.dart`、`lib/application/player/player_controller.dart`（保持连播）
+- 首次记录: 2026-10-10
+
 

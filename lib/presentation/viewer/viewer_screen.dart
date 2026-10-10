@@ -56,11 +56,17 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   String? _videoId;
   String? _completedForId;
   int _videoRequest = 0;
+
+  /// 「播完后重播」要落到的起点（毫秒）。一次性：`_syncVideoBody` 读走即清空
+  /// （见 `memory-bank/issues-solved.md` 的 `ISSUE-022`）。
+  int? _pendingStartMs;
+
+  /// 已经因为"起播竞态"自动重建过的 item（同一界面内只救一次，见 `ISSUE-023`）。
+  final Set<String> _spuriousRecoveredIds = <String>{};
   /// 15s 看门狗判定"这个视频在本引擎下起不来"时写这里：界面显示可见的错误，
   /// 而不是一直转圈（见 [VideoEngineFallbackState]）。
   String? _videoError;
   String? _videoErrorItemId;
-  DateTime? _ignoreAutoAdvanceUntil;
   VideoFitMode _fitMode = VideoFitMode.fit;
   double _playbackSpeed = 1;
   bool _muted = false;
@@ -211,10 +217,13 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       await c.dispose();
       return;
     }
-    final savedMs = VideoResumeService.getPositionMs(
-      ref.read(sharedPreferencesProvider),
-      item.id,
-    );
+    final pendingStartMs = _pendingStartMs;
+    _pendingStartMs = null;
+    final savedMs = pendingStartMs ??
+        VideoResumeService.getPositionMs(
+          ref.read(sharedPreferencesProvider),
+          item.id,
+        );
     if (savedMs != null && savedMs > 0) {
       AppLogger.i(
         'ViewerScreen',
@@ -226,6 +235,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       if (!mounted) return;
       _onVideoEnded(item.id);
     };
+    // 起播竞态（原始 input 刚起来就报结束）另走一条路：重建播放器继续播，
+    // 而不是把进度条丢在结尾（见 `ISSUE-023`）。
+    c.onSpuriousCompletion = () => _onSpuriousCompletion(item, c);
     setState(() {
       _video = c;
       _videoId = item.id;
@@ -278,22 +290,44 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     });
   }
 
-  void _markUserSeek() {
-    _ignoreAutoAdvanceUntil = DateTime.now().add(
-      const Duration(milliseconds: 800),
-    );
-  }
-
+  /// 单击打开的视频播完后**停在最后一帧，不自动切下一个**（`ADR-032`）。
+  ///
+  /// 想继续看由用户自己操作：「下一个」按钮 / 左右滑 / 拖进度条重播。
+  /// 播放列表页（`PlayerScreen`，从「播放」入口进的那个）仍然连播，不受这里影响。
   void _onVideoEnded(String itemId) {
     if (!mounted) return;
-    if (_looping) return;
-    final now = DateTime.now();
-    if (_ignoreAutoAdvanceUntil != null &&
-        !now.isAfter(_ignoreAutoAdvanceUntil!)) return;
+    AppLogger.i(
+      'ViewerScreen',
+      'Video ended, staying on this item (no auto-advance): $itemId',
+    );
     _completedForId = itemId;
-    final nextIndex = _index + 1;
-    if (nextIndex >= widget.items.length) return;
-    unawaited(_showItem(nextIndex));
+    // 停在最后一帧时把控制条显示出来，否则用户只看到一张静止画面、无从下手
+    // （`AutoHideVideoControls` 的定时器之后会再把它收起来）。
+    if (!_chrome) setState(() => _chrome = true);
+  }
+
+  /// 原生侧**刚起播**就报"播完"（起播竞态，见 `ISSUE-023`）：这不是真的播完。
+  ///
+  /// 重建播放器并从已知位置（`video.value.position`，也就是续播目标/0）继续，
+  /// 否则用户看到的就是"进度条停在结尾、视频也不播"。同一个 item 只自动救一次。
+  void _onSpuriousCompletion(MediaItem item, NativeVideoController video) {
+    if (!mounted || _videoId != item.id) return;
+    final pos = video.value.position;
+    if (!_spuriousRecoveredIds.add(item.id)) {
+      AppLogger.w(
+        'ViewerScreen',
+        'Spurious end repeated for ${item.id}: accepting it as finished',
+      );
+      video.giveUpOnStartupGlitch();
+      _onVideoEnded(item.id);
+      return;
+    }
+    AppLogger.w(
+      'ViewerScreen',
+      'Spurious end right after start (${pos.inMilliseconds}ms): recreating '
+      'the player and continuing from there, item=${item.id}',
+    );
+    unawaited(_replayFromPosition(pos));
   }
 
   Future<void> _disposeVideo() {
@@ -380,18 +414,45 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
 
   Future<void> _playFromCurrentPosition(NativeVideoController video) async {
     final value = video.value;
-    if (value.isCompleted ||
+    if (video.mediaEnded ||
+        value.isCompleted ||
         (value.duration > Duration.zero && value.position >= value.duration)) {
-      await video.seekTo(Duration.zero);
+      // 播完了：原生 input 已经结束，`seekTo(0)` + `play()` 起不来（旧实现就是
+      // 这么写的 ⇒ 按播放没反应，见 `ISSUE-022`）。重建播放器，并从"用户拖到
+      // 的位置"（还在结尾之前时）或 0 起播。
+      final from = value.duration > Duration.zero &&
+              value.position < value.duration
+          ? value.position
+          : Duration.zero;
+      await _replayFromPosition(from);
+      return;
     }
     await video.play();
     await video.setPlaybackSpeed(_playbackSpeed);
   }
 
+  /// 重建原生播放器并从 [position] 起播（「播完后重播」唯一可行的路径）。
+  Future<void> _replayFromPosition(Duration position) async {
+    AppLogger.i(
+      'ViewerScreen',
+      'Replaying finished video from ${position.inMilliseconds}ms '
+      '(recreating native player): ${_videoId ?? '-'}',
+    );
+    _pendingStartMs = position.inMilliseconds;
+    await _detachVideo();
+    if (!mounted) return;
+    await _syncVideo();
+  }
+
   Future<void> _seekTo(Duration position) async {
     final video = _video;
     if (video == null) return;
-    _markUserSeek();
+    // 播完后再拖进度条/滑动快进：seek 唤不醒结束了的 input，直接重建并从目标
+    // 位置起播（见 `ISSUE-022`）。
+    if (video.mediaEnded && position < video.value.duration) {
+      await _replayFromPosition(position);
+      return;
+    }
     await video.seekTo(position);
   }
 

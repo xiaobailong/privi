@@ -612,5 +612,129 @@
 - 决策: `ADR-028`（两次修订：先换原始指针 + `opaque`；再抽成共用层覆盖三个界面）
 - 首次记录: 2026-10-07 ／ 最近复核: 2026-10-08（据真机日志定位到"界面不对"，并覆盖三个界面）
 
+## ISSUE-022 视频播完后拖进度条回开头：不播放、进度条自己弹回结尾（`VDIAG[dart-position-stall]`）
+- 状态: 已修复（改法见下；**待手工构建后在真机验证**）
+- 症状 / 现场: 一个视频播完（`STATE_ENDED`）后把进度条拖到起始位置，期望重新播放，
+  结果**不播**、进度条直接跳回结尾；再按播放也没反应。日志尾部是
+  `play: textureId=2` 之后什么都没有 + `VDIAG[dart-position-stall] position stuck at 31724ms while isPlaying=true`
+- 复发判据（5 秒定论，读 app 日志即可）: 在日志里搜 `STATE_ENDED`，其后若出现
+  `seekTo(content=0ms`（或任意位置）→ `play: textureId=N` → **没有** `onPlaying` / `Event playingChanged`
+  且紧跟 `position stuck at <duration>ms while isPlaying=true` ⇒ 就是本条；
+  一票否决项：若 `seekTo` 之后有 `onPlaying`（原生重新起播），则**不是**本条
+- 根因（三层，缺一个都修不干净）:
+  ① **原生 input 播完就"死了"**：libVLC 的 `EndReached`（ExoPlayer 的 `STATE_ENDED`）之后
+     `MediaPlayer` 的 input 已经结束，`mp.time = 0` + `mp.play()` **不会**重新起播
+     —— 日志证据：`play: textureId=2` 之后 3 秒内没有任何 `Playing`/`Vout` 事件，
+     `getStatus` 一直 `isPlaying=false`（`VlcPlayerHandler.play()` 里 `mp.play()` 是空转）
+  ② **原生 `getPosition()` 说谎**：`VlcPlayerHandler.getPosition()` 写成
+     `if (isEnded) return durationMs`，而 `isEnded` 只在 `resetPlayer()`（initialize/release）
+     里清 ⇒ 播完后**任何**位置都被报成结尾；Dart 侧 `play()` 会重启 250ms 位置轮询
+     （`_startPositionTimer`）⇒ 刚拖到 0 的位置被下一次轮询覆写回 duration
+     ⇒ 用户看到"**直接跳到结尾**"
+  ③ **Dart 侧的"重播要重建播放器"分支被自己跳过**：
+     `gallery_preview_screen._playFromCurrentPosition` 用 `value.isCompleted` 判断"已播完"，
+     但进度条拖动先调了 `seekTo()`，而 `native_video_controller.seekTo()` 会重算
+     `isCompleted = contentMs >= durationMs`（=false）⇒ 重建分支被跳过，
+     掉进 plain `video.play()`（配合 ① 就是"按了播放没反应"）
+- 证据（`C:\Users\766698\Downloads\密册_log_2026-10-10.txt`，同型共 3 次：11:11 / 11:50 / 12:05）:
+  ```
+  11:50:40.935 INFO [VideoPlayer.native] STATE_ENDED: textureId=2, position=31724
+  11:50:40.935 INFO [VideoPlayer] Playback completed, textureId=2
+  11:50:43.756 DEBUG [VideoPlayer] seekTo(content=0ms, native=0ms, timelineOffset=0 ms) -> textureId=2
+  11:50:44.805 DEBUG [VideoPlayer] play() -> textureId=2
+  11:50:44.806 INFO  [VideoPlayer.native] play: textureId=2
+  11:50:45.060 WARN  [VideoPlayer.diag] VDIAG[dart-position-stall] position stuck at 31724ms while isPlaying=true, textureId=2
+  11:50:45.063 WARN  [VideoPlayer.diag] VDIAG[...] playing=true ... position=31724ms | native ready=true playing=false position=0ms
+  11:50:56.532 DEBUG [GalleryPreviewScreen] Saved resume position (stop): item=392, pos=31724ms, dur=31724ms
+  ```
+  ↳ `native ... position=0ms` 说明**原生侧其实收到过 seek**（`mp.time` 已是 0），
+    只是 `getPosition()`（走 `isEnded` 分支）把它报成了 31724，并且 input 根本没起播
+- 修法（3 处，互相补齐）:
+  1. `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`
+     —— `getPosition()` 的 `isEnded` 分支改成回 `lastPositionMs`（EndReached / seekTo /
+     TimeChanged 共同维护的"最后一次已知位置"：播完没拖动时等于 duration，行为不变；
+     拖动后就是用户拖到的值）；`status()` 的 `position` 改用 `getPosition()` 保持同口径
+  2. `lib/data/services/native_video_controller.dart`
+     —— 新增**每实例闩锁** `bool get mediaEnded`（`completed` 事件与 `applyStatus` 置位，
+     `seekTo`/`play` 都**不清**），语义 = "这条原生 input 已经结束，想再看必须重建播放器"
+  3. 三个视频界面统一"重建式重播"（新代码一律不要用 `seekTo(0)+play()`）:
+     - `gallery_preview_screen` / `viewer_screen`: 新增一次性 `int? _pendingStartMs`，
+       `_seekTo()` 里 `if (video.mediaEnded && position < duration) → _replayFromPosition(position)`
+       （"播完后拖回前面" = 重建 + 从目标位置起播），`_playFromCurrentPosition()` 也改用
+       `mediaEnded` 判定并重建（位置还在结尾之前就从那儿继续，否则从 0）
+     - `player_screen`: 播完后 `_seekTo()` 只记 `_replayItemId/_replayStartMs`
+       （本屏播放状态归播放列表控制器，不在 seek 里改状态），等用户按播放走到
+       `_loadVideoInner` 的重建分支时，用这个起点**优先于**持久化的续播位置
+     - 重建路径本身是本仓库已验证的路径（`_stopVideo()+_loadCurrent()` /
+       `_detachVideo()+_syncVideo()` / `_disposeNativeVideo()+loadVideo()`），
+       和正常打开视频完全同一条链路，不依赖任何未验证的 libVLC 行为
+- 反例 / 易误判:
+  - 以为"seek 没生效"或"进度条 UI 没刷新" —— 实际是 `getPosition()` 报的假位置 + input 真的没起播
+  - 以为 `seekTo(0)` + `play()` 能续播（旧 `ViewerScreen._playFromCurrentPosition` 就是这么写的，
+    一样是废的）；也**不要**顺手在原生里加 `stop()+play()` 去"复活" input
+    —— 那条路没在真机验证过（理由见 `ADR-031`）
+  - 只盯 `value.isCompleted` 判定"是否已播完" —— 进度条拖动会把它清掉（根因 ③）
+  - 顺手把 `_mediaEnded` 清掉（比如在 `play()` 里）—— 会让界面重新掉回"seek+play 空转"的老路
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`、
+  `lib/data/services/native_video_controller.dart`、`lib/presentation/visible/gallery_preview_screen.dart`、
+  `lib/presentation/viewer/viewer_screen.dart`、`lib/presentation/player/player_screen.dart`
+- 决策: `ADR-031`（为什么"重建"而不是"复活原生 input"）
+- 首次记录: 2026-10-10
+
+## ISSUE-023 打开视频后进度条**一开始就在结尾**（原生 input 起播约 0.1~0.35s 就报 EndReached）
+- 状态: 已规避（应用层自愈；**原生侧根因未定位**）
+- 症状 / 现场: 单击打开一个视频，进度条**一上来就停在结尾**（既不是开头、也不是续播记忆位置），
+  画面不动。旧构建里表现为"点开秒完、自动跳到下一个文件"——以前被**自动连播**掩盖，
+  2026-10-10 去掉自动连播（`ADR-032`）后才以"停在结尾"的形态暴露出来。
+  随机复现：实测同一文件 8 次打开里 3~4 次
+- 复发判据（读 app 日志，5 秒定论）:
+  1) 本修复后（1.0.74+）: 搜 `VDIAG[spurious-end]` / `Spurious end right after start`
+     ⇒ 命中（若同时出现 `Spurious end repeated ... accepting it as finished`，
+     说明同一个 item 连续两次触发、自愈已放弃）；
+  2) 任何版本都适用: 一次加载里 `STATE_READY`/`onPlaying` 之后 **20~260ms** 就出现
+     `Vout event: voutCount=0` + `STATE_ENDED`，且 `voutCount=0` 在 `STATE_ENDED` **之前**
+     ⇒ 命中。**真播完**的顺序相反：先 `STATE_ENDED`，`voutCount=0` 在**其后**
+     （例：`密册_log_2026-10-10.txt` 14:17:18.387 ENDED → 14:17:18.434 vout=0）
+- 根因: **未定位**（设备/VLC 层随机竞态）。已确认的事实：
+  - **与 seek 无关**：11:11:22 那次（旧构建、**完全没有任何 seek**）同样复现；
+    1.0.73 的 14:15:39（应用刚启动、首次打开、seek 0、无续播）也复现
+  - **与本次改动无关**：新旧构建都有；旧构建里它被自动连播掩盖成"播完自动下一个"
+  - 时序特征：`probed video size` → `video surface attached` → `play()` → `length changed`
+    → `Vout voutCount=1` → `STATE_READY/onPlaying` → **`Vout voutCount=0` → `EndReached`**；
+    而起播正常的那几次是 `… onPlaying → Vout voutCount=1`（vout 重建/确认）后继续播
+  - 注意 `STATE_ENDED` 里的 `position=<duration>` 是**代码自己打印的 `durationMs`**
+    （`EndReached` 分支里 `lastPositionMs = durationMs`），**不能**当成"input 真走到结尾"的证据
+  - 推测（**未验证**）：起播瞬间的 vout/ES 竞态（`--no-audio-time-stretch` + 安卓 AWindow 几何 +
+    尺寸探测/挂 vout 时序）让视频 ES 起不来 ⇒ 没有可播的 ES ⇒ VLC 立刻按 EOF 结束 input；
+    与 100% 复现的"首帧 PTS 回绕"（`ISSUE-009`）**不是**同一回事
+- 修法（应用层自愈）:
+  1. `lib/data/services/native_video_controller.dart`：新增 `onSpuriousCompletion` 回调
+     与 `_isStartupGlitch(pos)` —— **`completed` 事件的 position 离结尾还很远时不当成"播完"**
+     （真播完时 250ms 的位置轮询保证 position 就在 duration 附近；判定 = 差 > 1.5s 且 < 90%），
+     打 `VDIAG[spurious-end]`，把事件交给界面；不置 `isCompleted`、不动 `position`
+  2. 三个视频界面接到"**重建播放器 + 从 `video.value.position`（续播目标 / 0）继续播**"
+     （gallery/viewer 用 `_replayFromPosition`；player screen 用 `_replayItemId/_replayStartMs`
+     + `_completedForId` 触发重建），每个 item **只自动救一次**（`_spuriousRecoveredIds`），
+     第二次起回到原行为（gallery/viewer = 停在最后一帧；player screen = 跳下一个），
+     避免坏文件无限重建
+- 反例 / 易误判:
+  - 把 `STATE_ENDED: position=<duration>` 当成"input 真走到结尾"（那是自己打印的 `durationMs`）
+  - 以为"是 `seekTo` / 续播逻辑把播放搞坏的"（旧构建无 seek 也复现）
+  - 以为"是 Cline 这次改动引入的"（新旧构建都有，只是旧构建被自动连播掩盖）
+  - 只开一次没复现就以为修好了 —— 它是随机的，要**连开 5~10 次**统计
+- 下一步（要真正定位原生根因时）: 临时把 `VlcPlayerHandler.getLibVlc()` 的 libvlc 日志级别
+  改成 `-vvv`（verbose=2）抓一次复现；**注意该类注释里明确写了 verbose=2 会把每条 libvlc 日志
+  经 MethodChannel 转发给 Dart、刷爆通道并拖慢解码，抓完立刻改回 0**。重点看
+  `android-display` / `android-opaque` / `avcodec` / `no suitable decoder` 之类的行；
+  另外确认这两个 mp4 是否**没有音轨**（无音轨 + 视频 ES 起不来 = 立即 EOF）
+- 相关文件: `lib/data/services/native_video_controller.dart`、
+  `lib/presentation/visible/gallery_preview_screen.dart`、`lib/presentation/viewer/viewer_screen.dart`、
+  `lib/presentation/player/player_screen.dart`（改动）；
+  `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`（**未改**，仅用于对照时序）
+- 相关条目: `ISSUE-022`（播完后重播要重建）、`ADR-031`、`ADR-032`（去掉自动连播后本问题才显形）、
+  `ISSUE-009`（另一种"秒完"：首帧 PTS 回绕，100% 复现，已修复）
+- 首次记录: 2026-10-10
+
+
 
 

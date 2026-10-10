@@ -431,6 +431,13 @@
   以整节标题作锚点又只写回正文
 - 自检: 每次编辑后 **`read_files` 回读改动区域**（含上下各 3 行），确认相邻标题、
   `---` 分隔线、代码块围栏都还在；本次就是这样发现并修回 `PIT-009` 标题的
+- 复核 2026-10-10（同一族的第二种翻车）: 想在 `X();` 这一行**之前**插入新方法时，用
+  `old_text = "  Future<void> _seekTo(Duration position) async {\n    if (video == null) return;\n"`
+  这种"**以结尾换行收尾**"的锚点，而 `new_text` 末行写成了 `... return;`（**没带换行**）
+  ⇒ 结果是两行被**粘成一行**（`if (video == null) return;    // 播完之后拖进度条…`），
+  编译器/格式化器能过、但代码结构被破坏。
+  正确做法：锚点的**每一行都必须原样出现在 `new_text` 里**（含行尾），
+  插入类改动优先用 `insert_line`；改完立刻回读该区域确认没有两行粘一起
 - 首次记录: 2026-10-07
 
 ## PIT-029 Cline 的 shell 里 `flutter` 不在 PATH；`start "" /min cmd /c "…嵌套引号…"` 会立刻报「命令语法不正确」
@@ -448,5 +455,32 @@
 - 自检: 起完 10~30 秒后用 `read_files tmp\o.txt` 看文件是否在长；首行出现
   `is not recognized` 或 "命令语法不正确" 的乱码即说明写坏了（`find /c /v "" tmp\o.txt` 也能看行数变化）
 - 首次记录: 2026-10-07
+
+## PIT-030 想看源码的"中间某几行"：`read_files` 子区间会回 `[outdated]`；嵌套 `powershell -Command "...$l[...]"` 里的 `$l` 会被外层 shell 先展开
+- 触发条件: ① 同一个文件先被 `read_files` **整篇读过**（长文件会被中间截断），再请求它的
+  局部行范围；② 在**一条** `run_commands` 命令里嵌套第二个 `powershell -NoProfile -Command "..."`
+  （或在一个 `powershell -Command` 字符串里重复使用 `$l` 之外的变量）
+- 错误现象:
+  ① `read_files` 对 `start_line/end_line` 返回 `[outdated - see the latest file content]`，
+  **连续试 3 次、换范围也拿不到内容**（不是文件问题，换文件就正常）；
+  ② 报 `Missing type name after '['` / `=Get-Content` 前面丢变量名 —— `$l`、`$_.Count`
+  这类变量在**外层** PowerShell 解析时就被展开成空，内层脚本拿到的是 `.Count-8`、`[184..345]`
+- 正确做法（本次实测可用）:
+  ```powershell
+  # 读第 184~345 行（1-based 204~345 → 0-based 203..344）；注意外层用单引号，$l 才不会被展开
+  powershell -NoProfile -Command '$l=Get-Content -Encoding UTF8 ''lib\presentation\player\video_player_controls.dart''; $l[184..345] | ForEach-Object { $_ }'
+  ```
+  要点：**外层单引号**、内层路径用 `''` 转义、**一条命令只放一个 `powershell -Command`**
+  （要读多段就用 `run_commands` 的多条数组项，或 `; '=== 段2 ==='; $l[299..450]` 这样在**同一个**
+  `-Command` 里接，本次这两种写法都成功过）；
+  `Get-Content` 一律带 `-Encoding UTF8`（否则中文注释按 GBK 解成乱码，见 `PIT-002`）
+- 反例（别这么写）:
+  ```powershell
+  # ① 嵌套调用：外层把 $l 展开成空 ⇒ Missing type name after '['（实测复现 3 次）
+  powershell -NoProfile -Command "...; '=== 330-436 ==='; powershell -NoProfile -Command "$p=...; $l[329..435]"
+  # ② 先整篇 read_files、再要子区间 ⇒ [outdated - see the latest file content]
+  ```
+- 自检: 输出的行号/行首内容与 `git grep -n` 给的行号对得上；报 `Missing type name` 就是踩了 ②
+- 首次记录: 2026-10-10
 
 
