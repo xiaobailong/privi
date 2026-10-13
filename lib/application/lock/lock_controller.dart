@@ -344,20 +344,23 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return false;
     if (ok) {
       _cancelAutoLockTimer();
-      state = state.copyWith(status: LockStatus.unlocked, clearError: true);
       // Biometric only proves identity; the KEK was persisted to secure
       // storage during the last pattern/pin unlock.  Retrieve it now.
+      // Only transition to unlocked *after* the KEK is in memory so that
+      // encryption-dependent features (re-encrypt, import, etc.) never see
+      // a half-unlocked vault (PIT-049).
       final keyManager = ref.read(encryptionKeyManagerProvider);
       final persisted = await keyManager.retrievePersistedKek();
       if (persisted != null) {
         await keyManager.setKey(persisted);
-      } else {
-        AppLogger.e('LockController',
-            'Biometric OK but no persisted KEK found — '
-            'user must unlock with pattern/pin first to derive the '
-            'encryption key before biometric unlock can load it.');
+        state = state.copyWith(status: LockStatus.unlocked, clearError: true);
+        return true;
       }
-      return true;
+      AppLogger.e('LockController',
+          'Biometric OK but no persisted KEK found — '
+          'user must unlock with pattern/pin first to derive the '
+          'encryption key before biometric unlock can load it.');
+      return false;
     }
     return false;
   }
