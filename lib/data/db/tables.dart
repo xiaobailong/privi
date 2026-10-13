@@ -38,6 +38,9 @@ class MediaItems extends Table {
   /// Last playback time; null when the item was never played.
   DateTimeColumn get lastPlayedAt => dateTime().nullable()();
 
+  /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
+  TextColumn get encryptedDek => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

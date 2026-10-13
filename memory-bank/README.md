@@ -118,6 +118,11 @@
 | 怎么判断"真的播完" vs 起播就报结束（`STATE_ENDED` 的 position 是自己打印的 duration） | `ISSUE-023` |
 | `read_files` 读同一文件的局部行范围回 `[outdated - see the latest file content]`（拿不到内容） | `PIT-030` |
 | 一条命令里嵌套第二个 `powershell -Command "...$l[...]"` 报 `Missing type name after '['`（`$l` 被外层展开） | `PIT-030` |
+| `looksEncrypted()` 用 `readAsBytesSync()` 读整个文件 → 大文件 OOM | `PIT-031`、`ISSUE-024` |
+| `_resolveDisplayPath` 返回 `Future<String>` 强行兜底密文路径 → 播放器崩溃 | `PIT-032`、`ISSUE-024` |
+| 加密文件打不开/播放器黑屏/批量加密死机 | `ISSUE-024`、`ADR-033`（加密架构） |
+| 两个界面的三个点菜单（`PopupMenuButton`）长得一样，改功能只改了其中一个忘了另一个 | `PIT-033`、`ADR-024` |
+| 密码/图案/指纹解锁后加密文件仍然打不开 | `ISSUE-024`（KEK 未加载 / 竞态注入） |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

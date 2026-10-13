@@ -12,6 +12,8 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
+import '../../data/services/encryption_key_manager.dart';
+import '../../data/services/media_encryption_service.dart';
 import '../../data/services/native_video_controller.dart';
 import '../../data/services/video_resume_service.dart';
 import '../../domain/models/media_item.dart';
@@ -80,6 +82,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   /// swipe back and forth must not inflate a counter.
   final Set<String> _countedPlayIds = <String>{};
 
+  /// Temp decrypted files keyed by media id, cleaned up on dispose / page change.
+  final Map<String, String> _decryptedTempPaths = <String, String>{};
+
   @override
   void initState() {
     super.initState();
@@ -96,8 +101,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     if (!_current.isVideo) _recordPlay(_current);
     unawaited(VideoSystemUi.apply(false));
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_syncVideo()),
-    );
+      (_) {
+        unawaited(_resolveDisplayPath(_current));
+        unawaited(_syncVideo());
+      },
   }
 
   @override
@@ -125,6 +132,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       }
       c.dispose();
     }
+    _cleanupAllTempFiles();
     unawaited(VideoSystemUi.restore());
     _page.dispose();
     super.dispose();
@@ -173,6 +181,65 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     unawaited(VideoSystemUi.unlockOrientations());
   }
 
+  /// Returns a displayable file path for [item], decrypting to a temp file
+  /// if the file is encrypted. Callers MUST use this instead of [item.privatePath]
+  /// directly.
+  Future<String?> _resolveDisplayPath(MediaItem item) async {
+    final encryptedDek = item.encryptedDek;
+    if (encryptedDek == null || encryptedDek.isEmpty) {
+      return item.privatePath;
+    }
+    // Already decrypted for this session?
+    if (_decryptedTempPaths.containsKey(item.id)) {
+      final cached = _decryptedTempPaths[item.id]!;
+      if (File(cached).existsSync()) return cached;
+      _decryptedTempPaths.remove(item.id);
+    }
+    final encryptionService = ref.read(mediaEncryptionServiceProvider);
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final kek = keyManager.getKey();
+    if (kek == null) {
+      AppLogger.e('ViewerScreen',
+          'Cannot decrypt ${item.id}: KEK not available (vault locked?)');
+      return null;
+    }
+    try {
+      final tempPath = await encryptionService.decryptToTempFileWithDek(
+        filePath: item.privatePath,
+        encryptedDekBase64: encryptedDek,
+        kek: kek,
+      );
+      if (tempPath != null) {
+        _decryptedTempPaths[item.id] = tempPath;
+        return tempPath;
+      }
+      AppLogger.e('ViewerScreen',
+          'Decrypt returned null for ${item.id} — DEK or auth tag mismatch');
+      return null;
+    } catch (e, stack) {
+      AppLogger.e('ViewerScreen',
+          '_resolveDisplayPath failed for ${item.id}: $e\n$stack');
+      return null;
+    }
+  }
+
+  void _cleanupTempFile(String mediaId) {
+    final path = _decryptedTempPaths.remove(mediaId);
+    if (path != null) {
+      try {
+        final file = File(path);
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  void _cleanupAllTempFiles() {
+    final ids = _decryptedTempPaths.keys.toList();
+    for (final id in ids) {
+      _cleanupTempFile(id);
+    }
+  }
+
   /// Viewer playback history: one bump per item per viewer session. Random
   /// playback reads it back to avoid replaying the same items.
   void _recordPlay(MediaItem item) {
@@ -196,7 +263,15 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     if (_videoId == item.id && _video != null) return;
     await _detachVideo();
     if (!mounted || request != _videoRequest) return;
-    final file = File(item.privatePath);
+    final displayPath = await _resolveDisplayPath(item);
+    if (!mounted || request != _videoRequest) return;
+    if (displayPath == null) {
+      _videoError = 'Failed to decrypt file — vault may be locked';
+      _videoErrorItemId = item.id;
+      if (mounted) setState(() {});
+      return;
+    }
+    final file = File(displayPath);
     if (!file.existsSync()) return;
     if (!mounted || request != _videoRequest) return;
     // 引擎必须经 engineFor() 取：VLC 下拿不到帧的 item 会在这里被换成默认引擎。
@@ -441,6 +516,20 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       _imageZoomed = false;
     });
     if (!widget.items[index].isVideo) _recordPlay(widget.items[index]);
+    // Pre-resolve display path for the new page before syncing video.
+    unawaited(_resolveDisplayPath(widget.items[index]));
+    // Clean up temp files for items far from the current page.
+    final keepIndices = {index - 1, index, index + 1};
+    final idsToClean = <String>[];
+    for (final id in _decryptedTempPaths.keys) {
+      final idx = widget.items.indexWhere((i) => i.id == id);
+      if (idx == -1 || !keepIndices.contains(idx)) {
+        idsToClean.add(id);
+      }
+    }
+    for (final id in idsToClean) {
+      _cleanupTempFile(id);
+    }
     await _syncVideo();
   }
 
@@ -557,7 +646,18 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     if (!item.isVideo || !external.supported) return;
     final video = _video;
     if (video != null) await video.pause();
-    await external.open(filePath: item.privatePath, mimeType: item.mimeType);
+    final displayPath = await _resolveDisplayPath(item);
+    if (displayPath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Cannot open file: decryption failed. Unlock vault first.')),
+        );
+      }
+      return;
+    }
+    await external.open(filePath: displayPath, mimeType: item.mimeType);
   }
 
   void _setRating(MediaItem item, int rating) {
@@ -667,7 +767,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   }
 
   Widget _mediaPage(MediaItem item, bool active) {
-    final file = File(item.privatePath);
+    // If item is already decrypted to a temp file, use that path.
+    final resolvedPath = _decryptedTempPaths[item.id] ?? item.privatePath;
+    final file = File(resolvedPath);
     if (!file.existsSync()) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,

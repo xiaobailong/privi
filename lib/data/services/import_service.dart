@@ -16,6 +16,8 @@ import 'import/media_recorder.dart';
 import 'import/thumbnail_generator.dart';
 import 'import/vault_reveal_runner.dart';
 import 'import/vault_transfer_runner.dart';
+import 'media_encryption_service.dart';
+import 'encryption_key_manager.dart';
 import 'media_rename_service.dart';
 import 'media_store_service.dart';
 import 'media_thumbnail_service.dart';
@@ -43,11 +45,16 @@ class ImportService implements VaultWorkflow {
     VaultRevealRunner? revealRunner,
     MediaRecorder? recorder,
     ThumbnailGenerator? thumbnailGenerator,
+    MediaEncryptionService? encryptionService,
+    EncryptionKeyManager? encryptionKeyManager,
     Uuid? uuid,
   })  : _renamer = renamer ?? MediaRenameService(),
         _mediaStore = mediaStore ?? MediaStoreService() {
     _fileSystem = fileSystem ?? const IoFileSystemGateway();
     _assetGateway = assetGateway ?? const PhotoManagerAssetGateway();
+    _mediaRepository = mediaRepository;
+    _encryptionService = encryptionService;
+    _encryptionKeyManager = encryptionKeyManager;
     _preparer = preparer ??
         HidePreparer(
           storage: storage,
@@ -70,6 +77,8 @@ class ImportService implements VaultWorkflow {
           mediaStore: _mediaStore,
           assetGateway: _assetGateway,
           fileSystem: _fileSystem,
+          encryptionService: encryptionService,
+          encryptionKeyManager: encryptionKeyManager,
         );
     _recorder = recorder ?? MediaRecorder(mediaRepository: mediaRepository);
     _thumbnailGenerator = thumbnailGenerator ??
@@ -92,6 +101,9 @@ class ImportService implements VaultWorkflow {
   late final VaultRevealRunner _revealRunner;
   late final MediaRecorder _recorder;
   late final ThumbnailGenerator _thumbnailGenerator;
+  MediaEncryptionService? _encryptionService;
+  EncryptionKeyManager? _encryptionKeyManager;
+  late final MediaRepository _mediaRepository;
 
   /// Native items processed per MethodChannel call.
   ///
@@ -287,6 +299,9 @@ class ImportService implements VaultWorkflow {
           lastErrorCode = ImportErrorCode.transferFailed;
           emit();
         }
+
+        await _encryptRecordedFiles(recorded);
+
         for (final record in recorded) {
           final job = record.outcome.job;
           final deferredThumbnailJob = ThumbnailJob(
@@ -359,6 +374,35 @@ class ImportService implements VaultWorkflow {
         'Import completed: imported=$imported, skipped=$skipped, failed=$failed');
     onProgress?.call(done);
     return done;
+  }
+
+  Future<void> _encryptRecordedFiles(List<RecordedHide> recorded) async {
+    if (recorded.isEmpty) return;
+    final encryptionService = _encryptionService;
+    final keyManager = _encryptionKeyManager;
+    if (encryptionService == null || keyManager == null) return;
+
+    final kek = keyManager.getKey();
+    if (kek == null) return;
+
+    for (final record in recorded) {
+      try {
+        final result = await encryptionService.encryptFile(
+          filePath: record.item.privatePath,
+          kek: kek,
+        );
+        // Update the media record with the encrypted DEK
+        await _mediaRepository.updateEncryptedDek(
+          record.item.id,
+          result.encryptedDekBase64,
+        );
+      } catch (e, stack) {
+        AppLogger.e(
+          'ImportService',
+          '_encryptRecordedFiles failed for ${record.item.id}: $e\n$stack',
+        );
+      }
+    }
   }
 
   /// Unhide one item through the injected reveal pipeline.

@@ -483,4 +483,60 @@
 - 自检: 输出的行号/行首内容与 `git grep -n` 给的行号对得上；报 `Missing type name` 就是踩了 ②
 - 首次记录: 2026-10-10
 
+## PIT-031 `File.readAsBytesSync()` 读整个文件只为了判断头部 → OOM（35GB 文件直接崩）
+- 触发条件: 用 `readAsBytesSync()` / `readAsBytes()` 读文件，只为了检查前几个字节的魔数
+- 错误现象: 35GB 视频文件 `readAsBytesSync()` → 进程物理内存爆到几十 GB → OOM/系统杀进程；
+  退一步讲即使没崩，读 35GB 进内存也要几十秒，而实际只需要前 12~32 字节
+- 正确做法: 用 `RandomAccessFile`（`file.openSync(mode: FileMode.read)`）只读需要的字节：
+  ```dart
+  final raf = file.openSync(mode: FileMode.read);
+  final bytes = Uint8List(32);
+  final read = raf.readIntoSync(bytes);
+  raf.closeSync();
+  ```
+  32 字节足以覆盖 JPEG/PNG/MP4/WebM/MKV 的所有常见魔数 + AES-GCM nonce（12 字节）
+- 反例（别这么写）: `final bytes = file.readAsBytesSync();` — 即使后面只取 `bytes.sublist(0, 12)`，
+  `readAsBytesSync()` 已经把整个文件装进内存了
+- 自检: 对一个大文件（1GB+）跑 `looksEncrypted()` 如果耗时超过 1 毫秒 ⇒ 用了全量读取
+- 首次记录: 2026-10-13（`media_encryption_service.dart` 的 `looksEncrypted()`，已修复）
 
+## PIT-032 `Future<String>` 返回值类型强制密文路径返回 → 调用方无感知地拿到密文传给播放器
+- 触发条件: Viewers/播放器需要从数据库拿到文件路径来播放；函数签名为 `Future<String>`，
+  而加密文件需要在"播放前透明解密成临时文件"——但解密可能失败（KEK 缺失/认证失败）
+- 错误现象: 原 `_resolveDisplayPath` 返回类型是 `Future<String>`，KEK 缺失或解密失败时
+  "兜底"返回 `item.privatePath`（加密密文路径）→ 播放器/外部播放器用密文解码 → 画面全噪点或直接崩溃。
+  `catch` 块也只是 log 完继续 return 密文路径，与失败分支行为一致——都是埋雷
+- 正确做法: 返回类型改为 `Future<String?>`，失败一律 `return null`；
+  **所有**调用方必须处理 null 分支（显示错误提示 / SnackBar / 不启动播放器），
+  绝不能让密文字节流进解码器
+- 反例: `if (kek == null) return item.privatePath;` — 这等于"检测到问题后绕过去了"；
+  `try { ... } catch (e) { log(e); } return item.privatePath;` — 同上
+- 自检: `grep -n "return.*privatePath"` 查看器/播放器文件 → 这些 return 是否发生在解密失败分支？
+  如果是，每个都要改成 null + 错误态
+- 首次记录: 2026-10-13（`viewer_screen.dart` 的 `_resolveDisplayPath`，已修复；
+  同一次排查还修复了 `_syncVideoBody` 和 `_openExternal` 两个调用方）
+
+## PIT-033 改 PopupMenuButton 菜单项时只改了一个界面忘记同步另一个
+- 触发条件: viewer 和 visible/gallery_preview 各有一个长得几乎一模一样的三个点菜单
+  （`PopupMenuButton<String>`），菜单项列表非常接近（都有「内部播放(libVLC)」「内部播放(ExoPlayer)」
+  「打开方式」「信息」等），但它们是**两份独立代码**，分别在不同文件里：
+  - `lib/presentation/viewer/viewer_screen.dart` → `PopupMenuButton<String>(`（第 900 行附近）
+  - `lib/presentation/visible/gallery_preview_screen.dart` → `PopupMenuButton<String>(`（第 685 行附近）
+- 错误现象: 在 viewer 的菜单里加了新功能→只改了 `viewer_screen.dart`，忘了 `gallery_preview_screen.dart`
+  里也有一个外观相同、入口不同的同名菜单→用户从可见库预览页打开三个点看不到新功能→
+  以为是"没生效"或"bug"，来回排查几轮才发现是**改错了文件/漏了同步**
+- 正确做法: 任何涉及三个点菜单的改动，改完一个文件后立刻 grep 全仓搜 `PopupMenuButton`，
+  确认所有实例都同步了：
+  ```bash
+  git grep -n "PopupMenuButton" lib/
+  ```
+  输出应该是两个文件，确认每个文件的菜单项列表中新增的通用功能项一致
+  （注意菜单项不完全相同——gallery_preview 没有「播放全部」等入口，但**新增的通用功能**
+  如加密状态标记/还原入口等，两份菜单都要同步考虑）。
+- 反例: 在 viewer 的 `PopupMenuButton(onSelected: (value) { ...` 里加了
+  `'reveal'` / `'toggleEncryption'` case，构建完拿真机验证只在 viewer 里能找到，
+  从可见库预览打开同一个文件却没有——就是因为 `gallery_preview_screen.dart` 的菜单
+  根本没被改过。
+- 自检: 改完菜单后 `git diff --stat` 应该显示两个文件都被修改；如果只有一个 `.dart` 文件
+  被改而改动涉及三个点菜单项，停一下——大概率漏了另一个。
+- 首次记录: 2026-10-13（基于用户反馈的"三个点菜单改错地方"模式）

@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import '../../../domain/models/media_item.dart';
 import '../../repositories/media_repository.dart';
 import '../hide_naming.dart';
+import '../media_encryption_service.dart';
+import '../encryption_key_manager.dart';
 import '../media_rename_service.dart';
 import '../media_store_service.dart';
 import 'asset_gateway.dart';
@@ -20,17 +22,23 @@ class VaultRevealRunner {
     required MediaStoreService mediaStore,
     required AssetGateway assetGateway,
     required FileSystemGateway fileSystem,
+    MediaEncryptionService? encryptionService,
+    EncryptionKeyManager? encryptionKeyManager,
   })  : _media = mediaRepository,
         _renamer = renamer,
         _mediaStore = mediaStore,
         _assets = assetGateway,
-        _files = fileSystem;
+        _files = fileSystem,
+        _encryptionService = encryptionService,
+        _encryptionKeyManager = encryptionKeyManager;
 
   final MediaRepository _media;
   final MediaRenameService _renamer;
   final MediaStoreService _mediaStore;
   final AssetGateway _assets;
   final FileSystemGateway _files;
+  final MediaEncryptionService? _encryptionService;
+  final EncryptionKeyManager? _encryptionKeyManager;
 
   static const int nativeBatchChunk = 8;
 
@@ -42,6 +50,8 @@ class VaultRevealRunner {
     if (session.isCancelled) return false;
     final visiblePath = await _resolveTarget(item);
     if (visiblePath == null || session.isCancelled) return false;
+
+    await _decryptIfNeeded(item);
 
     final taken = item.dateTaken;
     final takenSec =
@@ -195,6 +205,12 @@ class VaultRevealRunner {
           : offset + nativeBatchChunk;
       final chunk = prepared.sublist(offset, end);
       currentName = chunk.last.item.originalName;
+
+      for (final job in chunk) {
+        if (session.isCancelled) break;
+        await _decryptIfNeeded(job.item);
+      }
+
       emit();
 
       final results = await _batchResults(chunk);
@@ -430,6 +446,44 @@ class VaultRevealRunner {
       return ImportErrorCode.timeout;
     }
     return ImportErrorCode.transferFailed;
+  }
+
+  Future<void> _decryptIfNeeded(MediaItem item) async {
+    final encryptedDekBase64 = item.encryptedDek;
+    if (encryptedDekBase64 == null || encryptedDekBase64.isEmpty) return;
+    final encryptionService = _encryptionService;
+    final keyManager = _encryptionKeyManager;
+    if (encryptionService == null || keyManager == null) return;
+
+    final kek = keyManager.getKey();
+    if (kek == null) return;
+
+    try {
+      final dek = await encryptionService.decryptDek(
+        encryptedDekBase64: encryptedDekBase64,
+        kek: kek,
+      );
+      if (dek == null) return;
+
+      // Decrypt to a temp file, then atomically replace the encrypted file
+      // before native unhide transfers it.
+      final tempPath = await encryptionService.decryptToTempFile(
+        filePath: item.privatePath,
+        dek: dek,
+      );
+      try {
+        await _files.delete(item.privatePath);
+        await _files.rename(tempPath, item.privatePath);
+      } catch (e) {
+        // If rename fails, copy + delete temp
+        await _files.copy(tempPath, item.privatePath);
+        await _files.delete(tempPath);
+      }
+      AppLogger.d('VaultRevealRunner', 'Decrypted: ${item.privatePath}');
+    } catch (e, stack) {
+      AppLogger.e('VaultRevealRunner',
+          '_decryptIfNeeded failed for ${item.id}: $e\n$stack');
+    }
   }
 
   static Future<T> _withTimeout<T>(

@@ -73,6 +73,13 @@
 - 图案锁 / PIN 锁 + 生物识别（指纹/面部）
 - 可选 `FLAG_SECURE` 防截图录屏，或应用预览遮挡
 - 可配离开后自动锁定时间
+- **AES-256-GCM 文件加密**（仿华为保密柜双层密钥架构）：
+  - 导入私密仓库的媒体文件自动加密；设置页可批量加密已有未加密文件
+  - KEK（密钥加密密钥）由用户密码经 PBKDF2 派生 → 加密保护 DEK（数据密钥，存数据库）→ DEK 加密媒体文件
+  - Android 硬件加速（AES-NI / ARMv8 crypto extensions），1MB 分块流式加解密
+  - 密钥仅存内存，锁屏时立即清除；KEK 持久化到 FlutterSecureStorage（Android Keystore 硬件保护）
+  - 临时文件 + 原子 rename，加解密中途崩溃不损坏原始文件
+  - 向后兼容：无 `encrypted_dek` 的旧文件视为明文，正常浏览
 
 ### 导入与备份
 
@@ -179,6 +186,7 @@ adb install -r -d privi-<version>.apk # 允许版本号降级
 | `pubspec.yaml` 版本号不递增 | `ISSUE-005` |
 | 私密相册滑动操作 / 进度条时间显示的取舍 | `ADR-024` / `ADR-025` |
 | Gradle 守护进程消失 / `OutOfMemoryError (arena.cpp)` | `ISSUE-004`（编译前内存回收） |
+| 加密文件打不开/播放器崩溃 / 批量加密 OOM | `ISSUE-024` / `PIT-031` / `ADR-033` |
 
 本机实测可用的工具链组合（改 `android/settings.gradle.kts` / wrapper 前先看 `memory-bank/decisions.md`）：
 

@@ -735,6 +735,47 @@
   `ISSUE-009`（另一种"秒完"：首帧 PTS 回绕，100% 复现，已修复）
 - 首次记录: 2026-10-10
 
-
-
-
+## ISSUE-024 加密文件查看链路三个临界缺陷：KEK 缺失返回密文→播放器崩溃、`looksEncrypted` 全量读文件→OOM、锁屏后 KEK 竞态注入
+- 状态: 已修复（2026-10-13 排查并修复，均为加密功能上线前的 proactive 隐患扫描）
+- 症状 / 现场:
+  ① 锁屏/指纹未加载 KEK 时，viewer 打开加密文件 → 播放器拿到密文字节流 → 解码画面全噪点或崩溃；
+  ② 批量加密前检查 `looksEncrypted(file)` → 35GB 视频 `readAsBytesSync()` 撑爆内存 → OOM；
+  ③ PBKDF2 密钥派生异步回调在用户锁屏**之后**完成 → `setKey(kek)` 把 KEK 注入已锁定的内存 → 状态不一致。
+- 复发判据（一条命令定论）:
+  ```bash
+  # 缺陷①：_resolveDisplayPath 返回类型是否为 Future<String?>、null 分支是否每个调用方都处理
+  git grep -n "Future<String> _resolveDisplayPath\|return item.privatePath" lib/presentation/viewer/
+  # 缺陷②：looksEncrypted 是否用了 readAsBytesSync
+  git grep -n "readAsBytesSync" lib/data/services/media_encryption_service.dart
+  # 缺陷③：lock() 后是否有 gen counter 防异步注入
+  git grep -n "_kekGen" lib/application/lock/
+  ```
+- 根因:
+  ① `_resolveDisplayPath` 原返回类型 `Future<String>`，KEK 缺失/解密失败时"兜底"
+     `return item.privatePath`（密文路径）→ 调用方（`_syncVideoBody` / `_openExternal`）无感知；
+  ② `looksEncrypted()` 只需判断前 12 字节（AES-GCM nonce），但实现用 `file.readAsBytesSync()`
+     把整个文件读进 `Uint8List`——文件多大内存就多大；
+  ③ `lock()` 调用 `encryptionKeyManager.clear()` 同步清内存 KEK，但 `security.deriveEncryptionKey(secret)`
+     是异步的（PBKDF2 210k 迭代约 0.5-2s），`.then()` 回调可能在 lock 之后把 KEK 写回内存。
+- 修法:
+  ① `_resolveDisplayPath` → `Future<String?>`，所有失败路径 `return null`；
+     `_syncVideoBody`: null → 设 `_videoError` + 错误提示不走 `NativeVideoController.create`；
+     `_openExternal`: null → SnackBar 提示 + return；
+     `initState` 的 pre-resolve（`line 105`）：null 静默跳过（后续 `_syncVideo` 会二次尝试并展示错误）。
+  ② `looksEncrypted` 改用 `RandomAccessFile` 只读 32 字节（`openSync` + `readIntoSync`），
+     提取 `_looksLikePlainMedia()` 静态方法统一判 JPEG/PNG/MP4/WebM/MKV 魔数，语义翻转
+     （原 returns `false` = 明文 → 现 `_looksLikePlainMedia` returns `true` = 明文，外层取反）。
+  ③ `LockController` 新增 `int _kekGen = 0` generation counter：
+     `lock()` 第一行 `_kekGen++`（在 `clear()` 之前）；`_deriveAndStoreEncryptionKey` 里
+     `final gen = ++_kekGen` → `.then()` 里 `if (gen != _kekGen) return;` 丢弃过期回调。
+  ④ 附加修复：临时文件名加 8 位安全随机数后缀（`Random.secure().nextInt(0xFFFFFFFF).toRadixString(16)`），
+     防同毫秒并发碰撞。
+- 反例 / 易误判:
+  - "返回类型改成 nullable 太麻烦，不如回到前面加个判断"——原来的 `if (kek == null) return item.privatePath`
+    正是这种"判断后绕过"的思路，它让调用方永远不知道发生了失败；
+  - "`readAsBytesSync()` 就一行，改它干啥"——一行能让 35GB 文件 OOM；
+  - 把 KEK 竞态当"理论上的问题"——PBKDF2 210k 迭代慢机可到 2 秒，期间用户完全可能切后台/自动锁屏，
+    竞态窗口真实存在。
+- 相关文件: `lib/presentation/viewer/viewer_screen.dart`、`lib/data/services/media_encryption_service.dart`、
+  `lib/application/lock/lock_controller.dart`
+- 首次记录: 2026-10-13

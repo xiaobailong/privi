@@ -731,4 +731,45 @@
   `lib/presentation/player/player_screen.dart`、`lib/application/player/player_controller.dart`（保持连播）
 - 首次记录: 2026-10-10
 
-
+## ADR-033 AES-256-GCM 文件加密：仿华为保密柜双层密钥架构（KEK / DEK），硬件加速分块加解密
+- 日期: 2026-10-13 | 状态: 已采纳
+- 背景: 私密仓库当前仅靠 `.nomedia` 目录隐藏，媒体文件以明文存放，其他程序仍可扫描到。
+  需要真正的文件级加密，同时满足三个约束：①大文件（35GB 视频）加密不能 OOM；
+  ②解密必须在 1~2 秒内完成（用户打开视频的容忍上限）；
+  ③指纹/密码/图案多种解锁方式共用同一密钥体系。
+- 决策:
+  ① **双层密钥**：KEK（密钥加密密钥）= 用户密码经 **PBKDF2**（210000 迭代、SHA-256、32 字节）派生，
+     存于 FlutterSecureStorage（Android Keystore 硬件保护）；DEK（数据密钥）= 256 位安全随机数，
+     经 KEK 用 AES-GCM 加密后存数据库 `encrypted_dek` 列，明文仅存内存；实际文件用 DEK 加密。
+  ② **硬件加速**：文件加解密走 Android native（`javax.crypto.Cipher`，自动启用 AES-NI / ARMv8 extensions）；
+     纯 Dart cryptography 包只有 30-80 MB/s，native Cipher 可达 500-2000 MB/s。
+  ③ **1MB 分块流式读写**：不论文件多大（35GB），内存占用恒定 ~1MB，不会 OOM。
+  ④ **AES-256-GCM 认证加密**：12 字节随机 nonce + 16 字节 auth tag，每次加密生成新 nonce；
+     解密时 GCM 自动校验 auth tag，篡改/损坏文件立即失败。
+  ⑤ **原子临时文件**：加密/解密先写临时文件，成功后 `rename()` 原子替换；中途崩溃不损坏原始文件。
+  ⑥ **KEK 生命周期**：内存仅存一份 `_kek`，`lock()` 时立即清空（同步）并异步删 FlutterSecureStorage 条目；
+     `_kekGen` generation counter 防异步回调在锁屏后注入 KEK。
+  ⑦ **指纹兼容**：所有手指共用同一 KEK（指纹仅做 Android BiometricPrompt 身份认证，不参与密钥派生），
+     不存在"不同手指无法解密"的问题。
+  ⑧ **向后兼容**：`encrypted_dek IS NULL` 的行视为明文旧文件，`looksEncrypted()` 校验文件头魔数防重复加密。
+- 理由: 双层密钥是华为保密柜的成熟架构——修改密码只需重加密 DEK（几百字节），
+  不用重加密所有媒体文件；每个文件独立 DEK 意味着单文件泄露不暴露其他文件密钥。
+  硬件加速 + 分块流式读写是处理大文件的唯一可行方案：纯 Dart 全量内存方式 35GB 至少 OOM。
+- 备选与为何不选:
+  ① **纯 Dart cryptography 全量内存加解密**：35GB 文件直接 OOM，且速度 30-80 MB/s，35GB 需 7-21 分钟——不可用；
+  ② **单层密钥（直接用密码加密文件）**：改密码要重加密所有文件；每个文件同密钥，批量泄露风险高；
+  ③ **HUKS 硬件密钥注入**：华为真机可通过 HUKS（Hardware Unique Key Store）把 KEK 注入 TEE，
+     密钥永不离片——但需要 HarmonyOS SDK，本应用是纯 Android APK 侧载，暂不引入鸿蒙依赖。
+     当前 FlutterSecureStorage + Android Keystore 的保护级别已满足离线本地应用的安全需求。
+- 影响 / 约束:
+  - 新导入文件自动加密；设置页「Encrypt Existing Files」可批量加密已有明文文件（需解锁后操作）；
+  - viewer 解密为临时文件，看完自动清理；`vault_reveal_runner` 还原时先解密再移动；
+  - **新增任何"读文件路径"的代码都不能直接读 `item.privatePath`**——必须经过
+    `_resolveDisplayPath()`（或等价的解密→临时文件链），否则会拿到密文；
+  - schema v8→v9 迁移新增 `encrypted_dek` 列（`TEXT, NULL`），不破坏已有数据；
+  - `looksEncrypted()` 只读前 32 字节做启发式检测（`PIT-031` 的教训），不可再用全量读取。
+- 相关文件: `lib/data/services/media_encryption_service.dart`、`encryption_key_manager.dart`、
+  `native_crypto_service.dart`、`android/.../CryptoHandler.kt`、`lib/data/db/database.dart`(v8→v9)、
+  `lib/presentation/settings/settings_screen.dart`(batch encrypt)、
+  `lib/presentation/viewer/viewer_screen.dart`(transparent decrypt)
+- 首次记录: 2026-10-13

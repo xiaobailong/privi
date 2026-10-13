@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.memory() : super(NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -51,6 +51,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 8) {
             await _ensurePlayCountSchema();
           }
+          if (from < 9) {
+            await _ensureEncryptedDekColumn();
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -62,6 +65,7 @@ class AppDatabase extends _$AppDatabase {
           final repairedOrganizer = await _ensureAlbumOrganizerSchema();
           final repairedSourceMetadata = await _ensureSourceMetadataSchema();
           final repairedPlayCount = await _ensurePlayCountSchema();
+          final repairedEncryptedDek = await _ensureEncryptedDekColumn();
           // System albums were seeded with mangled placeholder names; repair
           // them on every open (no schema bump required).
           final repairedSystemNames = await _ensureSystemAlbumNames();
@@ -70,13 +74,14 @@ class AppDatabase extends _$AppDatabase {
               repairedOrganizer ||
               repairedSourceMetadata ||
               repairedPlayCount ||
+              repairedEncryptedDek ||
               repairedSystemNames) {
             AppLogger.d(
               'Database',
-              'Database v8 safety repair applied: '
+              'Database v9 safety repair applied: '
                   'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
                   'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
-                  'play_count=$repairedPlayCount, '
+                  'play_count=$repairedPlayCount, encrypted_dek=$repairedEncryptedDek, '
                   'system_album_names=$repairedSystemNames',
             );
           }
@@ -179,6 +184,17 @@ class AppDatabase extends _$AppDatabase {
       changed = true;
     }
     return changed;
+  }
+
+  /// v9: AES-256-GCM encrypted DEK for file encryption.
+  /// Null means the file is stored in plaintext (legacy).
+  Future<bool> _ensureEncryptedDekColumn() async {
+    final names = await _columnNames('media_items');
+    if (names.contains('encrypted_dek')) return false;
+    await customStatement(
+      'ALTER TABLE media_items ADD COLUMN encrypted_dek TEXT NULL',
+    );
+    return true;
   }
 
   Future<Set<String>> _columnNames(String table) async {
@@ -416,6 +432,12 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  Future<void> updateMediaEncryptedDek(String id, String? encryptedDek) {
+    return (update(mediaItems)..where((t) => t.id.equals(id))).write(
+      MediaItemsCompanion(encryptedDek: Value(encryptedDek)),
+    );
+  }
+
   Future<List<MediaItemRow>> listActiveMediaRows() {
     return (select(mediaItems)..where((t) => t.deletedAt.isNull())).get();
   }
@@ -429,6 +451,13 @@ class AppDatabase extends _$AppDatabase {
   /// Launch integrity repair walks these so a mis-filed video is corrected in
   /// the recycle bin too.
   Future<List<MediaItemRow>> listAllMediaRows() => select(mediaItems).get();
+
+  /// Active media rows that have not been encrypted yet (encryptedDek is null).
+  Future<List<MediaItemRow>> listUnencryptedActiveMediaRows() {
+    return (select(mediaItems)
+          ..where((t) => t.deletedAt.isNull() & t.encryptedDek.isNull()))
+        .get();
+  }
 
   Future<void> updateMediaRatings(List<String> ids, int rating) async {
     if (ids.isEmpty) return;

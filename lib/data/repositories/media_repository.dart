@@ -68,6 +68,7 @@ class MediaRepository {
       contentDigest: Value(item.contentDigest),
       playCount: Value(item.playCount),
       lastPlayedAt: Value(item.lastPlayedAt),
+      encryptedDek: Value(item.encryptedDek),
     );
   }
 
@@ -100,6 +101,9 @@ class MediaRepository {
   }) =>
       _db.updateMediaDates(id, dateTaken: dateTaken, dateAdded: dateAdded);
 
+  Future<void> updateEncryptedDek(String id, String? encryptedDek) =>
+      _db.updateMediaEncryptedDek(id, encryptedDek);
+
   /// Playback history: one bump per play. Random playback weights its order by
   /// the counter, so the items that already had their turn come up less often.
   Future<void> recordPlay(String id) =>
@@ -111,6 +115,12 @@ class MediaRepository {
 
   Future<List<MediaItem>> listActive() async {
     final rows = await _db.listActiveMediaRows();
+    return rows.map(_map).toList(growable: false);
+  }
+
+  /// Active items that haven't been encrypted yet (encryptedDek is null).
+  Future<List<MediaItem>> listUnencrypted() async {
+    final rows = await _db.listUnencryptedActiveMediaRows();
     return rows.map(_map).toList(growable: false);
   }
 
@@ -213,6 +223,7 @@ class MediaRepository {
         contentDigest: r.contentDigest,
         playCount: r.playCount,
         lastPlayedAt: r.lastPlayedAt,
+        encryptedDek: r.encryptedDek,
       );
 
   List<MediaItem> _mapList(List<MediaItemRow> rows) =>

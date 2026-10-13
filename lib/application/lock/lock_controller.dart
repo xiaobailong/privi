@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/security_service.dart';
 import '../../domain/enums.dart';
 import '../providers.dart';
@@ -255,6 +256,7 @@ class LockController extends Notifier<VaultLockState> {
         clearError: true,
         lockKind: SecurityService.kindPattern,
       );
+      _deriveAndStoreEncryptionKey(security, pattern);
       return true;
     }
     await _showCredentialFailure(VaultLockErrorCode.wrongPattern);
@@ -274,6 +276,7 @@ class LockController extends Notifier<VaultLockState> {
         pinLength: pin.length,
         lockKind: SecurityService.kindPin,
       );
+      _deriveAndStoreEncryptionKey(security, pin);
       return true;
     }
     await _showCredentialFailure(VaultLockErrorCode.wrongPin);
@@ -303,6 +306,18 @@ class LockController extends Notifier<VaultLockState> {
     if (ok) {
       _cancelAutoLockTimer();
       state = state.copyWith(status: LockStatus.unlocked, clearError: true);
+      // Biometric only proves identity; the KEK was persisted to secure
+      // storage during the last pattern/pin unlock.  Retrieve it now.
+      final keyManager = ref.read(encryptionKeyManagerProvider);
+      final persisted = await keyManager.retrievePersistedKek();
+      if (persisted != null) {
+        await keyManager.setKey(persisted);
+      } else {
+        AppLogger.e('LockController',
+            'Biometric OK but no persisted KEK found — '
+            'user must unlock with pattern/pin first to derive the '
+            'encryption key before biometric unlock can load it.');
+      }
       return true;
     }
     return false;
@@ -448,7 +463,21 @@ class LockController extends Notifier<VaultLockState> {
     _cancelAutoLockTimer();
     _cancelLockoutTimer();
     _externalPlayerHandoffExpected = false;
+    _kekGen++;
+    ref.read(encryptionKeyManagerProvider).clear();
     state = state.copyWith(status: LockStatus.locked, clearError: true);
+  }
+
+  int _kekGen = 0;
+
+  void _deriveAndStoreEncryptionKey(SecurityService security, String secret) {
+    final gen = ++_kekGen;
+    security.deriveEncryptionKey(secret).then((kek) async {
+      if (gen != _kekGen) return;
+      if (kek != null && ref.mounted) {
+        await ref.read(encryptionKeyManagerProvider).setKey(kek);
+      }
+    });
   }
 
   void clearError() {

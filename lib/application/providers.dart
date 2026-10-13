@@ -12,12 +12,14 @@ import '../data/db/database.dart';
 import '../data/repositories/album_repository.dart';
 import '../data/repositories/media_repository.dart';
 import '../data/services/biometric_service.dart';
+import '../data/services/encryption_key_manager.dart';
 import '../data/services/grid_thumbnail_service.dart';
 import '../data/services/import/asset_gateway.dart';
 import '../data/services/import/file_system_gateway.dart';
 import '../data/services/import_service.dart';
 import '../data/services/intent_service.dart';
 import '../data/services/maintenance_service.dart';
+import '../data/services/media_encryption_service.dart';
 import '../data/services/media_rename_service.dart';
 import '../data/services/media_store_service.dart';
 import '../data/services/media_thumbnail_service.dart';
@@ -26,6 +28,7 @@ import '../data/services/platform/android_share_source_stager.dart';
 import '../data/services/platform/android_vault_access_adapter.dart';
 import '../data/services/platform/android_vault_workflow_adapter.dart';
 import '../data/services/platform/android_visible_library_adapter.dart';
+import '../data/services/native_crypto_service.dart';
 import '../data/services/security_service.dart';
 import '../data/services/thumbnail_cache.dart';
 import '../data/services/vault_backup_service.dart';
@@ -97,6 +100,20 @@ final shareSourceStagerProvider = Provider<ShareSourceStager>((ref) {
 
 final securityServiceProvider = Provider<SecurityService>((ref) {
   return SecurityService();
+});
+
+final nativeCryptoServiceProvider = Provider<NativeCryptoService>((ref) {
+  return NativeCryptoService();
+});
+
+final encryptionKeyManagerProvider = Provider<EncryptionKeyManager>((ref) {
+  return EncryptionKeyManager();
+});
+
+final mediaEncryptionServiceProvider = Provider<MediaEncryptionService>((ref) {
+  return MediaEncryptionService(
+    nativeCrypto: ref.watch(nativeCryptoServiceProvider),
+  );
 });
 
 final privacyShieldProvider = Provider<PrivacyShield>((ref) {
@@ -184,6 +201,8 @@ final vaultWorkflowProvider = Provider<VaultWorkflow>((ref) {
     albumRepository: albums,
     assetGateway: ref.watch(assetGatewayProvider),
     thumbnailCache: ref.watch(mediaThumbnailCacheProvider),
+    encryptionService: ref.watch(mediaEncryptionServiceProvider),
+    encryptionKeyManager: ref.watch(encryptionKeyManagerProvider),
   );
   return AndroidVaultWorkflowAdapter(android);
 });

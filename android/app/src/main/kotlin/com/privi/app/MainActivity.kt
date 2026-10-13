@@ -472,6 +472,43 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        val crypto = CryptoHandler()
+        MethodChannel(messenger, "com.privi.app/crypto")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "encryptFile" -> {
+                        val filePath = call.argument<String>("filePath")
+                        val dek = call.argument<ByteArray>("dek")
+                        val nonce = call.argument<ByteArray>("nonce")
+                        if (filePath.isNullOrEmpty() || dek == null || nonce == null) {
+                            result.success(mapOf("ok" to false, "error" to "bad_args"))
+                        } else {
+                            runIo(result) { crypto.encryptFile(filePath, dek, nonce) }
+                        }
+                    }
+                    "decryptFile" -> {
+                        val filePath = call.argument<String>("filePath")
+                        val destPath = call.argument<String>("destPath")
+                        val dek = call.argument<ByteArray>("dek")
+                        if (filePath.isNullOrEmpty() || destPath.isNullOrEmpty() || dek == null) {
+                            result.success(mapOf("ok" to false, "error" to "bad_args"))
+                        } else {
+                            runIo(result) { crypto.decryptFile(filePath, destPath, dek) }
+                        }
+                    }
+                    "decryptFileToBytes" -> {
+                        val filePath = call.argument<String>("filePath")
+                        val dek = call.argument<ByteArray>("dek")
+                        if (filePath.isNullOrEmpty() || dek == null) {
+                            result.success(mapOf("ok" to false, "error" to "bad_args"))
+                        } else {
+                            runIo(result) { crypto.decryptFileToBytes(filePath, dek) }
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     override fun onDestroy() {

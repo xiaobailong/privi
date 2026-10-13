@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart' as cryptography;
@@ -29,6 +30,7 @@ class SecurityService {
   static const _kFailCount = 'unlock_fail_count';
   static const _kLockoutUntil = 'unlock_lockout_until';
   static const _kKdfVersion = 'kdf_version';
+  static const _kEncryptionSalt = 'encryption_salt';
 
   static const int legacyIterations = 120000;
   static const int pbkdf2Iterations = 210000;
@@ -184,6 +186,22 @@ class SecurityService {
       key: _kLockoutUntil,
       value: until.millisecondsSinceEpoch.toString(),
     );
+  }
+
+  Future<Uint8List?> deriveEncryptionKey(String secret) async {
+    try {
+      final saltB64 = await _storage.read(key: _kEncryptionSalt);
+      List<int> salt;
+      if (saltB64 == null) {
+        salt = _randomSalt(16);
+        await _storage.write(key: _kEncryptionSalt, value: base64Encode(salt));
+      } else {
+        salt = base64Decode(saltB64);
+      }
+      return await _derivePbkdf2(secret, salt, pbkdf2Iterations);
+    } catch (e) {
+      return null;
+    }
   }
 
   Future<void> _resetFailures() async {

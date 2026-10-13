@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,7 +11,10 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../data/services/maintenance_service.dart';
+import '../../data/services/media_encryption_service.dart';
+import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/vault_backup_service.dart';
+import '../../data/repositories/media_repository.dart';
 import '../../domain/enums.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
@@ -298,6 +303,14 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.enhanced_encryption_outlined),
+            title: const Text('Encrypt Existing Files'),
+            subtitle: const Text(
+              'Encrypt unencrypted files already in the vault',
+            ),
+            onTap: () => _batchEncrypt(context, ref),
+          ),
+          ListTile(
             leading: const Icon(Icons.find_in_page_outlined),
             title: Text(context.l10n.scanOrphans),
             subtitle: Text(context.l10n.scanOrphansSubtitle),
@@ -473,6 +486,177 @@ class SettingsScreen extends ConsumerWidget {
         SnackBar(content: Text(context.l10n.errorWithDetails('$e'))),
       );
     }
+  }
+
+  Future<void> _batchEncrypt(BuildContext context, WidgetRef ref) async {
+    final encryptionService = ref.read(mediaEncryptionServiceProvider);
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final repo = ref.read(mediaRepositoryProvider);
+
+    final kek = keyManager.getKey();
+    if (kek == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vault is locked. Please unlock first.')),
+        );
+      }
+      return;
+    }
+
+    final unencrypted = await repo.listUnencrypted();
+    if (unencrypted.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('All files are already encrypted.')),
+        );
+      }
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Encrypt Existing Files'),
+        content: Text(
+          '${unencrypted.length} file(s) will be encrypted. '
+          'This operation cannot be undone while the vault is locked. '
+          'Proceed?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Encrypt'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+
+    _showEncryptProgress(context, ref, encryptionService, keyManager, repo,
+        unencrypted, kek);
+  }
+
+  void _showEncryptProgress(
+    BuildContext context,
+    WidgetRef ref,
+    MediaEncryptionService encryptionService,
+    EncryptionKeyManager keyManager,
+    MediaRepository repo,
+    List<MediaItem> items,
+    List<int> kek,
+  ) {
+    int completed = 0;
+    int failed = 0;
+    bool cancelled = false;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            Future<void> run() async {
+              for (final item in items) {
+                if (cancelled) break;
+                final kekNow = keyManager.getKey();
+                if (kekNow == null) {
+                  cancelled = true;
+                  break;
+                }
+                try {
+                  final file = File(item.privatePath);
+                  if (!file.existsSync()) {
+                    failed++;
+                  } else {
+                    final result = await encryptionService.encryptFile(
+                      filePath: item.privatePath,
+                      kek: kekNow,
+                    );
+                    await repo.updateEncryptedDek(
+                        item.id, result.encryptedDekBase64);
+                  }
+                } catch (e, stackTrace) {
+                  AppLogger.e('SettingsScreen',
+                      'batch encrypt ${item.id}: $e\n$stackTrace');
+                  failed++;
+                }
+                completed++;
+                setDialogState(() {});
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      failed > 0
+                          ? 'Encrypted $completed file(s), $failed failed.'
+                          : 'Encrypted $completed file(s) successfully.',
+                    ),
+                  ),
+                );
+              }
+            }
+
+            WidgetsBinding.instance.addPostFrameCallback((_) => run());
+
+            final progress = items.isEmpty
+                ? 0.0
+                : completed / items.length;
+            final kekNow = keyManager.getKey();
+            final lockedOut = kekNow == null && completed < items.length;
+            String status;
+            if (lockedOut) {
+              status = 'Vault locked. Operation stopped.';
+            } else if (completed >= items.length) {
+              status = 'Done.';
+            } else {
+              status = 'Encrypting ${completed + 1} of ${items.length}...';
+            }
+
+            return AlertDialog(
+              title: const Text('Encrypting...'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(value: progress),
+                  const SizedBox(height: 16),
+                  Text(status),
+                  if (failed > 0)
+                    Text(
+                      '$failed failed',
+                      style: TextStyle(
+                          color: Theme.of(ctx).colorScheme.error),
+                    ),
+                ],
+              ),
+              actions: lockedOut
+                  ? [
+                      FilledButton(
+                        onPressed: () {
+                          cancelled = true;
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Close'),
+                      ),
+                    ]
+                  : [
+                      TextButton(
+                        onPressed: () {
+                          cancelled = true;
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(context.l10n.cancel),
+                      ),
+                    ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showAbout(

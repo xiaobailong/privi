@@ -22,6 +22,7 @@ class MediaItem {
     this.contentDigest,
     this.playCount = 0,
     this.lastPlayedAt,
+    this.encryptedDek,
   });
 
   final String id;
@@ -59,6 +60,9 @@ class MediaItem {
   final int playCount;
   final DateTime? lastPlayedAt;
 
+  /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
+  final String? encryptedDek;
+
   bool get isDeleted => deletedAt != null;
   bool get isFavorite => rating >= 1;
 
@@ -93,6 +97,7 @@ class MediaItem {
     String? contentDigest,
     int? playCount,
     DateTime? lastPlayedAt,
+    String? encryptedDek,
     bool clearDeletedAt = false,
   }) {
     return MediaItem(
@@ -116,6 +121,7 @@ class MediaItem {
       contentDigest: contentDigest ?? this.contentDigest,
       playCount: playCount ?? this.playCount,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+      encryptedDek: encryptedDek ?? this.encryptedDek,
     );
   }
 }
