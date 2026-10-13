@@ -353,7 +353,7 @@ class MediaEncryptionService {
   }
 
   static bool _bytesMatch(List<int> a, List<int> b) {
-    if (a.length < b.length || b.length < 4) return false;
+    if (a.length < b.length || b.isEmpty) return false;
     for (var i = 0; i < b.length; i++) {
       if (a[i] != b[i]) return false;
     }

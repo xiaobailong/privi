@@ -387,6 +387,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
 
   /// Last playback time; null when the item was never played.
   final DateTime? lastPlayedAt;
+
+  /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
   final String? encryptedDek;
   const MediaItemRow(
       {required this.id,
@@ -686,28 +688,29 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
   }
 
   @override
-  int get hashCode => Object.hash(
-      id,
-      privatePath,
-      originalPath,
-      originalName,
-      mimeType,
-      isVideo,
-      width,
-      height,
-      durationMs,
-      rating,
-      dateAdded,
-      dateTaken,
-      sizeBytes,
-      thumbnailPath,
-      deletedAt,
-      sourcePlatformId,
-      sourceRemovalPending,
-      contentDigest,
-      playCount,
-      lastPlayedAt,
-      encryptedDek);
+  int get hashCode => Object.hashAll([
+        id,
+        privatePath,
+        originalPath,
+        originalName,
+        mimeType,
+        isVideo,
+        width,
+        height,
+        durationMs,
+        rating,
+        dateAdded,
+        dateTaken,
+        sizeBytes,
+        thumbnailPath,
+        deletedAt,
+        sourcePlatformId,
+        sourceRemovalPending,
+        contentDigest,
+        playCount,
+        lastPlayedAt,
+        encryptedDek
+      ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1008,6 +1011,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
           ..write('contentDigest: $contentDigest, ')
           ..write('playCount: $playCount, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
+          ..write('encryptedDek: $encryptedDek, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2103,6 +2107,7 @@ typedef $$MediaItemsTableCreateCompanionBuilder = MediaItemsCompanion Function({
   Value<String?> contentDigest,
   Value<int> playCount,
   Value<DateTime?> lastPlayedAt,
+  Value<String?> encryptedDek,
   Value<int> rowid,
 });
 typedef $$MediaItemsTableUpdateCompanionBuilder = MediaItemsCompanion Function({
@@ -2126,6 +2131,7 @@ typedef $$MediaItemsTableUpdateCompanionBuilder = MediaItemsCompanion Function({
   Value<String?> contentDigest,
   Value<int> playCount,
   Value<DateTime?> lastPlayedAt,
+  Value<String?> encryptedDek,
   Value<int> rowid,
 });
 
@@ -2219,6 +2225,9 @@ class $$MediaItemsTableFilterComposer
 
   ColumnFilters<DateTime> get lastPlayedAt => $composableBuilder(
       column: $table.lastPlayedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get encryptedDek => $composableBuilder(
+      column: $table.encryptedDek, builder: (column) => ColumnFilters(column));
 
   Expression<bool> albumMediaRefs(
       Expression<bool> Function($$AlbumMediaTableFilterComposer f) f) {
@@ -2317,6 +2326,10 @@ class $$MediaItemsTableOrderingComposer
   ColumnOrderings<DateTime> get lastPlayedAt => $composableBuilder(
       column: $table.lastPlayedAt,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get encryptedDek => $composableBuilder(
+      column: $table.encryptedDek,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$MediaItemsTableAnnotationComposer
@@ -2388,6 +2401,9 @@ class $$MediaItemsTableAnnotationComposer
   GeneratedColumn<DateTime> get lastPlayedAt => $composableBuilder(
       column: $table.lastPlayedAt, builder: (column) => column);
 
+  GeneratedColumn<String> get encryptedDek => $composableBuilder(
+      column: $table.encryptedDek, builder: (column) => column);
+
   Expression<T> albumMediaRefs<T extends Object>(
       Expression<T> Function($$AlbumMediaTableAnnotationComposer a) f) {
     final $$AlbumMediaTableAnnotationComposer composer = $composerBuilder(
@@ -2453,6 +2469,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             Value<String?> contentDigest = const Value.absent(),
             Value<int> playCount = const Value.absent(),
             Value<DateTime?> lastPlayedAt = const Value.absent(),
+            Value<String?> encryptedDek = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaItemsCompanion(
@@ -2476,6 +2493,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             contentDigest: contentDigest,
             playCount: playCount,
             lastPlayedAt: lastPlayedAt,
+            encryptedDek: encryptedDek,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2499,6 +2517,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             Value<String?> contentDigest = const Value.absent(),
             Value<int> playCount = const Value.absent(),
             Value<DateTime?> lastPlayedAt = const Value.absent(),
+            Value<String?> encryptedDek = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaItemsCompanion.insert(
@@ -2522,6 +2541,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             contentDigest: contentDigest,
             playCount: playCount,
             lastPlayedAt: lastPlayedAt,
+            encryptedDek: encryptedDek,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
