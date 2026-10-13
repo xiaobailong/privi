@@ -204,6 +204,32 @@ class PlayerController extends Notifier<PlayerUiState> {
     await _onItemEntered();
   }
 
+  /// Removes the current item from the playlist and keeps playing the next one.
+  ///
+  /// Returns true if the playlist still has items after removal, false when it
+  /// became empty (caller should close the player).
+  bool removeCurrent() {
+    final pl = state.playlist;
+    if (pl == null) return false;
+    final removed = pl.removeCurrent();
+    AppLogger.i(
+      'PlayerController',
+      'removeCurrent: removed ${pl.current?.id ?? '-'}, '
+      'remaining=${removed.length}, now at ${removed.current?.id ?? '-'}',
+    );
+    if (removed.isEmpty) {
+      state = const PlayerUiState();
+      return false;
+    }
+    state = state.copyWith(
+      playlist: removed,
+      playing: true,
+      externalHandedOff: false,
+    );
+    unawaited(_onItemEntered());
+    return true;
+  }
+
   /// Called when built-in video finishes or slideshow timer fires.
   Future<void> onItemCompleted() async {
     final item = state.current;

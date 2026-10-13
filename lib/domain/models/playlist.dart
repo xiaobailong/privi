@@ -103,6 +103,53 @@ class Playlist {
     if (hasPrev) cursor--;
   }
 
+  /// Returns a new playlist with the current item removed.
+  ///
+  /// The cursor stays at the same position (now pointing at what used to be
+  /// the next item); if the removed item was the last one, the cursor moves
+  /// to the new last item. Returns an empty playlist when the last item is
+  /// removed.
+  Playlist removeCurrent() {
+    if (items.isEmpty) return this;
+    final currentItem = current;
+    if (currentItem == null) return this;
+    final removeIndex = items.indexWhere((e) => e.id == currentItem.id);
+    if (removeIndex < 0) return this;
+
+    final newItems = <MediaItem>[
+      for (var i = 0; i < items.length; i++)
+        if (i != removeIndex) items[i],
+    ];
+    if (newItems.isEmpty) {
+      return Playlist(items: const [], shuffle: shuffle);
+    }
+
+    final newOrder = <int>[];
+    for (final idx in _order) {
+      if (idx == removeIndex) continue;
+      newOrder.add(idx > removeIndex ? idx - 1 : idx);
+    }
+
+    final newPlayCounts = <String, int>{
+      for (final entry in _playCounts.entries)
+        if (entry.key != currentItem.id) entry.key: entry.value,
+    };
+
+    var newCursor = cursor;
+    if (newCursor >= newOrder.length) {
+      newCursor = newOrder.length - 1;
+    }
+
+    return Playlist._(
+      items: newItems,
+      order: newOrder,
+      shuffle: shuffle,
+      cursor: newCursor,
+      playCounts: newPlayCounts,
+      skipThreshold: skipThreshold,
+    );
+  }
+
   void jumpToItemId(String id) {
     final itemIndex = items.indexWhere((e) => e.id == id);
     if (itemIndex < 0) return;

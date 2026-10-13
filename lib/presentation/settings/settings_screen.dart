@@ -340,11 +340,6 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.delete_forever_outlined),
-            title: Text(context.l10n.emptyRecycleBin),
-            onTap: () => _emptyRecycle(context, ref),
-          ),
-          ListTile(
             key: const ValueKey('settings-export-vault'),
             leading: const Icon(Icons.upload_file_outlined),
             title: Text(context.l10n.exportVault),
@@ -872,37 +867,6 @@ class SettingsScreen extends ConsumerWidget {
     if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
     final gb = mb / 1024;
     return '${gb.toStringAsFixed(2)} GB';
-  }
-
-  Future<void> _emptyRecycle(BuildContext context, WidgetRef ref) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(context.l10n.emptyRecycleBinTitle),
-        content: Text(context.l10n.emptyRecycleBinBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(context.l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(context.l10n.empty),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    final media = ref.read(mediaRepositoryProvider);
-    final items = await ref.read(databaseProvider).watchRecycleBin().first;
-    for (final r in items) {
-      await media.purge(r.id);
-    }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.purgedItems(items.length))),
-      );
-    }
   }
 
   Future<void> _startBackup(

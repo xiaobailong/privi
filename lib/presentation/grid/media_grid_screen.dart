@@ -332,6 +332,68 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     );
   }
 
+  Future<void> _emptyRecycleBin() async {
+    final items = await ref.read(databaseProvider).watchRecycleBin().first;
+    if (items.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.recycleBinEmpty)),
+      );
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.l10n.emptyRecycleBinTitle),
+        content: Text(context.l10n.emptyRecycleBinBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(context.l10n.empty),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final media = ref.read(mediaRepositoryProvider);
+    final navigator = Navigator.of(context);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                const SizedBox.square(
+                  dimension: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 16),
+                Text(context.l10n.deleteForever),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    try {
+      await media.purgeMany([for (final r in items) r.id]);
+    } finally {
+      if (navigator.canPop()) navigator.pop();
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.purgedItems(items.length))),
+    );
+  }
+
   Future<void> _purgeSelected() async {
     final ids = ref.read(selectionControllerProvider).toList();
     if (ids.isEmpty) return;
@@ -797,6 +859,18 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
                 ),
                 onTap: () => Navigator.pop(ctx, 'sort'),
               ),
+              if (_isRecycle)
+                ListTile(
+                  leading: const Icon(
+                    Icons.delete_sweep_outlined,
+                    color: Colors.white70,
+                  ),
+                  title: Text(
+                    context.l10n.emptyRecycleBin,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'empty'),
+                ),
               const SizedBox(height: 8),
             ],
           ),
@@ -813,6 +887,8 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
         _toggleSearch();
       case 'sort':
         await _pickSort();
+      case 'empty':
+        await _emptyRecycleBin();
     }
   }
 
