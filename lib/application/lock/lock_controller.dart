@@ -607,7 +607,8 @@ class LockController extends Notifier<VaultLockState> {
     _cancelLockoutTimer();
     _externalPlayerHandoffExpected = false;
     _kekGen++;
-    ref.read(encryptionKeyManagerProvider).clear();
+    // Only clear in-memory KEK; keep persisted copy for biometric unlock.
+    ref.read(encryptionKeyManagerProvider).clearMemory();
     state = state.copyWith(status: LockStatus.locked, clearError: true);
   }
 

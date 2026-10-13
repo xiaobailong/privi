@@ -814,3 +814,64 @@
 - 相关文件: `lock_controller.dart`、`media_encryption_service.dart`、`viewer_screen.dart`、
   `database.dart`、`media_repository.dart`、`app_localizations.dart`
 - 首次记录: 2026-10-13（第三次全量审计，已修复）
+
+## ISSUE-026 第四次审计：DEK 旋转原子性+幂等性+有序性缺陷
+- 摘要: `_rotateAllDeks` 在三个维度上存在断层：oldKek 可为 null → 静默跳过旋转；
+  非幂等 → 中断重入时用新 KEK 加密已旋转的条目；三个改密入口 `setNewCredentials` 先于
+  `_rotateAllDeks` → 旧 KEK 先被覆盖 → 旋转必然失败
+- 根因（按发现顺序）:
+  ① **PIT-038 oldKek 为空时静默跳过**：当 KEK 只在 FlutterSecureStorage 中而
+     `keyManager.getKey()` 不在内存时，`_rotateAllDeks` 读到 null → return → DEK 未旋转
+  ② **PIT-039 非幂等**：重入时 `keyManager.getKey()` 已更新为新 KEK，用新 KEK 解密旧 DEK
+     → 失败 → 该条目被跳过 → 旧 DEK 永远不可解 → 文件丢失
+  ③ **PIT-040 顺序错误**：`changePattern`/`changePin`/`migratePinToPattern` 先调
+     `setNewCredentials`（覆盖旧 KEK 派生参数）→ 再调 `_rotateAllDeks` →
+     此时 `_deriveNewKek` 派生的新 KEK ≠ 当前 `keyManager.getKey()` 的旧 KEK →
+     旋转失败率极高
+  ④ **PIT-041 并发解密临时文件泄漏**：viewer 同时刷新多张预览图 → `_decryptPathInternal`
+     无去重 → 同文件并发解密 → 临时文件互相覆盖 → 解码失败
+  ⑤ **PIT-042 死参数**：`_batchEncrypt` 传入 `kek` 参数但循环内重新读 `keyManager.getKey()`
+- 修复:
+  - `_rotateAllDeks` 增加 `oldKek==null` 检查 → `retrievePersistedKek()` 回退
+  - 幂等实现：先试 `newKek` 解密（已旋转），再试 `oldKek` 解密（未旋转）
+  - 三个改密入口重新排序为：验证凭证 → 派生新 KEK → 旋转 DEK → 更新凭证
+  - Viewer 新增 `_decryptFutures` Map 去重并发调
+  - 移除 `_showEncryptProgress` 死参数 `kek`
+- 教训: 状态变更操作（改密码）有三个铁律：
+  1. 可回滚操作在前（验证旧凭证），不可逆操作在后（写入新凭证）
+  2. 幂等性 = 中断安全 = 可重试
+  3. 所有读取旧状态的代码必须在状态变更前执行完
+- 相关文件: `lock_controller.dart`、`viewer_screen.dart`、`settings_screen.dart`
+- 首次记录: 2026-10-13（第四次全量审计，已修复）
+
+## ISSUE-027 第五次审计：生物识别解锁瘫痪 + 孤儿文件 + KEK 竞态
+- 摘要: `lock()` 删除持久化 KEK → 生物识别解锁永久不可用；
+  `purgeMany` 删除文件失败仍删 DB 行 → 孤儿文件残留；
+  `_encryptRecordedFiles` crash 窗口期 DEK 永久丢失（理论风险）；
+  `unlockWithPattern` KEK 派生异步竞态 → UX 抖动
+- 根因（按发现顺序）:
+  ① **PIT-042 (v5) lock() 删除持久化 KEK → 生物识别解锁永久不可用**：
+     `lock()` → `keyManager.clear()` → 删除 FlutterSecureStorage 中的 KEK →
+     每次 auto-lock 或手动 lock 后，`unlockWithBiometric` → `retrievePersistedKek()`
+     返回 null → KEK 加载失败，加密媒体不可访问，必须用图案/PIN 重新解锁
+  ② **PIT-043 purgeMany 文件删除失败后仍删除 DB 行**：
+     遍历删除所有文件 → 无论成败一律 `hardDeleteMediaMany(ids)` → 
+     文件删除失败 = DB 行被删除 = 文件残留在 vault 无人引用
+  ③ **PIT-044 crash 窗口期 DEK 永久丢失**（未修复，已标记）：
+     `encryptFile` 成功 → 在 `updateEncryptedDek` 写入 DB 前 crash → DEK 随进程消失
+  ④ **PIT-045 enterAppAfterSetup PBKDF2 竞态**（未修复，已标记）：
+     `setupPattern(unlockNow: false)` 启动异步 PBKDF2 → 生物识别对话框跳过 →
+     `enterAppAfterSetup` 时 KEK 未写入 → vault unlocked 但无 KEK
+  ⑤ **PIT-046 unlockWithPattern KEK 派生先于状态**（未修复，已标记）：
+     先 `state = unlocked` → 再 fire-and-forget PBKDF2 → 1-2s 窗口内 `getKey() == null`
+- 修复:
+  - `EncryptionKeyManager` 新增 `clearMemory()`（仅清空内存）与 `clear()` 分离
+  - `lock()` 改用 `clearMemory()`，保留持久化 KEK 供生物识别解锁
+  - `purgeMany` 逐个 try/catch 文件删除，仅成功删除的 id 执行 DB 清理
+  - PIT-044/045/046 难度或风险较大，暂不修复，标记为后续专项
+- 教训: 
+  1. `lock()` 的职责是「锁定界面、清空内存密钥」，不是「注销凭据」
+  2. 任何「先删除再记录」的操作都必须考虑删除部分成功/部分失败的情形
+  3. 生物识别依赖于持久化存储中的 KEK——删除它就是删掉生物识别功能
+- 相关文件: `encryption_key_manager.dart`、`lock_controller.dart`、`media_repository.dart`
+- 首次记录: 2026-10-13（第五次全量审计，已修复 3/6，标记 3/6）

@@ -4,6 +4,7 @@ import '../../domain/models/album.dart';
 import '../../domain/models/media_item.dart';
 import '../db/database.dart';
 import '../services/vault_storage_service.dart';
+import '../../core/utils/app_logger.dart';
 
 /// CRUD + streams over [MediaItem]. Maps Drift rows ↔ domain models.
 class MediaRepository {
@@ -150,17 +151,26 @@ class MediaRepository {
     await _db.hardDeleteMedia(id);
   }
 
-  /// Delete files then drop rows in one DB transaction for the set.
+  /// Delete files then drop rows only for files that were successfully removed.
   Future<void> purgeMany(List<String> ids) async {
     if (ids.isEmpty) return;
     final rows = await _db.getMediaByIds(ids);
+    final deletedIds = <String>[];
     for (final row in rows) {
-      await _storage.deleteMediaFiles(
-        privatePath: row.privatePath,
-        thumbnailPath: row.thumbnailPath,
-      );
+      try {
+        await _storage.deleteMediaFiles(
+          privatePath: row.privatePath,
+          thumbnailPath: row.thumbnailPath,
+        );
+        deletedIds.add(row.id);
+      } catch (e) {
+        AppLogger.e('MediaRepository',
+            'purgeMany: failed to delete files for ${row.id}: $e');
+      }
     }
-    await _db.hardDeleteMediaMany(ids);
+    if (deletedIds.isNotEmpty) {
+      await _db.hardDeleteMediaMany(deletedIds);
+    }
   }
 
   /// Drop DB membership/row only (media file already renamed/revealed elsewhere).

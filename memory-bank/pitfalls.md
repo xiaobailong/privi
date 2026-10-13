@@ -659,3 +659,46 @@
   循环内改为每次读 `keyManager.getKey()` —— 参数冗余
 - 修复: 移除死参数，保持循环内实时读取的模式
 - 首次记录: 2026-10-13（第四次审计发现，已修复）
+
+## PIT-042 lock() 删除持久化 KEK → 生物识别解锁永久不可用
+- 触发条件: `lock()` 调用 `keyManager.clear()` → 删除 FlutterSecureStorage 中的 KEK →
+  下一次 `unlockWithBiometric` → `retrievePersistedKek()` 返回 null →
+  KEK 加载失败，加密媒体不可访问。每次 auto-lock 或手动 lock 后必须重新用图案/PIN 解锁。
+- 修复:
+  - `EncryptionKeyManager` 新增 `clearMemory()`：仅清空内存 KEK，保留持久化副本
+  - `lock()` 改用 `clearMemory()` 替代 `clear()`
+  - `clear()` 保留用于凭据重置场景（如 `recoverWithSystemAuth`）
+- 首次记录: 2026-10-13（第五次审计发现，已修复）
+
+## PIT-043 purgeMany 文件删除失败后仍删除 DB 行 → 孤儿文件
+- 触发条件: `purgeMany` 先遍历删除所有行对应的文件，再无条件调用
+  `hardDeleteMediaMany(ids)` 删除所有行。若某个文件的删除失败，DB 行仍被删除
+  → 文件残留在 vault 中无人引用，永久占用存储。
+- 修复: 逐个 try/catch 删除文件，仅收集成功删除的 id 执行 DB 清理。
+  失败的文件保留 DB 行，下次 purge 或 maintenance 可重试。
+- 首次记录: 2026-10-13（第五次审计发现，已修复）
+
+## PIT-044 _encryptRecordedFiles / _batchEncrypt — crash 窗口期 DEK 永久丢失
+- 触发条件: `encryptFile` 成功 → 返回 `encryptedDekBase64` → 在 `updateEncryptedDek`
+  写入 DB 前 app 崩溃 → DEK 在内存中随进程消失 → 文件已加密但无法解密。
+- 风险: 两个 await 之间仅微秒级，实际概率极低，但一旦发生则 100% 数据丢失。
+- 修复: 当前不修复。需要双阶段提交（先写 DB 占位→加密→完成标记）或 journal 机制，
+  属于后续专项优化。
+- 首次记录: 2026-10-13（第五次审计发现，未修复，已标记）
+
+## PIT-045 enterAppAfterSetup — PBKDF2 竞态导致 vault unlocked 但 KEK 为空
+- 触发条件: `setupPattern(unlockNow: false)` 启动异步 PBKDF2 → 用户快速跳过
+  生物识别对话框 → `enterAppAfterSetup` → `retrievePersistedKek()` 时 PBKDF2
+  尚未完成写入 → KEK 为 null → vault unlocked 但加密文件无法访问。
+- 风险: 实践概率极低（PBKDF2 约 1-2 秒，生物识别对话框至少几秒），但理论上存在。
+- 修复: `enterAppAfterSetup` 可增加重试/等待逻辑，或在 UI 层显示"正在加载密钥"。
+  当前未修复，列为次要问题。
+- 首次记录: 2026-10-13（第五次审计发现，未修复，已标记）
+
+## PIT-046 unlockWithPattern/unlock 在 PBKDF2 完成前将状态置为 unlocked
+- 触发条件: `unlockWithPattern` → 先 `state = unlocked` → 再 `_deriveAndStoreEncryptionKey`
+  （fire-and-forget）→ PBKDF2 运行期间内 `keyManager.getKey() == null` →
+  用户浏览加密文件时看到 spinner / broken_image → 1-2 秒后恢复正常。
+- 修复: 可通过在 `_resolveDisplayPath` / `_encryptRecordedFiles` 中轮询等待 KEK
+  就绪来缓解。当前未修复，列为低优先级 UX 问题。
+- 首次记录: 2026-10-13（第五次审计发现，未修复，已标记）

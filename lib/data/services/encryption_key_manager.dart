@@ -40,14 +40,23 @@ class EncryptionKeyManager {
   }
 
   /// Clear KEK from memory AND persistent storage.
+  /// Used for credential reset; do NOT call on normal lock.
   Future<void> clear() async {
     _kek = null;
     _lockKind = null;
     try {
       await _storage.delete(key: _storageKey);
     } catch (e, stack) {
-      AppLogger.e('EncryptionKeyManager', 'Failed to delete persisted KEK: $e\n$stack');
+      AppLogger.e(
+          'EncryptionKeyManager', 'Failed to delete persisted KEK: $e\n$stack');
     }
+  }
+
+  /// Clear KEK from memory only — keep the persisted copy so biometric unlock
+  /// can retrieve it after lock.
+  void clearMemory() {
+    _kek = null;
+    _lockKind = null;
   }
 
   /// Retrieve persisted KEK from secure storage.  Returns null if not found.
