@@ -12,7 +12,9 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../data/repositories/media_repository.dart';
+import '../../data/services/batch_decryption_service.dart';
 import '../../data/services/batch_encryption_service.dart';
+import '../../data/services/encryption_record_repair_service.dart';
 import '../../data/services/filename_encryption_service.dart';
 import '../../data/services/key_backup_service.dart';
 import '../../data/services/maintenance_service.dart';
@@ -31,6 +33,14 @@ import '../../core/utils/app_logger.dart';
 /// encrypted the same file at once, sharing one `.enc_tmp`, which produced
 /// 0-byte media and files that vanished entirely.
 bool _batchEncryptInFlight = false;
+
+/// True while "Decrypt all files" runs.
+bool _decryptAllInFlight = false;
+
+/// The encrypt and decrypt flows both rewrite media files — never let them
+/// overlap (two writers on the same file produced 0-byte media before,
+/// ISSUE-030).
+bool _encryptionFlowBusy() => _batchEncryptInFlight || _decryptAllInFlight;
 
 /// Wake-lock holder id used while "Encrypt existing files" runs.
 const String _encryptScreenHolder = 'settings.batchEncrypt';
@@ -340,6 +350,12 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => _batchEncrypt(context, ref),
           ),
           ListTile(
+            leading: const Icon(Icons.lock_open_outlined),
+            title: Text(context.l10n.decryptAllFiles),
+            subtitle: Text(context.l10n.decryptAllFilesSubtitle),
+            onTap: () => _decryptAll(context, ref),
+          ),
+          ListTile(
             leading: const Icon(Icons.find_in_page_outlined),
             title: Text(context.l10n.scanOrphans),
             subtitle: Text(context.l10n.scanOrphansSubtitle),
@@ -350,6 +366,12 @@ class SettingsScreen extends ConsumerWidget {
             title: Text(context.l10n.repairCaptureDates),
             subtitle: Text(context.l10n.repairCaptureDatesSubtitle),
             onTap: () => _repairCaptureDates(context, ref),
+          ),
+          ListTile(
+            leading: const Icon(Icons.plumbing_outlined),
+            title: Text(context.l10n.repairEncryptionRecords),
+            subtitle: Text(context.l10n.repairEncryptionRecordsSubtitle),
+            onTap: () => _repairEncryptionRecords(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.restore_page_outlined),
@@ -652,7 +674,7 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _batchEncrypt(BuildContext context, WidgetRef ref) async {
     // One flow at a time: two concurrent loops encrypt the same file twice,
     // which produced 0-byte media and vanished files (ISSUE-030).
-    if (_batchEncryptInFlight) {
+    if (_encryptionFlowBusy()) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.encryptingTitle)),
@@ -734,6 +756,271 @@ class SettingsScreen extends ConsumerWidget {
       await PlaybackDisplayService.instance
           .releaseScreenOn(_encryptScreenHolder);
     }
+  }
+
+  /// Reverse of [_batchEncrypt]: decrypts contents and/or restores file names.
+  ///
+  /// Both passes run over parallel queues and share the per-item rules of their
+  /// services (contents: decrypt → verify swap → clear DEK; names: rename →
+  /// verify → repoint the row, rolling back on failure).
+  Future<void> _decryptAll(BuildContext context, WidgetRef ref) async {
+    if (_encryptionFlowBusy()) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.decryptingTitle)),
+        );
+      }
+      return;
+    }
+    _decryptAllInFlight = true;
+
+    final decryption = ref.read(batchDecryptionServiceProvider);
+    final filenames = ref.read(filenameEncryptionServiceProvider);
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final repo = ref.read(mediaRepositoryProvider);
+
+    try {
+      if (keyManager.getKey() == null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.l10n.vaultLockedPleaseUnlock)),
+          );
+        }
+        return;
+      }
+
+      final contentItems = BatchDecryptionService.pendingItems(
+        await repo.listEncrypted(),
+      );
+      final renameItems =
+          FilenameEncryptionService.renamedItems(await repo.listActive());
+      if (contentItems.isEmpty && renameItems.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.l10n.decryptNothingToDo)),
+          );
+        }
+        return;
+      }
+
+      final choice = await showDialog<_DecryptChoice>(
+        context: context,
+        builder: (ctx) => _DecryptOptionsDialog(
+          ciphertextCount: contentItems.length,
+          renameCount: renameItems.length,
+        ),
+      );
+      if (choice == null || !context.mounted) return;
+      if (!choice.decryptContent && !choice.restoreFilenames) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.encryptOptionsPickOne)),
+        );
+        return;
+      }
+
+      await _showDecryptProgress(
+        context: context,
+        decryption: decryption,
+        filenames: filenames,
+        repo: repo,
+        contentItems: contentItems,
+        decryptContent: choice.decryptContent,
+        restoreFilenames: choice.restoreFilenames,
+      );
+
+      // Paths changed (decrypted/renamed files): refresh the cached views.
+      ref.invalidate(albumsProvider);
+      ref.invalidate(vaultSizeBytesProvider);
+    } finally {
+      _decryptAllInFlight = false;
+      // Safety net, mirroring `_batchEncrypt`.
+      await PlaybackDisplayService.instance
+          .releaseScreenOn(_encryptScreenHolder);
+    }
+  }
+
+  /// Runs the selected decryption passes and reports progress in one dialog
+  /// (phase 1 = contents, phase 2 = file names; mirrors `_showEncryptProgress`).
+  Future<void> _showDecryptProgress({
+    required BuildContext context,
+    required BatchDecryptionService decryption,
+    required FilenameEncryptionService filenames,
+    required MediaRepository repo,
+    required List<MediaItem> contentItems,
+    required bool decryptContent,
+    required bool restoreFilenames,
+  }) {
+    final contentTotal = decryptContent ? contentItems.length : 0;
+    var stats = DecryptionStats();
+    var restoreStats = FilenameRestoreStats();
+    var renameTotal = 0;
+    // 0 = content pass, 1 = filename pass (drives the status text/title).
+    var phase = 0;
+    bool cancelled = false;
+    // `run()` must start exactly once: the builder re-runs on every
+    // setDialogState(), so registering the callback without a guard spawned a
+    // new concurrent loop per rebuild (ISSUE-030).
+    var started = false;
+
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            Future<void> run() async {
+              // Keep the screen on: the device locking would background (and may
+              // kill) the app mid-decryption.
+              await PlaybackDisplayService.instance
+                  .holdScreenOn(_encryptScreenHolder);
+              var lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+              void onTick() {
+                final elapsedMs =
+                    DateTime.now().difference(lastUiUpdate).inMilliseconds;
+                if (elapsedMs < _encryptProgressUiIntervalMs) return;
+                lastUiUpdate = DateTime.now();
+                if (ctx.mounted) setDialogState(() {});
+              }
+
+              if (decryptContent && contentItems.isNotEmpty) {
+                stats = await decryption.run(
+                  items: contentItems,
+                  isCancelled: () => cancelled,
+                  onProgress: (live) {
+                    stats = live;
+                    onTick();
+                  },
+                );
+              }
+              if (restoreFilenames && !cancelled) {
+                // Re-read: the rows decrypted above are plaintext now, and files
+                // that were already plaintext may still carry random names.
+                final pending = FilenameEncryptionService.renamedItems(
+                  await repo.listActive(),
+                );
+                renameTotal = pending.length;
+                phase = 1;
+                if (ctx.mounted) setDialogState(() {});
+                restoreStats = await filenames.restoreNames(
+                  items: pending,
+                  isCancelled: () => cancelled,
+                  onProgress: (live) {
+                    restoreStats = live;
+                    onTick();
+                  },
+                );
+              }
+
+              if (ctx.mounted) Navigator.pop(ctx);
+              await PlaybackDisplayService.instance
+                  .releaseScreenOn(_encryptScreenHolder);
+              if (context.mounted) {
+                final lines = <String>[
+                  if (decryptContent)
+                    stats.failed > 0
+                        ? context.l10n
+                            .decryptResultPartial(stats.decrypted, stats.failed)
+                        : context.l10n
+                            .decryptResultSuccess(stats.decrypted),
+                  if (restoreFilenames)
+                    context.l10n.filenameRestoreResult(restoreStats.restored),
+                  if (restoreFilenames && restoreStats.failed > 0)
+                    context.l10n
+                        .filenameRestoreFailedCount(restoreStats.failed),
+                ];
+                if (lines.isNotEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(lines.join('\n'))),
+                  );
+                }
+              }
+            }
+
+            // Start exactly once — the builder re-runs on every rebuild and used
+            // to spawn one extra concurrent loop each time (ISSUE-030).
+            if (!started) {
+              started = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) => run());
+            }
+
+            final contentHandled = stats.handled;
+            final renameHandled = restoreStats.handled;
+            final total = contentTotal + renameTotal;
+            final handled = contentHandled + renameHandled;
+            final progress =
+                total == 0 ? 0.0 : (handled / total).clamp(0.0, 1.0);
+            // `keyLost` is set by whichever queue found the KEK gone — i.e. the
+            // vault was locked while the content pass was running.
+            final lockedOut =
+                stats.keyLost && stats.unhandledOf(contentTotal) > 0;
+            final stageTotal = phase == 1 ? renameTotal : contentTotal;
+            final stageHandled = phase == 1 ? renameHandled : contentHandled;
+            String status;
+            if (lockedOut) {
+              status = context.l10n.vaultLockedOperationStopped;
+            } else if (stageTotal == 0 || stageHandled >= stageTotal) {
+              status = context.l10n.done;
+            } else if (phase == 1) {
+              status = context.l10n.restoringNamesProgress(
+                stageHandled + 1,
+                stageTotal,
+              );
+            } else {
+              status = context.l10n.decryptingProgress(
+                stageHandled + 1,
+                stageTotal,
+              );
+            }
+
+            return AlertDialog(
+              title: Text(
+                phase == 1
+                    ? context.l10n.decryptOptionFilenames
+                    : context.l10n.decryptingTitle,
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(value: progress),
+                  const SizedBox(height: 16),
+                  Text(status),
+                  if (stats.failed > 0)
+                    Text(
+                      context.l10n.encryptFailedCount(stats.failed),
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                    ),
+                  if (restoreStats.failed > 0)
+                    Text(
+                      context.l10n
+                          .filenameRestoreFailedCount(restoreStats.failed),
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                    ),
+                ],
+              ),
+              actions: lockedOut
+                  ? [
+                      FilledButton(
+                        onPressed: () {
+                          cancelled = true;
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(context.l10n.close),
+                      ),
+                    ]
+                  : [
+                      TextButton(
+                        onPressed: () {
+                          cancelled = true;
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(context.l10n.cancel),
+                      ),
+                    ],
+            );
+          },
+        );
+      },
+    );
   }
 
   /// Runs the selected passes and reports progress in one dialog.
@@ -1234,6 +1521,82 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  /// Clears rows that claim to be encrypted while their file is plaintext.
+  ///
+  /// Dry run first (`scan(apply: false)`) so the confirmation dialog can show
+  /// how many rows are actually affected — and so an all-clean vault never asks
+  /// for a pointless confirmation.
+  Future<void> _repairEncryptionRecords(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final service = ref.read(encryptionRecordRepairServiceProvider);
+    final repo = ref.read(mediaRepositoryProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.scanningEncryptionRecords)),
+    );
+    try {
+      final preview = await service.scan(items: await repo.listActive());
+      if (!context.mounted) return;
+
+      if (preview.staleCleared == 0) {
+        final lines = <String>[
+          context.l10n.repairEncryptionNothingFound,
+          if (preview.orphanCiphertext > 0)
+            context.l10n.repairEncryptionOrphans(preview.orphanCiphertext),
+        ];
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(lines.join('\n'))),
+        );
+        return;
+      }
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(context.l10n.repairEncryptionRecords),
+          content: Text(
+            context.l10n.repairEncryptionRecordsBody(preview.staleCleared),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(context.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(context.l10n.continueAction),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+
+      final result =
+          await service.scan(items: await repo.listActive(), apply: true);
+      // Those rows are "unencrypted" again, so cached views/queues change.
+      ref.invalidate(albumsProvider);
+      ref.invalidate(vaultSizeBytesProvider);
+      if (!context.mounted) return;
+      final lines = <String>[
+        context.l10n.repairEncryptionResult(result.staleCleared),
+        if (result.orphanCiphertext > 0)
+          context.l10n.repairEncryptionOrphans(result.orphanCiphertext),
+      ];
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(lines.join('\n'))),
+      );
+    } catch (e, stackTrace) {
+      AppLogger.e(
+          'SettingsScreen', 'repair encryption records: $e\n$stackTrace');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.repairEncryptionFailed)),
+        );
+      }
+    }
+  }
+
   /// Reinstall recovery: re-index files still under `.privateheart_vault`.
   ///
   /// [alsoUnhide] restores them to the public Gallery after indexing.
@@ -1683,5 +2046,125 @@ class _EncryptChoice {
 
   final bool encryptContent;
   final bool renameFilenames;
+}
+
+
+/// Confirmation dialog for "Decrypt all files" — the mirror of
+/// [_EncryptOptionsDialog].
+///
+/// The user picks the content pass (ciphertext → plaintext), the filename pass
+/// (random name → original name), or both.  Defaults stay conservative: the
+/// content pass is ticked when ciphertext exists, the filename pass only when
+/// there is no content work left.  OK is disabled while nothing is ticked, so
+/// the flow can never start with no work (validation).
+class _DecryptOptionsDialog extends StatefulWidget {
+  const _DecryptOptionsDialog({
+    required this.ciphertextCount,
+    required this.renameCount,
+  });
+
+  final int ciphertextCount;
+  final int renameCount;
+
+  @override
+  State<_DecryptOptionsDialog> createState() => _DecryptOptionsDialogState();
+}
+
+class _DecryptOptionsDialogState extends State<_DecryptOptionsDialog> {
+  late bool _content = widget.ciphertextCount > 0;
+  late bool _filenames =
+      widget.ciphertextCount == 0 && widget.renameCount > 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final canPickContent = widget.ciphertextCount > 0;
+    final canPickFilenames = widget.renameCount > 0;
+    final picked =
+        (_content && canPickContent) || (_filenames && canPickFilenames);
+
+    return AlertDialog(
+      title: Text(l10n.decryptAllFiles),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              canPickContent
+                  ? l10n.decryptConfirmationBody
+                  : l10n.decryptFilenamesOnlyBody,
+            ),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              value: _content && canPickContent,
+              onChanged: canPickContent
+                  ? (value) => setState(() => _content = value ?? false)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              title: Text(l10n.decryptOptionContent),
+              subtitle: Text(
+                l10n.decryptOptionContentSubtitle(widget.ciphertextCount),
+              ),
+            ),
+            CheckboxListTile(
+              value: _filenames && canPickFilenames,
+              onChanged: canPickFilenames
+                  ? (value) => setState(() => _filenames = value ?? false)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              title: Text(l10n.decryptOptionFilenames),
+              subtitle: Text(
+                l10n.decryptOptionFilenamesSubtitle(widget.renameCount),
+              ),
+            ),
+            if (!picked)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  l10n.encryptOptionsPickOne,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          onPressed: picked
+              ? () => Navigator.pop(
+                    context,
+                    _DecryptChoice(
+                      decryptContent: _content && canPickContent,
+                      restoreFilenames: _filenames && canPickFilenames,
+                    ),
+                  )
+              : null,
+          child: Text(l10n.decryptAllFiles),
+        ),
+      ],
+    );
+  }
+}
+
+/// What the user ticked in [_DecryptOptionsDialog].
+class _DecryptChoice {
+  const _DecryptChoice({
+    required this.decryptContent,
+    required this.restoreFilenames,
+  });
+
+  final bool decryptContent;
+  final bool restoreFilenames;
 }
 

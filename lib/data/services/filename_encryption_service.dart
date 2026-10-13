@@ -36,6 +36,32 @@ class FilenameRenameStats {
   int get handled => renamed + alreadyEncrypted + missing + plaintext + failed;
 }
 
+/// Live counters of one filename-restore pass (the reverse of
+/// [FilenameRenameStats]).
+class FilenameRestoreStats {
+  int restored = 0;
+  int alreadyReadable = 0;
+  int missing = 0;
+  int failed = 0;
+
+  int get handled => restored + alreadyReadable + missing + failed;
+}
+
+/// Per-item result of one "restore this file name" attempt.
+enum FilenameRestoreOutcome {
+  /// The readable name is back and the row points at it.
+  restored,
+
+  /// Not a random name — nothing to do.
+  alreadyReadable,
+
+  /// No file on disk for this row.
+  missing,
+
+  /// Rename or DB update failed; the random name was kept/restored.
+  failed,
+}
+
 /// Renames ciphertext media to a random, **extension-less** name (ADR-042).
 ///
 /// Why: the vault keeps `<uuid8>_<original-name>.<ext>`, so programs that scan
@@ -85,6 +111,22 @@ class FilenameEncryptionService {
       encryptedItems
           .where((item) => !isEncryptedName(p.basename(item.privatePath)))
           .toList(growable: false);
+
+  /// Items whose file name is a random (extension-less) one — the ones a
+  /// "decrypt file names" pass must restore.
+  static List<MediaItem> renamedItems(List<MediaItem> items) => items
+      .where((item) => isEncryptedName(p.basename(item.privatePath)))
+      .toList(growable: false);
+
+  /// Readable target name for [item]: the stored original name, sanitized to a
+  /// legal single path segment.
+  static String readableNameFor(MediaItem item) {
+    var name = item.originalName.trim();
+    if (name.isEmpty) name = 'privi-media';
+    name = name.replaceAll(RegExp(r'[\\/:*?"<>|\u0000-\u001f]'), '_');
+    if (name == '.' || name == '..') name = 'privi-media';
+    return name;
+  }
 
   static int defaultQueueCount({int? itemCount}) {
     var queues = Platform.numberOfProcessors;
@@ -223,6 +265,121 @@ class FilenameEncryptionService {
       AppLogger.e('FilenameEncryptionService',
           'could not restore $originalPath after a failed rename: $error');
     }
+  }
+
+  /// Reverse pass of [run]: gives the random names back to [items] (ADR-042).
+  ///
+  /// Only names produced by [run] (32 hex chars, no extension) are restored;
+  /// the readable name comes from `media_items.original_name`, so browsing and
+  /// restoring to the gallery stay consistent.
+  Future<FilenameRestoreStats> restoreNames({
+    required List<MediaItem> items,
+    int? queues,
+    bool Function()? isCancelled,
+    void Function(FilenameRestoreStats stats)? onProgress,
+  }) async {
+    final stats = FilenameRestoreStats();
+    if (items.isEmpty) return stats;
+
+    final cancelled = isCancelled ?? _neverCancelled;
+    final workerCount = (queues ?? defaultQueueCount(itemCount: items.length))
+        .clamp(1, items.length);
+    var cursor = 0;
+
+    Future<void> queue() async {
+      while (!cancelled()) {
+        final index = cursor++;
+        if (index >= items.length) return;
+        final item = items[index];
+        try {
+          final outcome = await restoreOne(item);
+          if (outcome == FilenameRestoreOutcome.restored) {
+            stats.restored++;
+          } else if (outcome == FilenameRestoreOutcome.alreadyReadable) {
+            stats.alreadyReadable++;
+          } else if (outcome == FilenameRestoreOutcome.missing) {
+            stats.missing++;
+          } else {
+            stats.failed++;
+          }
+        } catch (error, stackTrace) {
+          stats.failed++;
+          AppLogger.e('FilenameEncryptionService',
+              'restore name ${item.id}: $error\n$stackTrace');
+        }
+        onProgress?.call(stats);
+      }
+    }
+
+    await Future.wait(
+      List<Future<void>>.generate(workerCount, (_) => queue()),
+    );
+
+    AppLogger.i(
+      'FilenameEncryptionService',
+      'filename restore pass done: ${stats.restored} restored, '
+          '${stats.alreadyReadable} already readable, ${stats.missing} missing, '
+          '${stats.failed} failed, queues=$workerCount',
+    );
+    return stats;
+  }
+
+  /// Restores the readable name of one random-named file.
+  Future<FilenameRestoreOutcome> restoreOne(MediaItem item) async {
+    final file = File(item.privatePath);
+    if (!isEncryptedName(p.basename(item.privatePath))) {
+      return FilenameRestoreOutcome.alreadyReadable;
+    }
+    if (!file.existsSync()) return FilenameRestoreOutcome.missing;
+
+    final directory = file.parent.path;
+    final target = _freePathIn(
+      directory,
+      readableNameFor(item),
+      item.id.length >= 8 ? item.id.substring(0, 8) : item.id,
+    );
+    final originalLength = file.lengthSync();
+    try {
+      await file.rename(target);
+    } catch (error, stackTrace) {
+      AppLogger.e('FilenameEncryptionService',
+          'restore rename ${item.privatePath}: $error\n$stackTrace');
+      return FilenameRestoreOutcome.failed;
+    }
+    // Verify before repointing the row (same rule as `renameOne`).
+    final renamed = File(target);
+    if (!renamed.existsSync() || renamed.lengthSync() != originalLength) {
+      AppLogger.e('FilenameEncryptionService',
+          'restore verification failed for ${item.id}; restoring the random name');
+      await _restore(renamed, item.privatePath);
+      return FilenameRestoreOutcome.failed;
+    }
+    try {
+      await _repository.updatePrivatePath(item.id, target);
+    } catch (error, stackTrace) {
+      AppLogger.e('FilenameEncryptionService',
+          'DB update failed while restoring ${item.id}: $error\n$stackTrace');
+      await _restore(renamed, item.privatePath);
+      return FilenameRestoreOutcome.failed;
+    }
+    return FilenameRestoreOutcome.restored;
+  }
+
+  /// A free path for [wanted] inside [directory]; never overwrites an existing
+  /// file.  Falls back to the vault's historical `<id8>_<name>` form, then to
+  /// `-2`, `-3`, …, and finally to a random name.
+  String _freePathIn(String directory, String wanted, String idHint) {
+    final direct = p.join(directory, wanted);
+    if (!File(direct).existsSync()) return direct;
+    final prefixed = p.join(directory, '${idHint}_$wanted');
+    if (!File(prefixed).existsSync()) return prefixed;
+    final base = p.basenameWithoutExtension(wanted);
+    final ext = p.extension(wanted);
+    for (var i = 2; i <= 99; i++) {
+      final candidate = p.join(directory, '$base-$i$ext');
+      if (!File(candidate).existsSync()) return candidate;
+    }
+    return p.join(directory, '${generateName()}$ext');
   }
 
   static bool _neverCancelled() => false;

@@ -711,6 +711,70 @@ class AppLocalizations {
   String filenameEncryptSkippedCount(int count) =>
       '$count 个文件名已是加密文件名（跳过）';
 
+  // ── "Decrypt all files" options (content + file name) ──
+
+  String get decryptAllFiles => '解密所有文件';
+  String get decryptAllFilesSubtitle =>
+      '把保险库里的密文解密为明文（与"加密已有文件"相反）';
+
+  String get decryptOptionContent => '解密文件内容';
+
+  String decryptOptionContentSubtitle(int count) =>
+      count > 0 ? '有 $count 个密文文件将被解密为明文' : '没有需要解密的密文';
+
+  String get decryptOptionFilenames => '解密文件名';
+
+  String decryptOptionFilenamesSubtitle(int count) => count > 0
+      ? '有 $count 个随机文件名将恢复为原文件名'
+      : '没有需要恢复的文件名';
+
+  String get decryptConfirmationBody =>
+      '解密后文件会以明文保存在保险库目录里，只靠"隐藏目录"保护，安全性低于加密状态。\n'
+      '需要时可以用「加密已有文件」重新加密。\n\n继续解密？';
+
+  String get decryptFilenamesOnlyBody =>
+      '将把随机文件名恢复为原始文件名（原名保存在应用内），文件内容保持加密状态。\n\n继续？';
+
+  String get decryptingTitle => '正在解密…';
+
+  String decryptingProgress(int current, int total) =>
+      '正在解密，第 $current 项（共 $total 项）…';
+
+  String restoringNamesProgress(int current, int total) =>
+      '正在恢复文件名，第 $current 项（共 $total 项）…';
+
+  String decryptResultSuccess(int count) => '已解密 $count 个文件。';
+
+  String decryptResultPartial(int decrypted, int failed) =>
+      '已解密 $decrypted 个文件，$failed 个失败。';
+
+  String get decryptNothingToDo => '没有需要解密的文件';
+
+  String filenameRestoreResult(int count) => '已恢复 $count 个文件名。';
+
+  String filenameRestoreFailedCount(int count) => '$count 个文件名恢复失败';
+
+  // ── Encryption record repair ("clear failed records") ──
+
+  String get repairEncryptionRecords => '修复加密记录';
+  String get repairEncryptionRecordsSubtitle =>
+      '清除"记录了已加密、实际仍是明文"的失效记录';
+
+  String get scanningEncryptionRecords => '正在检查加密记录…';
+
+  String repairEncryptionRecordsBody(int count) =>
+      '发现 $count 条失效记录：应用以为这些文件已加密，但文件实际仍是明文。\n'
+      '清除后它们会重新出现在「加密已有文件」的待加密列表里。\n\n继续？';
+
+  String repairEncryptionResult(int cleared) => '已清除 $cleared 条失效记录。';
+
+  String repairEncryptionOrphans(int count) =>
+      '另有 $count 个文件是密文但没有密钥记录：既无法解密也无法再加密，请从备份找回或删除。';
+
+  String get repairEncryptionNothingFound => '没有发现失效记录。';
+
+  String get repairEncryptionFailed => '修复失败，请重试。';
+
   String encryptingProgress(int current, int total) {
     return '正在加密，第 $current 项（共 $total 项）…';
   }
@@ -746,7 +810,8 @@ class AppLocalizations {
   String get importVaultKeySubtitle => '重装/换机后，用导出的密钥恢复解密能力';
   String get exportVaultKeyWarning =>
       '导出的文件保存的是「未加密」的保险库密钥：任何同时拿到该文件与本应用保险库目录的人，都能解密全部文件。\n\n'
-      '请放到加密网盘或离线介质，不要分享给别人。\n\n继续导出？';
+      '请放到加密网盘或离线介质，不要分享给别人。\n\n'
+      '⚠️ 改过图案/密码后密钥会变：旧密钥包将失效，请重新导出一次。\n\n继续导出？';
   String get importVaultKeyWarning => '导入会用文件里的密钥接管本机密钥：\n'
       '• 只在本机还没有自己的加密文件时使用（例如刚重装、刚换机）；\n'
       '• 若本机已有自己的密钥，导入会被拒绝，以免本机已加密文件全部失效。\n\n继续导入？';

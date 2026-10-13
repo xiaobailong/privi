@@ -1287,6 +1287,10 @@
     （沿用 `SecurityService.adoptEncryptionSaltIfAbsent` 的规则，见 `ISSUE-029`③）；
   - 导入前用 `matchesVault()` 实测（最多 8 条 `encryptedDek`），不匹配就拒绝
     （避免"导入成功但全部打不开"）。
+  - **密钥包会随"改密码"过期**：`changePattern` / `changePin` / `migratePinToPattern` 会派生新 KEK
+    并把**所有 DEK 旋转**到新 KEK（`ADR-034`）⇒ 旧密钥包里的 KEK 再也解不开库里的 `encrypted_dek`；
+    导入旧包会被 `matchesVault()` 拒绝（保护生效），但那意味着"这份备份已过期"——
+    **改完图案/密码请重新导出一次**（导出警告文案里已写明）。
 - 反例 / 易误判:
   - 以为"导出密钥 = 导出密码/图案" —— 密钥包里没有密码，导入后**可用任意新图案解锁**（这是它的价值）
   - 以为"导入后要重设成原密码才能解密" —— 不需要；但也意味着**密钥文件泄露 = 保险库全开**
@@ -1358,5 +1362,43 @@
   `lib/data/db/database.dart`、`lib/data/repositories/media_repository.dart`、`lib/l10n/app_localizations.dart`
 - 相关条目: `ADR-042`（方案；阶段 1 已落地）、`ISSUE-033`（并行队列模式复用）、
   `ISSUE-034`（长名上限，随机名顺带根除）、`PIT-063`（改名三步一致性）
+- 首次记录: 2026-10-13（用户需求）
+
+
+## ISSUE-039 「解密所有文件」+「修复加密记录」：两个反向操作落地
+- 状态: 已实现（待真机复核）
+- 需求 / 现场: ① 设置里要一个与「加密已有文件」相反的操作，同样是两个复选项（解密文件内容 / 解密文件名）；
+  ② 早期 bug 留下 4 条"记录了已加密、文件其实仍是明文"的失效记录，需要一个功能把它们清掉
+  （这类记录会让查看器/播放器把明文当密文去解，表现为打不开）。
+- 判据（5 秒定论）: 日志搜 `BatchDecryptionService`（内容解密）与 `EncryptionRecordRepairService`（记录扫描）——
+  跑过一定有 `decrypt pass done: … keyLost=…` / `record scan done (apply=…): …`；静态判据：
+  `git grep -n "pendingItems\|renamedItems" -- lib/` 与 `git grep -n "staleDek" -- lib/` 都必须有命中。
+- 实现:
+  ① 入口：设置 → 存储「解密所有文件」（紧挨「加密已有文件」）；设置 → 存储（维护组）「修复加密记录」
+     （与「扫描孤立隐藏文件」「修复拍摄时间」并列）。
+  ② 解密内容（`BatchDecryptionService.decryptOne`）：解 DEK → native 解密到**同目录** `.dec_tmp-<id>` →
+     校验非空 → 原子替换（密文 → `.dec_bak`，明文 → 原路径，再删备份）→ **最后**才
+     `updateEncryptedDek(id, null)`。
+  ③ 解密文件名（`FilenameEncryptionService.restoreNames`）：只处理 32 位随机名；目标名 = DB 的
+     `original_name`（sanitize 掉路径分隔符/控制字符）；重名退避 `<id8>_<name>` → `<name>-2` → … → 随机名；
+     同样 rename → 校验字节数 → 更新 DB，失败改回（`PIT-063`）。
+  ④ 修复记录（`EncryptionRecordRepairService.scan`）：逐项比对"是否有 DEK"与"文件头是否像密文"
+     （`looksEncrypted`，只读 32 字节）：
+     - 有 DEK + 明文 = **失效记录** → 清 `encrypted_dek`（先 `apply:false` 只统计，供确认框显示条数）；
+     - 无 DEK + 密文 = **不可恢复孤儿** → 只统计、**绝不改**（删记录只会掩盖问题）；
+     - 其余一致 / 文件缺失 → 计数。
+  ⑤ 加密与解密**互斥**（`_encryptionFlowBusy()`）：两者都会原地改写同一批文件，同时跑等于`ISSUE-030` 重演。
+- 反例 / 易误判:
+  - 把"解密"写成"先清 DEK 再解密" ⇒ 崩在中途就是"密文 + 无 DEK"= **永久孤儿**（见 `PIT-064`）
+  - 以为"无 DEK 的密文"也能靠这个功能救回 ⇒ 只能从备份/相册原件找回
+  - 以为文件名解密会处理历史命名 `<id8>_原名.jpg` ⇒ 那种名字是**可读**的，本功能只动 32 位随机名
+    （UI 文案已写明"随机文件名将恢复"）
+  - 把解密输出写到系统临时目录 ⇒ 与 vault 可能不同卷，`rename` 非原子；本条用**同目录** tmp 规避
+- 相关文件: `lib/data/services/batch_decryption_service.dart`（新增）、
+  `lib/data/services/encryption_record_repair_service.dart`（新增）、
+  `lib/data/services/filename_encryption_service.dart`（新增反向方法）、
+  `lib/presentation/settings/settings_screen.dart`、`lib/application/providers.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `ISSUE-038`（加密方向）、`PIT-064`（崩溃窗口该放哪一侧）、`ADR-043`（设计）、
+  `ISSUE-030`（并发写同一文件）、`PIT-034`（原子替换）、`ISSUE-032`（解密内存上限）
 - 首次记录: 2026-10-13（用户需求）
 

@@ -11,9 +11,11 @@ import '../core/utils/album_query_utils.dart';
 import '../data/db/database.dart';
 import '../data/repositories/album_repository.dart';
 import '../data/repositories/media_repository.dart';
+import '../data/services/batch_decryption_service.dart';
 import '../data/services/batch_encryption_service.dart';
 import '../data/services/biometric_service.dart';
 import '../data/services/encryption_key_manager.dart';
+import '../data/services/encryption_record_repair_service.dart';
 import '../data/services/filename_encryption_service.dart';
 import '../data/services/grid_thumbnail_service.dart';
 import '../data/services/import/asset_gateway.dart';
@@ -146,6 +148,24 @@ final keyBackupServiceProvider = Provider<KeyBackupService>((ref) {
 final filenameEncryptionServiceProvider =
     Provider<FilenameEncryptionService>((ref) {
   return FilenameEncryptionService(
+    repository: ref.watch(mediaRepositoryProvider),
+  );
+});
+
+/// Content decryption behind "Decrypt all files" — see `BatchDecryptionService`.
+final batchDecryptionServiceProvider = Provider<BatchDecryptionService>((ref) {
+  return BatchDecryptionService(
+    encryption: ref.watch(mediaEncryptionServiceProvider),
+    keyManager: ref.watch(encryptionKeyManagerProvider),
+    repository: ref.watch(mediaRepositoryProvider),
+  );
+});
+
+/// Clears "recorded as encrypted but actually plaintext" rows (ISSUE-039).
+final encryptionRecordRepairServiceProvider =
+    Provider<EncryptionRecordRepairService>((ref) {
+  return EncryptionRecordRepairService(
+    encryption: ref.watch(mediaEncryptionServiceProvider),
     repository: ref.watch(mediaRepositoryProvider),
   );
 });

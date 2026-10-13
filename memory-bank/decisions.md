@@ -1028,6 +1028,9 @@
   - **导入时覆盖本机已有 salt**：会让本机已加密文件全部变孤儿（`ISSUE-029`③ 的老坑），直接否决。
 - 影响 / 约束:
   - 密钥包 = 全部文件的钥匙：**不得**写入日志、备份 manifest 或除用户选定目录以外的任何位置；
+  - **改过图案/密码后必须重新导出**：`changePattern` / `changePin` / `migratePinToPattern` 会派生新 KEK
+    并旋转所有 DEK（`ADR-034`），旧包里的 KEK 与库不再匹配 —— 导入旧包会被 `matchesVault()` 拒绝，
+    等于"这份备份过期了"（导出警告文案已提示）；
   - `key_backup_service.dart` 是包格式的唯一定义处，改格式必须升 `version`；
   - 导入态下"忘记密码也能进"是**设计意图**，但用户若想回到"密码派生密钥"，用「更改图案」即可
     （自动旋转 DEK + 退出导入态）；
@@ -1075,5 +1078,43 @@
   `lib/presentation/settings/settings_screen.dart`、`lib/data/repositories/media_repository.dart` + 新增迁移服务
 - 相关条目: `ISSUE-034`（长名上限）、`ADR-033`（加密架构）、`PIT-031`（不要按扩展名判类型）、
   `ISSUE-029`③（还原用原名）
+- 首次记录: 2026-10-13
+
+
+## ADR-043 反向操作与"失效记录修复"：镜像 UI 选项 + 复用队列服务 + 只动随机名
+- 日期: 2026-10-13 | 状态: 已采纳（待真机复核）
+- 背景: 用户要求两个反向能力：① 「解密所有文件」（两个复选项：解密文件内容 / 解密文件名）；
+  ② 清除"记录了已加密但文件仍是明文"的失效记录（早期 bug 留下 4 条，会让查看器把明文当密文解）。
+- 决策:
+  ① 「解密所有文件」放在设置 → 存储（紧挨「加密已有文件」），弹框选项与该入口**镜像**：
+     「解密文件内容」（数量 = 有 DEK 的项）/「解密文件名」（数量 = 32 位随机名的项）；默认同样保守
+     （有内容可解就勾内容，否则只勾文件名）；一项不勾 → 确定禁用 + 提示。
+  ② 内容解密复用"并行队列 + 共享游标 + 节流进度"的既有模式（`BatchDecryptionService`），单项顺序固定为
+     **解密文件 → 校验非空 → 原子替换 → 最后清 DEK**（`PIT-064`）。
+  ③ 文件名解密复用 `FilenameEncryptionService` 的"rename → 校验 → 更新 DB → 失败改回"模式；反向**只处理
+     32 位随机名**（历史 `<id8>_原名` 属"可读名"，不动），目标名取 DB `original_name`，重名按
+     `<id8>_` → `-2…` → 随机名退避。
+  ④ 「修复加密记录」放在维护组（与「扫描孤立隐藏文件」「修复拍摄时间」并列）：先 `scan(apply:false)` 出数量 →
+     确认框 → `apply:true`；只清"有 DEK 但文件是明文"，"密文无 DEK"只报告不改。
+  ⑤ 加密与解密**互斥**（`_encryptionFlowBusy()`）：两者都原地改写同一批文件（`ISSUE-030` 的教训）。
+- 理由:
+  - 镜像 UI 让"一对操作"的心智模型一致，用户不必学两套；
+  - 复用既有队列服务与"rename → 校验 → 改 DB"定式，避免出现第二套不一致实现；
+  - 失效记录修复是**幂等且安全**的：只删 DB 里多余的记录，不碰文件字节；
+  - 把"不可恢复孤儿"显式报告而不是静默清理，用户才能决定去备份里找。
+- 备选与为何不选:
+  - **解密时直接删掉所有 `encrypted_dek`**：会制造"密文无 DEK"孤儿，直接否决；
+  - **「修复记录」顺带把明文重新加密**：把维护动作变成破坏性操作，超出用户预期；
+  - **文件名恢复连历史 `<id8>_` 前缀一起去掉**：会改动从未加密文件名的项，重名风险也更高；
+  - **解密走"导出到相册"的既有链路**：那是"移出保险库"，与"留在库里但变明文"是两回事。
+- 影响 / 约束:
+  - 解密后 `encrypted_dek = null` ⇒ 这些文件会重新出现在「加密已有文件」的待加密列表里（可逆操作）；
+  - 「修复加密记录」跑完 `ref.invalidate(albumsProvider / vaultSizeBytesProvider)`（队列状态变了）；
+  - 解密同样受 `ISSUE-032` 约束：v1 大文件解密可能 OOM ⇒ 该项失败并保留密文，不会损坏文件；
+  - 新增第三种"反向"操作时照本 ADR 三条定式走：镜像 UI、复用队列服务、崩溃窗口放可修复侧。
+- 相关文件: `lib/data/services/batch_decryption_service.dart`、`lib/data/services/encryption_record_repair_service.dart`、
+  `lib/data/services/filename_encryption_service.dart`、`lib/presentation/settings/settings_screen.dart`、
+  `lib/application/providers.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `ISSUE-039`、`PIT-064`、`ISSUE-038`、`ADR-042`、`PIT-063`、`PIT-051`
 - 首次记录: 2026-10-13
 
