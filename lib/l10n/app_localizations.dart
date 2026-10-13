@@ -659,6 +659,40 @@ class AppLocalizations {
 
   String get backupRestoreFailedGeneric => '恢复失败，请检查备份后重试。';
 
+  String get encryptExistingFiles => '加密已有文件';
+
+  String get encryptExistingFilesSubtitle => '加密保险库中尚未加密的媒体文件';
+
+  String get vaultLockedPleaseUnlock => '保险库已锁定，请先解锁。';
+
+  String get allFilesAlreadyEncrypted => '所有文件已加密。';
+
+  String encryptConfirmationBody(int count) {
+    return '$count 个文件将被加密。此操作在保险库锁定期间不可撤销。确定继续？';
+  }
+
+  String get encryptAction => '加密';
+
+  String get vaultLockedOperationStopped => '保险库已锁定，操作已停止。';
+
+  String get encryptingTitle => '正在加密…';
+
+  String encryptingProgress(int current, int total) {
+    return '正在加密，第 $current 项（共 $total 项）…';
+  }
+
+  String encryptFailedCount(int count) {
+    return '$count 项失败';
+  }
+
+  String encryptResultSuccess(int count) {
+    return '已成功加密 $count 个文件。';
+  }
+
+  String encryptResultPartial(int completed, int failed) {
+    return '已加密 $completed 个文件，$failed 个失败。';
+  }
+
   String get scanOrphans => '扫描孤立隐藏文件';
 
   String get scanningOrphans => '正在扫描孤立隐藏文件…';

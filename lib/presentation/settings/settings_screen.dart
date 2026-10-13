@@ -305,10 +305,8 @@ class SettingsScreen extends ConsumerWidget {
           ),
           ListTile(
             leading: const Icon(Icons.enhanced_encryption_outlined),
-            title: const Text('Encrypt Existing Files'),
-            subtitle: const Text(
-              'Encrypt unencrypted files already in the vault',
-            ),
+            title: Text(context.l10n.encryptExistingFiles),
+            subtitle: Text(context.l10n.encryptExistingFilesSubtitle),
             onTap: () => _batchEncrypt(context, ref),
           ),
           ListTile(
@@ -498,7 +496,7 @@ class SettingsScreen extends ConsumerWidget {
     if (kek == null) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Vault is locked. Please unlock first.')),
+          SnackBar(content: Text(context.l10n.vaultLockedPleaseUnlock)),
         );
       }
       return;
@@ -508,7 +506,7 @@ class SettingsScreen extends ConsumerWidget {
     if (unencrypted.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All files are already encrypted.')),
+          SnackBar(content: Text(context.l10n.allFilesAlreadyEncrypted)),
         );
       }
       return;
@@ -517,12 +515,8 @@ class SettingsScreen extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Encrypt Existing Files'),
-        content: Text(
-          '${unencrypted.length} file(s) will be encrypted. '
-          'This operation cannot be undone while the vault is locked. '
-          'Proceed?',
-        ),
+        title: Text(context.l10n.encryptExistingFiles),
+        content: Text(context.l10n.encryptConfirmationBody(unencrypted.length)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -530,7 +524,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Encrypt'),
+            child: Text(context.l10n.encryptAction),
           ),
         ],
       ),
@@ -593,8 +587,8 @@ class SettingsScreen extends ConsumerWidget {
                   SnackBar(
                     content: Text(
                       failed > 0
-                          ? 'Encrypted $completed file(s), $failed failed.'
-                          : 'Encrypted $completed file(s) successfully.',
+                          ? context.l10n.encryptResultPartial(completed, failed)
+                          : context.l10n.encryptResultSuccess(completed),
                     ),
                   ),
                 );
@@ -610,15 +604,16 @@ class SettingsScreen extends ConsumerWidget {
             final lockedOut = kekNow == null && completed < items.length;
             String status;
             if (lockedOut) {
-              status = 'Vault locked. Operation stopped.';
+              status = context.l10n.vaultLockedOperationStopped;
             } else if (completed >= items.length) {
-              status = 'Done.';
+              status = context.l10n.done;
             } else {
-              status = 'Encrypting ${completed + 1} of ${items.length}...';
+              status = context.l10n
+                  .encryptingProgress(completed + 1, items.length);
             }
 
             return AlertDialog(
-              title: const Text('Encrypting...'),
+              title: Text(context.l10n.encryptingTitle),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -627,7 +622,7 @@ class SettingsScreen extends ConsumerWidget {
                   Text(status),
                   if (failed > 0)
                     Text(
-                      '$failed failed',
+                      context.l10n.encryptFailedCount(failed),
                       style: TextStyle(
                           color: Theme.of(ctx).colorScheme.error),
                     ),
@@ -640,7 +635,7 @@ class SettingsScreen extends ConsumerWidget {
                           cancelled = true;
                           Navigator.pop(ctx);
                         },
-                        child: const Text('Close'),
+                        child: Text(context.l10n.close),
                       ),
                     ]
                   : [
