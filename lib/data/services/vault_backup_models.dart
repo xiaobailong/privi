@@ -173,6 +173,7 @@ final class _BackupManifest {
     required this.albums,
     required this.groups,
     required this.memberships,
+    this.encryptionSalt,
   });
 
   final int version;
@@ -184,6 +185,13 @@ final class _BackupManifest {
   final List<_ManifestAlbum> albums;
   final List<_ManifestGroup> groups;
   final List<_ManifestMembership> memberships;
+
+  /// PBKDF2 salt (base64) the exported vault's KEK was derived from.
+  ///
+  /// Stored so a restore on a fresh install can derive the same KEK from the
+  /// same pattern/PIN.  Null for pre-encryption backups and for backups made
+  /// before a salt existed (ISSUE-029).  The salt is not a secret.
+  final String? encryptionSalt;
 
   int get payloadBytes => media.fold(
         0,
@@ -225,6 +233,7 @@ final class _ManifestMedia {
     required this.dateTaken,
     required this.sizeBytes,
     required this.deletedAt,
+    this.encryptedDek,
   });
 
   final String? id;
@@ -248,6 +257,13 @@ final class _ManifestMedia {
   final int? sizeBytes;
   final DateTime? deletedAt;
 
+  /// Per-file DEK, already encrypted with the vault KEK (never plaintext).
+  ///
+  /// Without it a restored encrypted file can never be decrypted again: the
+  /// backup would carry ciphertext nobody holds the key for (ISSUE-029).
+  /// Null for plaintext media and for older backups.
+  final String? encryptedDek;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'file': fileName,
@@ -269,6 +285,7 @@ final class _ManifestMedia {
         'dateTaken': dateTaken?.toIso8601String(),
         'sizeBytes': sizeBytes,
         'deletedAt': deletedAt?.toIso8601String(),
+        'encryptedDek': encryptedDek,
       };
 }
 

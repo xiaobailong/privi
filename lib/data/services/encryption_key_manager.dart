@@ -12,7 +12,13 @@ import '../../core/utils/app_logger.dart';
 /// Android).  On biometric unlock the persisted KEK is retrieved from secure
 /// storage and loaded into memory.
 ///
-/// On lock / screen-off both in-memory and persisted copies are cleared.
+/// On lock the in-memory copy is dropped via [clearMemory] but the persisted
+/// copy is kept, so biometric unlock can load it again (PIT-042 / PIT-049).
+/// Only [clear] — reserved for credential resets — removes the persisted KEK.
+///
+/// Both backends are intentionally left on FlutterSecureStorage's default
+/// Android options: switching to `encryptedSharedPreferences: true` here would
+/// orphan every KEK persisted by an already-installed build.
 class EncryptionKeyManager {
   static const _storageKey = 'privi_kek_v1';
   final FlutterSecureStorage _storage;

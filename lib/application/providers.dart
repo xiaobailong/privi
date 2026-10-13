@@ -219,6 +219,9 @@ final vaultBackupServiceProvider = Provider<VaultBackupOperations>((ref) {
     media: ref.watch(mediaRepositoryProvider),
     albums: ref.watch(albumRepositoryProvider),
     storage: ref.watch(vaultStorageProvider),
+    // Lets an exported backup carry the KEK salt plus each row's encrypted
+    // DEK, and lets a restore adopt them (ISSUE-029).
+    security: ref.watch(securityServiceProvider),
     usePrivateMediaStorage: false,
   );
 });

@@ -61,6 +61,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   /// 已经因为"起播竞态"自动重建过的 item（同一屏内只救一次，见 `ISSUE-023`）。
   final Set<String> _spuriousRecoveredIds = <String>{};
   int _videoRequest = 0;
+
+  // ── Encrypted media (ISSUE-029) ─────────────────────────────────────────
+  // Same contract as `ViewerScreen._resolveDisplayPath`: encrypted items are
+  // decrypted to a temp file on demand and the cache is dropped in dispose().
+  final Map<String, String> _decryptedPaths = <String, String>{};
+  final Map<String, Future<String?>> _decryptFutures =
+      <String, Future<String?>>{};
+  final Set<String> _decryptFailedIds = <String>{};
   String? _loadingItemId;
   bool? _nativeInitialized;
   bool _reconcileScheduled = false;
@@ -115,6 +123,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       'hasController=${_nVideo != null}, request=$_videoRequest',
     );
     _disposeNativeVideo();
+    _cleanupDecryptedPaths();
     unawaited(VideoSystemUi.restore());
     super.dispose();
   }
@@ -580,11 +589,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final request = _videoRequest;
     _startLoadWatchdog(item, request);
 
-    if (!await widget.videoFileProbe(item.privatePath)) {
-      if (_isStaleLoad(request, item)) return;
-      AppLogger.e('PlayerScreen', 'Video file not found: ${item.privatePath}');
+    // Encrypted media must be decrypted before it reaches the native player:
+    // handing it ciphertext shows a black screen (ISSUE-029).
+    final playbackPath = await _resolveMediaPath(item);
+    if (_isStaleLoad(request, item)) return;
+    if (playbackPath == null) {
+      AppLogger.e('PlayerScreen',
+          'Encrypted video could not be decrypted: ${item.id}');
       setState(() {
-        _videoError = 'Video file does not exist: ${item.privatePath}';
+        _videoError = 'Encrypted video could not be decrypted';
+        _videoErrorItemId = item.id;
+      });
+      return;
+    }
+
+    if (!await widget.videoFileProbe(playbackPath)) {
+      if (_isStaleLoad(request, item)) return;
+      AppLogger.e('PlayerScreen', 'Video file not found: $playbackPath');
+      setState(() {
+        _videoError = 'Video file does not exist: $playbackPath';
         _videoErrorItemId = item.id;
       });
       return;
@@ -595,7 +618,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // 它会在 VLC 已经确认画不出帧时回退到默认引擎。
       final engine = _preferredEngineFor(item);
       final controller = await NativeVideoController.create(
-        item.privatePath,
+        playbackPath,
         playerEngine: engine,
       );
       if (_isStaleLoad(request, item)) {
@@ -843,9 +866,93 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     );
   }
 
+  bool _isEncrypted(MediaItem item) =>
+      item.encryptedDek != null && item.encryptedDek!.isNotEmpty;
+
+  /// Playable/displayable path for [item], decrypting to a temp file when the
+  /// media is encrypted.
+  ///
+  /// Mirrors `ViewerScreen._resolveDisplayPath`, including the in-flight
+  /// de-duplication that stops two callers from leaking temp files.
+  Future<String?> _resolveMediaPath(MediaItem item) async {
+    if (!_isEncrypted(item)) return item.privatePath;
+    final cached = _decryptedPaths[item.id];
+    if (cached != null && File(cached).existsSync()) return cached;
+    _decryptedPaths.remove(item.id);
+    final inFlight = _decryptFutures[item.id];
+    if (inFlight != null) return inFlight;
+    final future = _decryptToTemp(item);
+    _decryptFutures[item.id] = future;
+    try {
+      return await future;
+    } finally {
+      _decryptFutures.remove(item.id);
+    }
+  }
+
+  Future<String?> _decryptToTemp(MediaItem item) async {
+    final kek = ref.read(encryptionKeyManagerProvider).getKey();
+    if (kek == null) {
+      AppLogger.e('PlayerScreen',
+          'Cannot decrypt ${item.id}: vault key not loaded (vault locked?)');
+      return null;
+    }
+    try {
+      final temp = await ref
+          .read(mediaEncryptionServiceProvider)
+          .decryptToTempFileWithDek(
+            filePath: item.privatePath,
+            encryptedDekBase64: item.encryptedDek!,
+            kek: kek,
+          );
+      if (temp == null) {
+        _decryptFailedIds.add(item.id);
+        AppLogger.e('PlayerScreen',
+            'Decrypt returned null for ${item.id} — DEK or auth tag mismatch');
+        return null;
+      }
+      _decryptedPaths[item.id] = temp;
+      _decryptFailedIds.remove(item.id);
+      return temp;
+    } catch (error, stackTrace) {
+      _decryptFailedIds.add(item.id);
+      AppLogger.e(
+          'PlayerScreen', 'decrypt ${item.id} failed: $error\n$stackTrace');
+      return null;
+    }
+  }
+
+  /// Kicks off decryption for widgets that cannot await (image pages).
+  void _ensureDecrypted(MediaItem item) {
+    unawaited(_resolveMediaPath(item).then((_) {
+      if (mounted) setState(() {});
+    }));
+  }
+
+  void _cleanupDecryptedPaths() {
+    _decryptFutures.clear();
+    for (final path in _decryptedPaths.values) {
+      try {
+        final file = File(path);
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+    }
+    _decryptedPaths.clear();
+    _decryptFailedIds.clear();
+  }
+
   Widget _buildImage(MediaItem item) {
-    final file = File(item.privatePath);
+    final cachedPath = _decryptedPaths[item.id];
+    final file = File(cachedPath ?? item.privatePath);
     if (!file.existsSync()) {
+      // Encrypted but not decrypted yet: keep trying instead of showing a
+      // permanent broken-image icon.
+      if (_isEncrypted(item) && !_decryptFailedIds.contains(item.id)) {
+        _ensureDecrypted(item);
+        return const Center(
+          child: CircularProgressIndicator(color: Colors.white54),
+        );
+      }
       return const Center(
         child: Icon(Icons.broken_image, color: Colors.white38, size: 64),
       );

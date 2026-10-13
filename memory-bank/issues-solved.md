@@ -875,3 +875,125 @@
   3. 生物识别依赖于持久化存储中的 KEK——删除它就是删掉生物识别功能
 - 相关文件: `encryption_key_manager.dart`、`lock_controller.dart`、`media_repository.dart`
 - 首次记录: 2026-10-13（第五次全量审计，已修复 3/6，标记 3/6）
+
+## ISSUE-028 指纹"无法正常解锁"：弹窗验证通过却原地不动（KEK 缺失被静默吞掉）
+- 状态: 未定位（应用层已补可见反馈与诊断日志，见「修法」；**KEK 为何缺失**待设备日志坐实）
+- 症状 / 现场: 锁屏指纹弹窗弹出、验证通过，但**不解锁也没有任何提示**（点指纹图标同样没反应）；
+  用户只能改用图案/PIN —— 用图案解锁一次后，指纹立即恢复正常。
+  高发场景：**从旧版本升级上来、长期只用指纹解锁、从未输入过图案**的设备
+- 复发判据（读设备日志，5 秒定论；日志在 `Download/密册/logs/密册_log_YYYY-MM-DD.txt`）:
+  1) 出现 `Biometric OK but no persisted KEK found` ⇒ 命中本条（KEK 缺失）
+  2) 指纹弹窗**根本不出现** / 设置页开关灰掉 ⇒ 看 `biometric status: supported=… canCheck=… types=…`
+     或 `biometric hw: …`（硬件/录入分支）
+  3) 弹窗出现但验证失败 ⇒ 看 `biometric authenticate result=false` /
+     `biometric auth platform: code=…`（NotEnrolled、LockedOut、PermanentlyLockedOut…）
+- 根因: **未定位**（KEK 缺失本身的原因未坐实）。已确认的代码事实：
+  ① `unlockWithBiometric()` 在 `retrievePersistedKek() == null` 时**保持锁定并裸 `return false`**
+     （`lock_controller.dart`，`f812d9d` 之后的现状）
+  ② 该行为由 `f812d9d fix(PIT-049)` 引入：之前是"验证成功即置 `unlocked`"（半解锁），
+     所以同一台设备在 1.0.80 及以前"指纹能进 app"，升到 1.0.81 变成"指纹没反应"
+     （本机最新构建 `build\app\outputs\apk\release\app-release.apk` 时间戳 2026-10-13 18:48，
+     晚于该提交的 18:02 ⇒ 症状与构建对得上）
+  ③ KEK 只在 `_deriveAndStoreEncryptionKey()` 里持久化，而它只被
+     `setupPattern` / `setupPin` / `unlockWithPattern` / `unlock(pin)` 调用
+     ⇒ **一直只用指纹解锁的用户从未写过 KEK**（历史版本连 KEK 概念都没有）
+  ④ `SecurityService.deriveEncryptionKey()` 与 `EncryptionKeyManager.retrievePersistedKek()` 均为 catch 后返回 null（静默）
+- 证据:
+  - `git show f812d9d`（唯一改动点，+10/-7）
+  - `lib/application/lock/lock_controller.dart` → `unlockWithBiometric()` 的 null 分支原先只有一条 `AppLogger.e`
+  - `lib/data/services/security_service.dart` → `deriveEncryptionKey()` catch 后 `return null`
+  - `lib/data/services/encryption_key_manager.dart` → `retrievePersistedKek()` catch 后 `return null`
+- 修法（本轮，应用层）:
+  - `VaultLockErrorCode` 新增 `kekUnavailable`；`unlockWithBiometric()` 在 KEK 缺失时设该错误码（仍保持锁定）
+  - `lock_screen._mapLockError` + l10n `biometricKekUnavailable`：锁屏直接告诉用户
+    "指纹验证通过，但加密密钥尚未就绪 —— 请先用图案解锁一次，之后指纹即可正常使用"
+  - `_deriveAndStoreEncryptionKey()`：`kek == null` 时补 `AppLogger.e`（此前派生失败完全静默）
+  - `EncryptionKeyManager` 类注释订正：锁屏只清内存（`clearMemory()`），`clear()` 只用于凭据重置；
+    后端选项**不要**改（理由见 `ADR-035`）
+- 反例 / 易误判:
+  - 怀疑"指纹硬件/驱动坏了、Activity 不是 FragmentActivity" —— **已排除**：
+    `MainActivity` 继承 `FlutterFragmentActivity`，Manifest 里 `USE_BIOMETRIC`/`USE_FINGERPRINT` 齐全
+  - 怀疑"是 `lock()` 又把持久化 KEK 删了"（`PIT-042` 的老症状）—— 现场 `lock()` 用的是 `clearMemory()`，**不是** `clear()`，
+    该条已修复，别重复排查
+  - 想到"清数据/重装 app 试试" —— 重装会清掉 `FlutterSecureStorage`，KEK 缺失只会**更确定**
+- 下一步验证（坐实根因）:
+  1. 复现一次后取当日 `密册_log_*.txt`，确认命中 `Biometric OK but no persisted KEK found`
+  2. 同文件搜 `biometric status:` 与 `biometric authenticate result=`，排除"没弹窗 / 验证失败"两个分支
+  3. 若确为 KEK 缺失：用图案解锁一次 → 立刻锁屏 → 再试指纹，应恢复正常（= 自愈验证）
+  4. 若要"升级后直接可用指纹"（不要求先输一次图案）：需把 KEK 的持久化时机前移到
+     `setBiometricEnabled(true)`（当前只做开关 + 一次身份确认，不碰 KEK）—— 属后续专项
+- 相关文件: `lib/application/lock/lock_controller.dart`、`lib/presentation/lock/lock_screen.dart`、
+  `lib/l10n/app_localizations.dart`、`lib/data/services/encryption_key_manager.dart`
+- 相关条目: `ISSUE-027`①（`PIT-042` 老症状）、`PIT-045`、`PIT-046`、`PIT-049`、`ADR-035`
+- 首次记录: 2026-10-13
+
+## ISSUE-029 第十轮审计：图片/视频加解密 + "加密已有文件"链路的 7 个缺陷（4 个数据丢失级）
+- 状态: 已修复（第二轮 R11 已将 5 项全部落地；仅剩 1 项技术债：`PlayerScreen` 与 `ViewerScreen`
+  是两份等价解密实现，见「补修」①）
+- 审计范围: `media_encryption_service.dart`、`native_crypto_service.dart`、`CryptoHandler.kt`、
+  `encryption_key_manager.dart`、`settings_screen._batchEncrypt`、`import_service._encryptRecordedFiles`、
+  `vault_reveal_runner._decryptIfNeeded`、`viewer_screen._resolveDisplayPath`、`import/thumbnail_generator.dart`、
+  `vault_backup_*`、`maintenance_service.scanOrphanHiddenFiles`
+- 已修复（本轮）:
+  ① **`ftyp` 魔数判断写错 ⇒ MP4/MOV/HEIC 永远无法加密**（`media_encryption_service._looksLikePlainMedia`）：
+     原代码 `_bytesMatch(bytes.sublist(4, 12), [00 00 00 20 66 74 79 70])` 把"4 字节 box size + `ftyp`"
+     当成 offset 4 处的 8 字节签名 ⇒ **永不匹配** ⇒ `looksEncrypted()` 对每个 MP4 返回 true ⇒
+     `encryptFileWithDek` 抛 `StateError` ⇒ 加密流水线永久跳过所有 MP4（`PIT-050`，与 `PIT-048` 同类）。
+     修法：只匹配 offset 4 的 `ftyp` 4 字节标签；补 `GIF8`、`RIFF`+`AVI `、`RIFF`+`WEBP`（签名都 ≥4 字节，
+     避免把随机密文误判成明文而二次加密）。
+  ② **批量加密"先加密文件、后写 DEK"**（`settings_screen.dart` 原 569→573 行）：崩溃窗口 = 文件已密文、
+     DEK 未落库 = 永久丢失（`PIT-051`）。修法：`generateDek → encryptDek → updateEncryptedDek → encryptFileWithDek`，
+     与 `PIT-044` 的导入路径对齐。
+  ③ **导入加密的 catch 无条件清空 DEK**（`import_service._encryptRecordedFiles`）：native 已换掉文件、只是结果回传
+     失败（Activity 重建/通道异常）时清 DEK = 永久孤儿。修法：仅当 `!looksEncrypted(file)`（确实还是明文）才回滚。
+  ④ **还原时 KEK/DEK 拿不到却静默放行**（`vault_reveal_runner._decryptIfNeeded` 的三处 `return`）⇒ 密文被当媒体
+     移出保险库，随后 DB 行连同 DEK 一起被删 ⇒ 数据永久损坏（`PIT-052`）。修法：改抛 `StateError`；单项 `reveal()`
+     返回 false；批量按 `blockedIds` 跳过并计失败。
+  ⑤ **外部播放器被喂密文**（`media_grid_screen._openExternally`、`player_controller._onItemEntered`）：
+     直接把 `item.privatePath` 交给其它 app。修法：加密项不再外放 —— 网格返回 false 后**已有**回退到内置查看器；
+     播放列表留在内置播放器（但内置 `PlayerScreen` 仍不解密，见「未修复①」）。
+  ⑥ **原生 AES-GCM 三处边界**（`CryptoHandler.kt`，`PIT-053`）：解密侧 `input.skip(12)` 不校验实际跳过字节数
+     （`InputStream.skip` 允许少跳 ⇒ 认证失败）；`minLength = 12+16+1` 让 **0 字节明文的 28 字节密文解不开**；
+     `finally { bakFile.delete() }` 在"恢复也失败"时会删掉唯一备份。已全部修正，并新增 **crash 自愈**：
+     `encryptFile` 开头若主文件缺失而 `.enc_bak` 存在则回填，残留 `.enc_tmp` 直接清掉。
+- 补修（同日第二轮，R11 —— 5 项全部落地）:
+  ① **PlayerScreen 接上解密层**（原症状：加密图片 broken_image、加密视频黑屏）：
+     `player_screen.dart` 新增 `_decryptedPaths` / `_decryptFutures` / `_decryptFailedIds` 与
+     `_resolveMediaPath()` / `_decryptToTemp()` / `_ensureDecrypted()` / `_cleanupDecryptedPaths()`；
+     `_loadVideoInner` 改用解析后的 `playbackPath`（解不开就明确报错，不再黑屏），
+     `_buildImage` 读缓存路径、未就绪时转圈，`dispose()` 清理临时文件。
+     **技术债**：与 `ViewerScreen._resolveDisplayPath` 是两份等价实现，第三个入口出现前应抽共享 mixin。
+  ② **缩略图取帧前先解密**（原症状：加密媒体永远没缩略图 + 每次启动 8s 空转）：
+     `ThumbnailGenerator` 注入 `MediaEncryptionService` / `EncryptionKeyManager`，新增 `_plaintextPathFor(job)`
+     （重读该行取 `encryptedDek` → KEK → `decryptToTempFileWithDek`）；`makeThumbnail` 一律用明文路径取帧，
+     `finally` 删临时文件；KEK 未加载时立刻返回 null（不再空转 8s）。
+  ③ **备份带密钥材料**（原症状：换机/重装后加密文件永久不可读）：manifest 顶层新增 `encryptionSalt`、
+     每个媒体条目新增 `encryptedDek`（都是**可选**字段，`manifestVersion` 仍为 5 ⇒ 旧备份照常解析、
+     旧版本 app 也能读新备份）；`SecurityService` 新增 `readEncryptionSalt()` / `adoptEncryptionSaltIfAbsent()`；
+     导出写入 salt，还原写回每行 `encrypted_dek`，且**仅当本机没有 salt 时**才采用备份的 salt
+     （有则保留并 warn）⇒ 重装/换机后用同一图案解锁即可解密，同机合并式还原不会破坏本机密钥。
+  ④ **导入未加密不再静默**：`_encryptRecordedFiles` 返回"未能加密"条数 →
+     `ImportErrorCode.encryptionSkippedVaultLocked` → `import_result_message` → l10n
+     （`app.dart` 与可见库两处入口在 `imported == 0` 时直接展示该 detail）。
+  ⑤ **卸载全损警告**：`encryptConfirmationBody` 追加"加密密钥只保存在本机：卸载应用或清除应用数据后，
+     已加密文件将无法解密，请先做好备份"。
+- 补修后的验证: 20 个改动文件 `dart format` 无 parse 错误；`dart analyze` **0 error**
+  （仅剩 2 条既有 warning：`lock_controller.dart` 的 2 个 unused import，HEAD 版本同样存在）
+- 仍未做（明确记债，不是遗漏）:
+  - PlayerScreen / ViewerScreen 解密逻辑抽共享 mixin（会动已验证的 viewer 路径，单独一轮做）
+  - 备份"跨机恢复"保证的是"同一图案/PIN + 备份里的 salt"；若用户**已改过密码**再恢复，
+    需先用导出时的密码解锁一次（或先还原 salt 再改密码）
+  - BMP/TIFF 等未列入签名的格式仍会被判"已加密"从而跳过加密（安全方向：漏加密，不是损坏）
+- 复发判据（各一条命令，5 秒定论）:
+  - MP4 是否仍被判"已加密"：`git grep -n "sublist(4, 12)" -- lib/` 应无命中
+  - 批量加密顺序：`git grep -n "updateEncryptedDek" -B 8 -- lib/presentation/settings/settings_screen.dart` ⇒ DEK 必须先于 `encryptFileWithDek`
+  - 还原 fail-open：`git grep -n "if (kek == null) return" -- lib/data/services/import/vault_reveal_runner.dart` 应无命中
+  - 原生边界：`git grep -n "GCM_TAG_LENGTH / 8 + 1L" -- android/` 应无命中
+- 证据: 上文逐条的 `文件:行`；本轮 6 个 Dart 改动文件 `dart analyze` = **No issues found**（`ANALYZE_RC=0`）
+- 相关文件: `lib/data/services/media_encryption_service.dart`、`lib/data/services/import_service.dart`、
+  `lib/data/services/import/vault_reveal_runner.dart`、`lib/presentation/settings/settings_screen.dart`、
+  `lib/presentation/grid/media_grid_screen.dart`、`lib/application/player/player_controller.dart`、
+  `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`
+- 相关条目: `PIT-034`（原子替换）、`PIT-044`（DEK crash 窗口）、`PIT-048`（魔数误判）、
+  `ISSUE-024`（解密链路）、`ADR-033`、`ADR-036`
+- 首次记录: 2026-10-13（第十轮审计）

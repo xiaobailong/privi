@@ -6,6 +6,8 @@ import '../../../core/media_thumbnail_spec.dart';
 import '../../repositories/media_repository.dart';
 import '../media_rename_service.dart';
 import '../media_thumbnail_service.dart';
+import '../encryption_key_manager.dart';
+import '../media_encryption_service.dart';
 import '../vault_storage_service.dart';
 import 'file_system_gateway.dart';
 import 'hide_preparer.dart';
@@ -35,17 +37,26 @@ class ThumbnailGenerator {
     required MediaRenameService renamer,
     required MediaThumbnailCache thumbnailCache,
     required FileSystemGateway fileSystem,
+    MediaEncryptionService? encryptionService,
+    EncryptionKeyManager? encryptionKeyManager,
   })  : _storage = storage,
         _media = mediaRepository,
         _renamer = renamer,
         _thumbnails = thumbnailCache,
-        _files = fileSystem;
+        _files = fileSystem,
+        _encryptionService = encryptionService,
+        _encryptionKeyManager = encryptionKeyManager;
 
   final VaultStorageService _storage;
   final MediaRepository _media;
   final MediaRenameService _renamer;
   final MediaThumbnailCache _thumbnails;
   final FileSystemGateway _files;
+
+  /// Encrypted media cannot be decoded or frame-grabbed directly, so the poster
+  /// pass decrypts it to a temp file first (ISSUE-029).  Null in tests.
+  final MediaEncryptionService? _encryptionService;
+  final EncryptionKeyManager? _encryptionKeyManager;
 
   static const int concurrency = 2;
 
@@ -181,44 +192,92 @@ class ThumbnailGenerator {
       }
     }
 
-    if (job.isVideo) {
-      try {
-        final output = await _storage.thumbFileFor(job.id);
-        final ok = await _renamer.videoThumbnail(
-          path: job.privatePath,
-          destPath: output.path,
-          maxSize: MediaThumbnailSpec.dimension,
-        );
-        if (ok &&
-            await _files.exists(output.path) &&
-            await _files.length(output.path) > 0) {
-          return output.path;
+    // Encrypted media cannot be decoded directly: reading `privatePath` hands
+    // the decoder ciphertext and the poster silently never appears, while the
+    // launch repair keeps retrying it (ISSUE-029).
+    final playablePath = await _plaintextPathFor(job);
+    if (playablePath == null) return null;
+    try {
+      if (job.isVideo) {
+        try {
+          final output = await _storage.thumbFileFor(job.id);
+          final ok = await _renamer.videoThumbnail(
+            path: playablePath,
+            destPath: output.path,
+            maxSize: MediaThumbnailSpec.dimension,
+          );
+          if (ok &&
+              await _files.exists(output.path) &&
+              await _files.length(output.path) > 0) {
+            return output.path;
+          }
+        } catch (error, stackTrace) {
+          AppLogger.e('ThumbnailGenerator', 'video thumb: $error\n$stackTrace');
         }
-      } catch (error, stackTrace) {
-        AppLogger.e('ThumbnailGenerator', 'video thumb: $error\n$stackTrace');
+        return null;
       }
+
+      try {
+        if (await _files.length(playablePath) > 8 * 1024 * 1024) return null;
+        final bytes = await _files.readBytes(playablePath);
+        final codec = await ui.instantiateImageCodec(
+          bytes,
+          targetWidth: MediaThumbnailSpec.dimension,
+        );
+        final frame = await codec.getNextFrame();
+        final data =
+            await frame.image.toByteData(format: ui.ImageByteFormat.png);
+        frame.image.dispose();
+        if (data == null) return null;
+        final output = await _storage.thumbFileFor(job.id);
+        await _files.writeBytes(
+          output.path,
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+        return output.path;
+      } catch (error, stackTrace) {
+        AppLogger.e('ThumbnailGenerator', 'file thumb: $error\n$stackTrace');
+        return null;
+      }
+    } finally {
+      // Only the decrypted temp copy is removed; the vault file stays.
+      if (playablePath != job.privatePath) {
+        try {
+          await _files.delete(playablePath);
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// Path to hand a decoder: [ThumbnailJob.privatePath] for plaintext media, a
+  /// decrypted temp file for encrypted media, or null when the vault key is not
+  /// loaded (the caller skips the poster instead of reading ciphertext).
+  Future<String?> _plaintextPathFor(ThumbnailJob job) async {
+    final encryptionService = _encryptionService;
+    final keyManager = _encryptionKeyManager;
+    if (encryptionService == null || keyManager == null) return job.privatePath;
+
+    // Read the current row: a job may have been queued before the import
+    // pipeline encrypted the item.
+    final current = await _media.findById(job.id);
+    final encryptedDek = current?.encryptedDek;
+    if (encryptedDek == null || encryptedDek.isEmpty) return job.privatePath;
+
+    final kek = keyManager.getKey();
+    if (kek == null) {
+      AppLogger.d('ThumbnailGenerator',
+          'thumb ${job.id}: encrypted but vault key not loaded — skipped');
       return null;
     }
-
     try {
-      if (await _files.length(job.privatePath) > 8 * 1024 * 1024) return null;
-      final bytes = await _files.readBytes(job.privatePath);
-      final codec = await ui.instantiateImageCodec(
-        bytes,
-        targetWidth: MediaThumbnailSpec.dimension,
+      return await encryptionService.decryptToTempFileWithDek(
+        filePath: job.privatePath,
+        encryptedDekBase64: encryptedDek,
+        kek: kek,
       );
-      final frame = await codec.getNextFrame();
-      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
-      frame.image.dispose();
-      if (data == null) return null;
-      final output = await _storage.thumbFileFor(job.id);
-      await _files.writeBytes(
-        output.path,
-        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-      );
-      return output.path;
     } catch (error, stackTrace) {
-      AppLogger.e('ThumbnailGenerator', 'file thumb: $error\n$stackTrace');
+      AppLogger.e('ThumbnailGenerator',
+          'thumb decrypt ${job.id}: $error\n$stackTrace');
       return null;
     }
   }

@@ -188,6 +188,12 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
   Future<bool> _openExternally(MediaItem item) async {
     final external = ref.read(externalPlayerCoordinatorProvider);
     if (!external.supported) return false;
+    // Encrypted media must be decrypted first; handing `privatePath` to another
+    // app would feed it ciphertext.  Returning false makes the caller fall back
+    // to the in-app viewer, which decrypts transparently (ISSUE-024 class).
+    if (item.encryptedDek != null && item.encryptedDek!.isNotEmpty) {
+      return false;
+    }
     final ok = await external.open(
       filePath: item.privatePath,
       mimeType: item.mimeType,

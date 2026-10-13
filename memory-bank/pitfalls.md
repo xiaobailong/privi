@@ -438,7 +438,14 @@
   编译器/格式化器能过、但代码结构被破坏。
   正确做法：锚点的**每一行都必须原样出现在 `new_text` 里**（含行尾），
   插入类改动优先用 `insert_line`；改完立刻回读该区域确认没有两行粘一起
-- 首次记录: 2026-10-07
+- 复核 2026-10-13（第三次踩，形态最隐蔽）: 给 `SecurityService` 插入两个新方法时，
+  `old_text` 只取了 `Future<Uint8List?> deriveEncryptionKey(String secret) async {` 一行（含行尾），
+  而 `new_text` 末行写成 `... async {`（**没带回换行**）⇒ 结果变成
+  `Future<Uint8List?> deriveEncryptionKey(String secret) async {    try {`（两行粘连）。
+  **代码仍能编译**（`{    try {` 是合法语法）、`dart format` 也不报错 ⇒ 只能靠回读/diff 发现。
+  教训：锚点尽量取**两行**（如 `xxx async {` + 下一行 `    try {`），或改用 `insert_line`；
+  编辑后必须回读该区域（本次靠 editor 的 diff 回显当场发现并修回）
+- 首次记录: 2026-10-07 ／ 最近复核: 2026-10-13（第三次同类翻车，已即时修回）
 
 ## PIT-029 Cline 的 shell 里 `flutter` 不在 PATH；`start "" /min cmd /c "…嵌套引号…"` 会立刻报「命令语法不正确」
 - 触发条件: ①想在 Cline 终端直接跑 `flutter ...`（本机 `flutter.bat` 只在 `build.bat` 内部才被加进 PATH）；
@@ -707,3 +714,197 @@
   PBKDF2 完成后 vault 才标记为已解锁，UI 过渡期间 KEK 已就绪。
   - `_kekGen` 竞态保护不变：如 lock() 在派生期间发生，stale KEK 不会写入。
 - 首次记录: 2026-10-13（第五次审计发现）／ 修复: 2026-10-13（R7）
+
+## PIT-047 `audit-tracker.md` 的 `PIT-0xx` 编号与 `pitfalls.md` 存在整体偏移（+5），照它检索会搜空
+- 触发条件: 按 `memory-bank/audit-tracker.md` 备注栏里的 `PIT-0xx` 去 `pitfalls.md` 找条目
+- 错误现象: 搜不到，或搜到**另一个**问题（同一编号指向不同条目）。实测偏移：
+  - audit-tracker `data/services/encryption_key_manager.dart … clearMemory()新增(PIT-047)`、
+    `application/lock/lock_controller.dart … biometric修复(PIT-047)`
+    ↔ `pitfalls.md` 里这条实际是 **PIT-042**（`pitfalls.md:663`）
+  - audit-tracker `presentation/settings/settings_screen.dart … 死参数移除(PIT-042)`
+    ↔ `pitfalls.md` 里实际是 **PIT-041**（`pitfalls.md:657`）
+  - audit-tracker 引用的 `PIT-048`（`_bytesMatch` 拒绝 3 字节 JPEG 头）在 `pitfalls.md` 里**原本整条缺失**（本次补齐）
+- 正确做法: **以 `pitfalls.md` 的编号为准**；`audit-tracker.md` 只当"文件 → 审计轮次"的状态表用。
+  代码注释/commit message 里的 `PIT-04x` 引用（例如 `lock_controller.dart` 里的 `PIT-049`）
+  按**条目名**去 `pitfalls.md` 检索，不要假设编号连续一致
+- 反例（别这么写）: 用 `findstr PIT-047 memory-bank\pitfalls.md` 没命中就断定"条目不存在、这是个新问题"
+- 自检: `Select-String -Path memory-bank\pitfalls.md -Pattern '^## PIT-'` 看最大编号与连续性
+- 首次记录: 2026-10-13
+
+## PIT-048 `_bytesMatch` 的 `b.length < 4` 守卫 ⇒ 3 字节 JPEG 魔数永不匹配 ⇒ 所有 JPEG 被判成"已加密"
+- 触发条件: 魔数表里含 3 字节签名（`commonJpeg = [0xFF, 0xD8, 0xFF]`），而守卫写成"签名长度必须 ≥ 4"
+- 错误现象: `looksEncrypted()` 对**所有** JPEG 返回 true ⇒ `encryptFileWithDek` 抛 `StateError` ⇒
+  加密流水线永久跳过每一个 JPEG（相机拍的 JPEG 导入后一直不加密；`PIT-035` 是它的前身）
+- 正确做法: 只挡空签名，长度比较交给上一级的 `a.length < b.length`
+  ```dart
+  static bool _bytesMatch(List<int> a, List<int> b) {
+    if (a.length < b.length || b.isEmpty) return false;
+    for (var i = 0; i < b.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+  ```
+- 反例（别这么写）: `if (a.length < b.length || b.length < 4) return false;`
+- 自检: `git grep -n "b.length < 4" -- lib/` 应无命中；`looksEncrypted()` 对普通 JPEG 必须返回 false
+- 首次记录: 2026-10-13（`6d18a74 fix(PIT-048)`；本条为本次回填）
+
+## PIT-049 指纹"验证通过但拿不到持久化 KEK"时返回裸 `false` ⇒ 指纹按钮看起来完全坏了
+- 触发条件: `unlockWithBiometric()` 里 `bio.authenticate()` 返回 true，但
+  `EncryptionKeyManager.retrievePersistedKek()` 返回 null —— 常见于"该设备从未用图案/PIN 成功派生过 KEK"
+  （KEK 只在 `setupPattern`/`setupPin`/`unlockWithPattern`/`unlock(pin)` 里写入），
+  或 `SecurityService.deriveEncryptionKey()` 内部 catch 返回 null
+- 错误现象: 指纹弹窗验证成功 → 界面**什么都不发生**：不解锁、无错误、无进度。
+  用户体感 = "指纹解锁坏了"。`f812d9d` 之前是"照样置 `unlocked`"（半解锁：能进 app，但加密文件打不开），
+  改成"保持锁定 + `return false`"后，症状从"半解锁"升级成"完全没反应"
+- 正确做法: 保持锁定（**不要**半解锁），但必须把原因说出来：
+  `VaultLockErrorCode.kekUnavailable` → `_mapLockError` → l10n `biometricKekUnavailable`
+  （"请先用图案解锁一次，之后指纹即可正常使用"）；同时 `_deriveAndStoreEncryptionKey` 在 `kek == null` 时补 error 日志
+- 反例（别这么写）:
+  - `if (ok) { state = unlocked; ... }` —— 半解锁：vault 已解锁但 `getKey() == null`（回归 `ISSUE-024`）
+  - `return false;` 什么都不设 —— 静默失败，用户只能猜
+  - 顺手把 `EncryptionKeyManager` 的 storage 改成 `AndroidOptions(encryptedSharedPreferences: true)`
+    "统一后端" —— 等于换存储桶，**已安装版本**持久化的 KEK 全部读不到（见 `ADR-035`）
+- 自检: 设备日志出现 `Biometric OK but no persisted KEK found` ⇒ 命中的就是本条；
+  修复后同场景应在锁屏界面看到"请先用图案解锁一次"的提示文案
+- 首次记录: 2026-10-13（`f812d9d` 引入静默失败；本轮补可见提示 + 诊断日志）
+
+## PIT-050 ISO-BMFF（MP4/MOV/HEIC）魔数判断不能用固定的"size + `ftyp`"8 字节签名
+- 触发条件: 写明文媒体探测时，把 `ftyp` box 当成固定头部
+  `[00 00 00 20 66 74 79 70]` 去比对
+- 错误现象: 判断**永不成立** ⇒ `looksEncrypted()` 对每个 MP4 返回 true ⇒ `encryptFileWithDek` 抛
+  `StateError('File already appears encrypted')` ⇒ 批量加密把每个视频都记成失败、导入也永不加密视频。
+  和 `PIT-048`（3 字节 JPEG 头）是同一类错误：**签名长度/位置写错 ⇒ 静默漏判**
+- 正确做法: `ftyp` 的 **box size 每个文件都不同**（0x18 / 0x1C / 0x20 / 0x24…），只能匹配 offset 4 的 4 字节标签；
+  另外顺手把 GIF / RIFF 容器补上（签名都 ≥4 字节，防止把随机密文误判成明文而**二次加密**）：
+  ```dart
+  // 读 32 字节头（不要全量读，见 PIT-031）
+  final ftypTag  = Uint8List.fromList([0x66,0x74,0x79,0x70]);        // 'ftyp'
+  final commonGif = Uint8List.fromList([0x47,0x49,0x46,0x38]);       // 'GIF8'
+  final commonRiff = Uint8List.fromList([0x52,0x49,0x46,0x46]);      // 'RIFF'
+  final commonAvi  = Uint8List.fromList([0x41,0x56,0x49,0x20]);      // 'AVI '
+  final commonWebp = Uint8List.fromList([0x57,0x45,0x42,0x50]);      // 'WEBP'
+
+  if (_bytesMatch(header, commonGif)) return true;
+  if (bytes.length >= 8 && _bytesMatch(bytes.sublist(4, 8), ftypTag)) return true;
+  if (_bytesMatch(header, commonRiff) && bytes.length >= 12) {
+    final fourcc = bytes.sublist(8, 12);
+    if (_bytesMatch(fourcc, commonAvi)) return true;
+    if (_bytesMatch(fourcc, commonWebp)) return true;
+  }
+  ```
+- 反例（别这么写）: `_bytesMatch(bytes.sublist(4, 12), [00,00,00,20,'f','t','y','p'])`；
+  也别加 2 字节签名（如 BMP 的 `BM`）—— 误判成"明文"会导致**二次加密**（真正会丢数据）
+- 自检: `git grep -n "sublist(4, 12)" -- lib/` 无命中；真实 MP4 的 `looksEncrypted()` 必须为 false
+  （取一个 `ffmpeg`/相机产出、开头是 `00 00 00 18 66 74 79 70 …` 的 mp4 验证）
+- 首次记录: 2026-10-13（第十轮审计，见 `ISSUE-029`①）
+
+## PIT-051 批量加密必须"先存 DEK 再加密文件"，且失败回滚要看**文件是否真的被加密**
+- 触发条件: 用 `MediaEncryptionService.encryptFile()`（一把梭：native 原地加密 → 再 `encryptDek` 返回）后
+  才 `updateEncryptedDek`
+- 错误现象: 两次 await 之间崩溃/被杀 = **文件已密文、DEK 从未落库 = 永久无法解密**（`PIT-044` 的导入路径已修，
+  但"加密已有文件"批量入口漏了）；反向错误同样致命：catch 里无条件 `updateEncryptedDek(id, null)`，
+  而 native 可能**已经把文件换掉了**、只是结果回传失败（Activity 重建/通道断）⇒ 清掉 DEK = 永久孤儿
+- 正确做法:
+  ```dart
+  final dek = encryptionService.generateDek();
+  final nonce = Uint8List.fromList(encryptionService.generateNonce());
+  final encryptedDek = await encryptionService.encryptDek(dek: dek, kek: kek);
+  await repo.updateEncryptedDek(item.id, encryptedDek);      // ① 先落库
+  try {
+    await encryptionService.encryptFileWithDek(              // ② 再加密文件
+      filePath: item.privatePath, dek: dek, nonce: nonce,
+    );
+  } catch (e) {
+    if (!encryptionService.looksEncrypted(File(item.privatePath))) {
+      await repo.updateEncryptedDek(item.id, null);          // ③ 只有确认仍是明文才回滚
+    }
+    rethrow;
+  }
+  ```
+- 反例（别这么写）: `final r = await encryptFile(...); await updateEncryptedDek(id, r.encryptedDekBase64);`；
+  或 catch 里无条件 `updateEncryptedDek(id, null)`
+- 自检: `git grep -n "updateEncryptedDek" -B 8 -- lib/presentation/settings/settings_screen.dart`
+  ⇒ 存 DEK 的行必须出现在 `encryptFileWithDek` **之前**
+- 首次记录: 2026-10-13（第十轮审计，见 `ISSUE-029`②③）
+
+## PIT-052 "解不开就静默 return" = 把密文搬出保险库并删掉它的 DEK（fail-open 数据损坏）
+- 触发条件: 还原/导出（`reveal`）路径里，KEK 未加载（锁屏后）、DEK 解密失败、或加密服务只为 null 时
+  **静默 `return`**，让后续的 unhide 继续跑
+- 错误现象: 密文被当成媒体移出保险库 → 相册里是个打不开的文件；紧接着 DB 行（连同 `encrypted_dek`）被删除
+  ⇒ **不可逆**的数据损坏。用户看到的是"还原后文件坏了/打不开"
+- 正确做法: 解密前置校验失败必须**抛异常/返回失败**，让调用方跳过该项：
+  ```dart
+  Future<void> _decryptIfNeeded(MediaItem item) async {
+    final encryptedDek = item.encryptedDek;
+    if (encryptedDek == null || encryptedDek.isEmpty) return;
+    final kek = _encryptionKeyManager!.getKey();
+    if (kek == null) {
+      throw StateError('vault key not loaded (lock and unlock, then retry)');
+    }
+    final dek = await _encryptionService!.decryptDek(encryptedDekBase64: encryptedDek, kek: kek);
+    if (dek == null) throw StateError('DEK decryption failed');
+    ...
+  }
+  ```
+  调用方：单项 `try { ... } catch { return false; }`；批量维护 `blockedIds` 集合并 `continue` 跳过。
+- 反例（别这么写）: `if (kek == null) return;` / `if (dek == null) return;`（看着"稳妥"，实际是 fail-open）
+- 自检: `git grep -n "if (kek == null) return" -- lib/data/services/import/vault_reveal_runner.dart` 应无命中
+- 首次记录: 2026-10-13（第十轮审计，见 `ISSUE-029`④）
+
+## PIT-053 原生 AES-GCM 分块实现的三个隐蔽坑（skip 不可靠 / 空文件 minLength / finally 删备份）
+- 触发条件: 用 `javax.crypto.Cipher` + 流式 `update()/doFinal()` 做文件加解密
+- 错误现象:
+  ① `InputStream.skip(n)` 只承诺"最多跳过 n 字节"，**可以少跳** ⇒ 若只跳过 0~11 字节，nonce 会被当密文喂进 GCM
+     ⇒ 认证失败（"文件损坏"假象）；② `minLength = nonce + tag + 1` 让 **0 字节明文的密文（正好 28 字节）拒绝解密**；
+  ③ `finally { bakFile.delete() }` 在"恢复 rename 也失败"的分支里会删掉**唯一的备份** ⇒ 真正的数据丢失
+- 正确做法:
+  ```kotlin
+  // ① 循环跳过，直到真的跳够
+  var skipped = 0L
+  while (skipped < nonceLen) {
+      val step = input.skip(nonceLen - skipped)
+      if (step <= 0) break
+      skipped += step
+  }
+
+  // ② 下限就是 nonce + tag（12 + 16 = 28），不要 +1
+  val minLength = GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8
+
+  // ③ 只在"新文件已就位"之后删备份；恢复失败必须保留备份并报错
+  if (!tmp.renameTo(original)) {
+      if (!bak.renameTo(original)) return mapOf("ok" to false, "error" to "...; kept as ${bak.name}")
+      return mapOf("ok" to false, "error" to "Failed to rename temp file (restored backup)")
+  }
+  bak.delete()
+  ```
+  另外建议做 crash 自愈：`encryptFile` 开头若主文件缺失而 `.enc_bak` 存在 → 回填；残留 `.enc_tmp` 直接删。
+- 反例（别这么写）: `input.skip(nonceLen)`；`minLength = nonce + tag + 1L`；
+  `try { ... } finally { bakFile.delete() }`
+- 自检: `git grep -n "GCM_TAG_LENGTH / 8 + 1L" -- android/` 应无命中；
+  `git grep -n "input.skip(" -- android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt` 只应出现在循环跳过里
+- 首次记录: 2026-10-13（第十轮审计，见 `ISSUE-029`⑥）
+
+## PIT-054 备份不含"密钥材料"就不叫备份：必须带 `encryptionSalt` + 每行 `encryptedDek`
+- 触发条件: 应用有文件级加密（DEK 用 KEK 包、KEK 由 `PBKDF2(密码, salt)` 派生），但导出/备份只打包媒体文件
+- 错误现象: 备份里全是**密文**、且没有 DEK/盐 ⇒ 重装或换机后恢复出来的文件**永远打不开**，而用户以为
+  "我有备份"。`ISSUE-029`③ 正是如此（`vault_backup_*` 里 `grep -i encrypt` 零命中）
+- 正确做法:
+  - manifest 顶层存 `encryptionSalt`（**它不是秘密**，明文落盘没问题），每个媒体条目存 `encryptedDek`
+    （已用 KEK 包好的密文）；
+  - 还原时写回每行 `encrypted_dek`；salt **只能"缺失时采用"**：
+    ```dart
+    Future<bool> adoptEncryptionSaltIfAbsent(String salt) async {
+      final existing = await readEncryptionSalt();
+      if (existing != null && existing.isNotEmpty) return false; // 绝不覆盖
+      await _storage.write(key: _kEncryptionSalt, value: salt);
+      return true;
+    }
+    ```
+    覆盖 salt = 换 KEK = 本机**已有**的加密文件全部失效；
+  - 新字段一律做成**可选**且不 bump `manifestVersion`（旧备份缺字段 → null；旧版本 app 也能读新备份）
+- 反例（别这么写）: 只把密文文件 copy 进备份包；还原时无条件 `write(encryption_salt, manifest.salt)`；
+  为加字段而 bump manifestVersion（旧客户端会直接拒收备份）
+- 自检: 导出后 `privi_manifest.json` 顶层应有 `encryptionSalt`，**已加密项**的条目应有 `encryptedDek`；
+  还原到干净安装后用**导出时的图案**解锁 → 加密图片能正常显示
+- 首次记录: 2026-10-13（R11，见 `ISSUE-029`③）

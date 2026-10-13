@@ -20,6 +20,7 @@ String _mapLockError(BuildContext context, VaultLockState lock) {
     VaultLockErrorCode.wrongPin => l10n.wrongPin,
     VaultLockErrorCode.noSystemLock => l10n.noSystemLock,
     VaultLockErrorCode.systemAuthCancelled => l10n.systemAuthCancelled,
+    VaultLockErrorCode.kekUnavailable => l10n.biometricKekUnavailable,
     VaultLockErrorCode.lockout => l10n.unlockLockout(lock.lockoutSeconds ?? 0),
     null => '',
   };

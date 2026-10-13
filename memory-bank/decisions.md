@@ -799,3 +799,69 @@
   - 方案 A（已否决）: 不改密码，只改 KEK → 密码不跟着变，安全性弱
   - 方案 B（已否决）: 旧 KEK 用新 KEK 包一层存下来 → 密钥版本多了管理复杂还降安全性
 - 首次记录: 2026-10-13
+
+## ADR-035 生物识别解锁：KEK 缺失时"保持锁定 + 明确提示"，且**不**统一 FlutterSecureStorage 后端
+- 日期: 2026-10-13 | 状态: 已采纳
+- 背景: `f812d9d`（`PIT-049`）把"指纹验证通过但持久化 KEK 缺失"从老行为（照样置 `unlocked` = 半解锁）
+  改成"保持锁定 + 裸 `return false`"。半解锁确实危险（vault 标已解锁、`getKey() == null`，
+  加密导入/批量加密会写出坏数据，见 `ISSUE-024`/`ISSUE-027`），但静默失败让锁屏界面**毫无反馈**，
+  用户直接判定"指纹坏了"（`ISSUE-028`）。
+- 决策:
+  ① 语义：拿不到 KEK 就**不允许解锁**（保持 `LockStatus.locked`），**绝不**半解锁；
+  ② 反馈：新增 `VaultLockErrorCode.kekUnavailable` + l10n `biometricKekUnavailable`，
+     锁屏明确提示"用图案解锁一次即可恢复指纹"；
+  ③ 诊断：`_deriveAndStoreEncryptionKey()` 在 `kek == null` 时打 error 日志（此前 PBKDF2 失败完全静默）；
+  ④ **不动** `EncryptionKeyManager` 的 `FlutterSecureStorage` 后端选项（保持该类默认的 `AndroidOptions()`），
+     尽管 `SecurityService` 用的是 `AndroidOptions(encryptedSharedPreferences: true)`。
+- 理由: ①半解锁是本项目最贵的一类 bug（用户以为已解锁，加密链路却拿不到密钥）；
+  ②凡是用户可感知的失败，必须能在 UI 或日志里定论；
+  ④两种后端**各自都能读到自己写的键**，统一它们等于**换存储桶** ——
+  已安装版本持久化的 `privi_kek_v1` 在新后端里不存在 ⇒ 所有老用户指纹解锁当场失效（正好是本次要修的病症）。
+- 备选与为何不选:
+  - 方案 A（已否决）: 保持半解锁 —— 加密媒体/导入会看到 null KEK，回归 `ISSUE-024`
+  - 方案 B（已否决）: KEK 缺失时改用"设备凭证"重新派生 KEK —— KEK 由用户图案/PIN + `encryption_salt`
+    经 PBKDF2 派生，系统凭证只证明身份、**推不出**用户 secret，技术上做不到
+  - 方案 C（已否决）: 把两个 `FlutterSecureStorage` 后端统一为 `encryptedSharedPreferences: true` —— 见理由④
+  - 方案 D（暂缓）: `setBiometricEnabled(true)` 时顺手持久化一份 KEK —— 只能覆盖"解锁状态下开开关"的新用户，
+    救不了"历史版本从未写过 KEK"的老用户；留作后续专项（`ISSUE-028`「下一步验证」④）
+- 影响 / 约束:
+  - `_mapLockError` 的 `switch` 表达式是**穷尽**的 —— 以后再加 `VaultLockErrorCode` 必须同步补 l10n，否则编译不过
+  - 指纹路径的失败从此有三种可区分日志，排查按此顺序读：
+    `biometric status:`（硬件/录入）→ `biometric authenticate result=`（验证）→
+    `Biometric OK but no persisted KEK found`（密钥缺失）
+  - 新增"持久化 KEK 的写入点"时要记住：老用户的 KEK 是在**图案/PIN 解锁**时才写入的，
+    任何"跳过图案解锁"的入口都不能假设 KEK 已存在
+- 相关文件: `lib/application/lock/lock_controller.dart`、`lib/presentation/lock/lock_screen.dart`、
+  `lib/l10n/app_localizations.dart`、`lib/data/services/encryption_key_manager.dart`
+- 首次记录: 2026-10-13
+
+## ADR-036 加密媒体不得交给外部 app；解密层必须覆盖每个展示入口（本轮只落了"不外放"）
+- 日期: 2026-10-13 | 状态: 已采纳（同日 R11 全部落地：①不外放 ②PlayerScreen 解密 ③缩略图 ④备份带
+  salt+DEK；仅「抽共享 mixin」未做，作为技术债记在 `ISSUE-029` 补修①）
+- 背景: 第十轮审计（`ISSUE-029`）发现加密上线后 `item.privatePath` 仍被直接喂给三类消费者：
+  外部播放器（`media_grid_screen._openExternally`、`player_controller._onItemEntered`）、
+  内置播放列表页（`player_screen._buildImage` 与 `NativeVideoController.create`）、
+  缩略图生成器（`thumbnail_generator.makeThumbnail`）。它们拿到的都是**密文**，表现为"文件坏了"。
+- 决策:
+  ① **加密媒体一律不外放**（不给系统 chooser / 其它 app）：外放要么喂密文（现状，打不开），
+     要么必须先在共享存储落一份**明文**（隐私倒退且清理时机不可控），加密项直接走内置链路；
+  ② 解密层继续"每个展示入口各自接入"，但**新增入口必须显式接入** ——
+     `viewer_screen._resolveDisplayPath` 是参考实现（`encryptedDek != null → decryptToTempFileWithDek →
+     内存缓存 → dispose 清理`），后续应抽共享 mixin，禁止出现第三份实现；
+  ③ 缩略图：加密项要么解密后再取帧，要么**跳过**，不能像现在这样让 `repairOutdatedVideos()` 每次启动无效重试；
+  ④ 备份：加密媒体的备份必须"要么明文导出、要么带上 DEK"，两者都是产品决策；在定下来之前
+     **不得**让用户以为备份可恢复（`ISSUE-029` 未修复③）。
+- 理由: 密文外放/外显属于"静默失败"——用户看到的是"文件坏了"而不是"此功能不支持"；
+  而明文外放会把加密的意义抹掉。两者都比"明确不支持"差。
+- 备选与为何不选:
+  - 方案 A（已否决）: 外放前解密到共享目录 → 明文落盘在别处、任何 app 可读，与加密目标冲突
+  - 方案 B（已否决）: 把 KEK/DEK 交给外部 app 去解密 → 绝对不可接受
+  - 方案 C（已采纳）: 加密项留在内置播放器/查看器，由 app 自己解密到 `systemTemp`
+- 影响 / 约束:
+  - 写任何读 `item.privatePath` 的新代码前先自问：这是明文消费者吗？是 → 必须走解密层；
+    不是（存在性判断、删除、rename）→ 才可以直接用；
+  - `PlayerScreen` / 缩略图 / 备份 是**已知未修**的三处，动手前不要以"加密功能已经没问题"为前提。
+- 相关文件: `lib/presentation/grid/media_grid_screen.dart`、`lib/application/player/player_controller.dart`、
+  `lib/presentation/player/player_screen.dart`、`lib/presentation/viewer/viewer_screen.dart`、
+  `lib/data/services/import/thumbnail_generator.dart`
+- 首次记录: 2026-10-13

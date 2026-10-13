@@ -34,11 +34,19 @@ class CryptoHandler {
         nonce: ByteArray,
     ): Map<String, Any?> {
         val inputFile = File(filePath)
+        val bakFile = File(filePath + ".enc_bak")
         if (!inputFile.exists()) {
-            return mapOf("ok" to false, "error" to "File not found: $filePath")
+            // Self-heal a crash between "original → .enc_bak" and
+            // "temp → original": the media is still sitting in the backup slot.
+            if (bakFile.exists() && bakFile.renameTo(inputFile)) {
+                Log.w(TAG, "Recovered interrupted encryption: $filePath")
+            } else {
+                return mapOf("ok" to false, "error" to "File not found: $filePath")
+            }
         }
         val originalLength = inputFile.length()
         val tmpFile = File(filePath + ".enc_tmp")
+        if (tmpFile.exists()) tmpFile.delete() // stale half-written ciphertext
 
         try {
             val key = SecretKeySpec(dek, "AES")
@@ -68,21 +76,24 @@ class CryptoHandler {
             // Atomic replace: backup original → rename temp → delete backup.
             // Never delete-then-rename: a crash between the two steps permanently
             // loses the file (PIT-034).  On the same filesystem rename is atomic.
-            val bakFile = File(filePath + ".enc_bak")
             if (!inputFile.renameTo(bakFile)) {
                 tmpFile.delete()
                 return mapOf("ok" to false, "error" to "Failed to back up original file")
             }
-            try {
-                if (!tmpFile.renameTo(inputFile)) {
-                    // Restore from backup
-                    bakFile.renameTo(inputFile)
-                    tmpFile.delete()
-                    return mapOf("ok" to false, "error" to "Failed to rename temp file (restored backup)")
+            if (!tmpFile.renameTo(inputFile)) {
+                tmpFile.delete()
+                if (!bakFile.renameTo(inputFile)) {
+                    // Keep the backup on disk: deleting it here would destroy
+                    // the only remaining copy of the user's media.
+                    Log.e(TAG, "Encrypt rename failed, original kept at ${bakFile.path}")
+                    return mapOf(
+                        "ok" to false,
+                        "error" to "Failed to replace original file; it was preserved as ${bakFile.name}",
+                    )
                 }
-            } finally {
-                bakFile.delete()
+                return mapOf("ok" to false, "error" to "Failed to rename temp file (restored backup)")
             }
+            bakFile.delete()
 
             val encryptedLength = inputFile.length()
             Log.i(TAG, "Encrypted: $filePath ($originalLength -> $encryptedLength bytes)")
@@ -109,7 +120,10 @@ class CryptoHandler {
             return mapOf("ok" to false, "error" to "File not found: $filePath")
         }
         val fileLength = inputFile.length()
-        val minLength = GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8 + 1L
+        // 12-byte nonce + 16-byte tag is the exact minimum: a 0-byte plaintext
+        // encrypts to exactly 28 bytes, so rejecting 28 made empty media
+        // undecryptable.
+        val minLength = GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8
         if (fileLength < minLength) {
             return mapOf("ok" to false, "error" to "File too small to be encrypted: $fileLength bytes")
         }
@@ -141,8 +155,15 @@ class CryptoHandler {
             val ciphertextLength = fileLength - GCM_NONCE_LENGTH - tag.size
 
             FileInputStream(inputFile).use { input ->
-                // Skip nonce
-                input.skip(ciphertextStart)
+                // Skip the nonce.  InputStream.skip may advance fewer bytes than
+                // asked (it is a hint, not a guarantee) — a short skip would
+                // feed nonce bytes into GCM and fail the auth tag check.
+                var skipped = 0L
+                while (skipped < ciphertextStart) {
+                    val step = input.skip(ciphertextStart - skipped)
+                    if (step <= 0) break
+                    skipped += step
+                }
                 FileOutputStream(outputFile).use { output ->
                     val buffer = ByteArray(CHUNK_SIZE)
                     var remaining = ciphertextLength
@@ -190,7 +211,8 @@ class CryptoHandler {
             return mapOf("ok" to false, "error" to "File not found: $filePath")
         }
         val fileLength = inputFile.length()
-        val minLength = GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8 + 1L
+        // Same 28-byte floor as decryptFile: nonce + tag only.
+        val minLength = GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8
         if (fileLength < minLength) {
             return mapOf("ok" to false, "error" to "File too small to be encrypted: $fileLength bytes")
         }

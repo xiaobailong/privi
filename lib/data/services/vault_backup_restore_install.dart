@@ -161,6 +161,9 @@ final class _VaultBackupRestoreInstaller {
             version >= 4 &&
             item.sourceRemovalPending,
         contentDigest: version >= 4 ? item.contentDigest : null,
+        // Restored encrypted media keeps the DEK the backup carried, so it can
+        // be decrypted again with the same pattern/PIN (ISSUE-029).
+        encryptedDek: item.encryptedDek,
       ),
       userAlbumId: null,
     );

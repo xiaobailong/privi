@@ -667,8 +667,13 @@ class AppLocalizations {
 
   String get allFilesAlreadyEncrypted => '所有文件已加密。';
 
+  String get encryptionSkippedVaultLocked =>
+      '文件已移入保险库，但密钥未就绪、未能加密。请解锁后到「设置 → 加密已有文件」补加密。';
+
   String encryptConfirmationBody(int count) {
-    return '$count 个文件将被加密。此操作在保险库锁定期间不可撤销。确定继续？';
+    return '$count 个文件将被加密。此操作在保险库锁定期间不可撤销。确定继续？\n\n'
+        '⚠️ 加密密钥只保存在本机：卸载应用或清除应用数据后，已加密文件将无法解密。'
+        '请先做好备份（或先把加密文件还原到相册）。';
   }
 
   String get encryptAction => '加密';
@@ -927,6 +932,9 @@ class AppLocalizations {
   String get noSystemLock => '请先在 Android 设置中启用屏幕锁定';
 
   String get systemAuthCancelled => '系统验证已取消';
+
+  String get biometricKekUnavailable =>
+      '指纹验证通过，但加密密钥尚未就绪 —— 请先用图案解锁一次，之后指纹即可正常使用';
 
   String get scanFailedShort => '扫描失败';
 

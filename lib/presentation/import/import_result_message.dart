@@ -17,6 +17,8 @@ String? importOutcomeDetail(
     ImportErrorCode.destinationVerificationFailed =>
       l10n.privateCopyVerificationFailed,
     ImportErrorCode.unsupported => l10n.operationUnavailableOnPlatform,
+    ImportErrorCode.encryptionSkippedVaultLocked =>
+      l10n.encryptionSkippedVaultLocked,
     ImportErrorCode.platformFailure => l10n.couldNotHideMedia,
     ImportErrorCode.transferFailed ||
     ImportErrorCode.emptyDest ||

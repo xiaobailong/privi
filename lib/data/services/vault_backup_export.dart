@@ -5,11 +5,16 @@ final class _VaultBackupExporter {
     required this.db,
     required this.uuid,
     required this.platformName,
+    this.security,
   });
 
   final AppDatabase db;
   final Uuid uuid;
   final String platformName;
+
+  /// Supplies the KEK salt for the manifest so a restored vault can re-derive
+  /// the same key (ISSUE-029).  Null in tests without a security service.
+  final SecurityService? security;
   final _VaultBackupFileOps files = const _VaultBackupFileOps();
   final _VaultBackupManifestCodec manifests = const _VaultBackupManifestCodec();
 
@@ -24,6 +29,7 @@ final class _VaultBackupExporter {
     final committed = <File>[];
     var failureStage = VaultBackupStage.preparing;
     try {
+      final encryptionSalt = await security?.readEncryptionSalt();
       final snapshot = await _loadSnapshot();
       final rows = snapshot.media;
       _emitBackupProgress(
@@ -75,6 +81,7 @@ final class _VaultBackupExporter {
         memberships: snapshot.memberships,
         platformName: platformName,
         verifiedAt: DateTime.now().toUtc(),
+        encryptionSalt: encryptionSalt,
       );
       final stagedManifest = File(
         p.join(staging.path, VaultBackupService.manifestName),

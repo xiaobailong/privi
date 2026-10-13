@@ -63,6 +63,8 @@ final class _VaultBackupManifestParser {
           (entry) => _organization.parseMembership(entry, version),
         ),
       ),
+      encryptionSalt:
+          _optionalManifestString(raw['encryptionSalt'], 'encryptionSalt'),
     );
   }
 
@@ -202,6 +204,9 @@ final class _VaultBackupManifestParser {
         strict: strict,
         required: false,
       ),
+      // Optional: absent in backups made before file encryption (ISSUE-029).
+      encryptedDek:
+          _optionalManifestString(raw['encryptedDek'], 'encryptedDek'),
     );
   }
 

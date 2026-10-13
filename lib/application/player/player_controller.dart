@@ -263,7 +263,9 @@ class PlayerController extends Notifier<PlayerUiState> {
     AppLogger.d('PlayerController',
         'Item entered: ${item.id}, isVideo=${item.isVideo}, external=${settings.playerExternal}');
 
-    if (item.isVideo && settings.playerExternal) {
+    final encrypted =
+        item.encryptedDek != null && item.encryptedDek!.isNotEmpty;
+    if (item.isVideo && settings.playerExternal && !encrypted) {
       final external = ref.read(externalPlayerCoordinatorProvider);
       if (external.supported) {
         AppLogger.i('PlayerController', 'Handing off to external player');

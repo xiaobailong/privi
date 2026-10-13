@@ -11,6 +11,7 @@ import '../db/database.dart';
 import '../repositories/album_repository.dart';
 import '../repositories/media_repository.dart';
 import 'hide_naming.dart';
+import 'security_service.dart';
 import 'vault_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 
@@ -33,12 +34,14 @@ class VaultBackupService implements VaultBackupOperations {
     required AlbumRepository albums,
     required VaultStorageService storage,
     Uuid? uuid,
+    SecurityService? security,
     bool usePrivateMediaStorage = false,
   })  : _db = db,
         _media = media,
         _albums = albums,
         _storage = storage,
         _uuid = uuid ?? const Uuid(),
+        _security = security,
         _usePrivateMediaStorage = usePrivateMediaStorage;
 
   static const manifestName = 'privi_manifest.json';
@@ -49,6 +52,9 @@ class VaultBackupService implements VaultBackupOperations {
   final AlbumRepository _albums;
   final VaultStorageService _storage;
   final Uuid _uuid;
+
+  /// Supplies / adopts the KEK salt so backups survive a reinstall (ISSUE-029).
+  final SecurityService? _security;
   final bool _usePrivateMediaStorage;
 
   String get _platformName => 'android';
@@ -63,6 +69,7 @@ class VaultBackupService implements VaultBackupOperations {
       db: _db,
       uuid: _uuid,
       platformName: _platformName,
+      security: _security,
     ).run(
       destinationDirectory,
       session: session,
@@ -84,6 +91,7 @@ class VaultBackupService implements VaultBackupOperations {
       uuid: _uuid,
       platformName: _platformName,
       usePrivateMediaStorage: _usePrivateMediaStorage,
+      security: _security,
     ).run(
       sourceDirectory,
       session: session,

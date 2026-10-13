@@ -9,6 +9,11 @@ enum ImportPhase {
 enum ImportErrorCode {
   needManageStorage,
   transferFailed,
+
+  /// Media was hidden successfully but **not** encrypted because the vault key
+  /// (KEK) was not loaded.  It stays plaintext inside the vault until the user
+  /// runs "Encrypt existing files" after unlocking (ISSUE-029).
+  encryptionSkippedVaultLocked,
   emptyDest,
   timeout,
   permissionDenied,

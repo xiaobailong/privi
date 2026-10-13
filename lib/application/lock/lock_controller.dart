@@ -20,6 +20,13 @@ enum VaultLockErrorCode {
   noSystemLock,
   systemAuthCancelled,
   lockout,
+
+  /// Biometric identity check passed, but no persisted KEK could be loaded
+  /// (e.g. the device was unlocked with biometrics before the encryption
+  /// layer existed, so the KEK was never persisted).  The user must unlock
+  /// with pattern/pin once; that derives and persists the KEK, after which
+  /// biometric unlock works again (PIT-049).
+  kekUnavailable,
 }
 
 class VaultLockState {
@@ -360,6 +367,10 @@ class LockController extends Notifier<VaultLockState> {
           'Biometric OK but no persisted KEK found — '
           'user must unlock with pattern/pin first to derive the '
           'encryption key before biometric unlock can load it.');
+      if (!ref.mounted) return false;
+      // Stay locked, but tell the user *why* — a bare `false` made the
+      // fingerprint button look broken (no prompt result, no error).
+      state = state.copyWith(errorCode: VaultLockErrorCode.kekUnavailable);
       return false;
     }
     return false;
@@ -649,6 +660,12 @@ class LockController extends Notifier<VaultLockState> {
     if (gen != _kekGen) return;
     if (kek != null && ref.mounted) {
       await ref.read(encryptionKeyManagerProvider).setKey(kek);
+    } else if (kek == null) {
+      // PBKDF2 failed (secure-storage read error): nothing is persisted, so
+      // biometric unlock cannot load a KEK later (VaultLockErrorCode.kekUnavailable).
+      AppLogger.e('LockController',
+          'KEK derivation returned null — encrypted media stays '
+          'inaccessible and biometric unlock has no persisted KEK to load.');
     }
   }
 

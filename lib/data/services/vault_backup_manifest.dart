@@ -13,6 +13,7 @@ final class _VaultBackupManifestCodec {
     required List<AlbumMediaRow> memberships,
     required String platformName,
     required DateTime verifiedAt,
+    String? encryptionSalt,
   }) {
     final media = entries
         .map(
@@ -42,6 +43,7 @@ final class _VaultBackupManifestCodec {
             dateTaken: entry.row.dateTaken,
             sizeBytes: entry.byteLength,
             deletedAt: entry.row.deletedAt,
+            encryptedDek: entry.row.encryptedDek,
           ),
         )
         .toList(growable: false);
@@ -54,6 +56,7 @@ final class _VaultBackupManifestCodec {
         0,
         (sum, entry) => sum + entry.byteLength,
       ),
+      encryptionSalt: encryptionSalt,
       media: List.unmodifiable(media),
       albums: List.unmodifiable(
         albums.map(
@@ -142,6 +145,7 @@ final class _VaultBackupManifestCodec {
         'albumGroups': manifest.groups.map((item) => item.toJson()).toList(),
         'membership':
             manifest.memberships.map((item) => item.toJson()).toList(),
+        'encryptionSalt': manifest.encryptionSalt,
       };
 
   void validateV5Summary(_BackupManifest manifest) {

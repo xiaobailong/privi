@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -566,12 +567,31 @@ class SettingsScreen extends ConsumerWidget {
                   if (!file.existsSync()) {
                     failed++;
                   } else {
-                    final result = await encryptionService.encryptFile(
-                      filePath: item.privatePath,
+                    // PIT-044 order: generate the DEK → persist it → then
+                    // encrypt the file.  Encrypting first leaves a crash window
+                    // in which the media is ciphertext while its DEK never
+                    // reached the DB (unrecoverable).
+                    final dek = encryptionService.generateDek();
+                    final nonce = encryptionService.generateNonce();
+                    final encryptedDek = await encryptionService.encryptDek(
+                      dek: dek,
                       kek: kekNow,
                     );
-                    await repo.updateEncryptedDek(
-                        item.id, result.encryptedDekBase64);
+                    await repo.updateEncryptedDek(item.id, encryptedDek);
+                    try {
+                      await encryptionService.encryptFileWithDek(
+                        filePath: item.privatePath,
+                        dek: dek,
+                        nonce: Uint8List.fromList(nonce),
+                      );
+                    } catch (e) {
+                      // Keep the DEK when the file did get encrypted — the
+                      // native swap can succeed even if its reply is lost.
+                      if (!encryptionService.looksEncrypted(file)) {
+                        await repo.updateEncryptedDek(item.id, null);
+                      }
+                      rethrow;
+                    }
                   }
                 } catch (e, stackTrace) {
                   AppLogger.e('SettingsScreen',

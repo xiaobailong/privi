@@ -7,6 +7,8 @@ import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../core/utils/app_logger.dart';
+
 /// Root lock secret (pattern preferred; legacy PIN still verifiable).
 /// See docs/03-architecture/security.md.
 class SecurityService {
@@ -186,6 +188,36 @@ class SecurityService {
       key: _kLockoutUntil,
       value: until.millisecondsSinceEpoch.toString(),
     );
+  }
+
+  /// Current KEK-derivation salt (base64), or null when none exists yet.
+  ///
+  /// Vault backup stores this so a restored vault can re-derive the same KEK
+  /// from the same pattern/PIN — PBKDF2 is deterministic given salt + secret.
+  Future<String?> readEncryptionSalt() async {
+    try {
+      return await _storage.read(key: _kEncryptionSalt);
+    } catch (e) {
+      AppLogger.w('SecurityService', 'readEncryptionSalt: $e');
+      return null;
+    }
+  }
+
+  /// Adopt a salt from a backup **only** when this install has none yet.
+  ///
+  /// Overwriting an existing salt would silently change the derived KEK and
+  /// invalidate every file already encrypted on this device (ISSUE-029).
+  Future<bool> adoptEncryptionSaltIfAbsent(String salt) async {
+    if (salt.isEmpty) return false;
+    try {
+      final existing = await readEncryptionSalt();
+      if (existing != null && existing.isNotEmpty) return false;
+      await _storage.write(key: _kEncryptionSalt, value: salt);
+      return true;
+    } catch (e) {
+      AppLogger.w('SecurityService', 'adoptEncryptionSaltIfAbsent: $e');
+      return false;
+    }
   }
 
   Future<Uint8List?> deriveEncryptionKey(String secret) async {

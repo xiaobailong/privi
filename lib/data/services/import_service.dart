@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -90,6 +91,9 @@ class ImportService implements VaultWorkflow {
           thumbnailCache: thumbnailCache ??
               MediaThumbnailService(assetGateway: _assetGateway),
           fileSystem: _fileSystem,
+          // Encrypted media is decrypted before poster extraction (ISSUE-029).
+          encryptionService: _encryptionService,
+          encryptionKeyManager: _encryptionKeyManager,
         );
   }
 
@@ -263,6 +267,7 @@ class ImportService implements VaultWorkflow {
     currentPhase = ImportPhase.hiding;
     emit();
     final thumbJobs = <ThumbnailJob>[];
+    var encryptionSkipped = 0;
     await _transferRunner.run(
       prepared,
       session: activeSession,
@@ -301,7 +306,7 @@ class ImportService implements VaultWorkflow {
           emit();
         }
 
-        await _encryptRecordedFiles(recorded);
+        encryptionSkipped += await _encryptRecordedFiles(recorded);
 
         for (final record in recorded) {
           final job = record.outcome.job;
@@ -361,6 +366,16 @@ class ImportService implements VaultWorkflow {
       );
     }
 
+    // Items that were hidden but could not be encrypted (vault key not loaded).
+    // They stay plaintext inside the vault until the user runs
+    // "Encrypt existing files" (ISSUE-029).
+    if (encryptionSkipped > 0) {
+      lastError = 'encryption_skipped_vault_locked';
+      lastErrorCode = ImportErrorCode.encryptionSkippedVaultLocked;
+      AppLogger.w('ImportService',
+          'encryption skipped for $encryptionSkipped item(s): KEK not loaded');
+    }
+
     final done = ImportProgress(
       done: total,
       total: total,
@@ -377,14 +392,24 @@ class ImportService implements VaultWorkflow {
     return done;
   }
 
-  Future<void> _encryptRecordedFiles(List<RecordedHide> recorded) async {
-    if (recorded.isEmpty) return;
+  /// Encrypts freshly hidden files.  Returns how many items could **not** be
+  /// encrypted because the vault key (KEK) was not loaded — those stay
+  /// plaintext in the vault, so the caller must surface that to the user.
+  Future<int> _encryptRecordedFiles(List<RecordedHide> recorded) async {
+    if (recorded.isEmpty) return 0;
     final encryptionService = _encryptionService;
     final keyManager = _encryptionKeyManager;
-    if (encryptionService == null || keyManager == null) return;
+    if (encryptionService == null || keyManager == null) return recorded.length;
 
     final kek = keyManager.getKey();
-    if (kek == null) return;
+    if (kek == null) {
+      AppLogger.w(
+        'ImportService',
+        'vault key (KEK) not loaded — ${recorded.length} imported item(s) '
+        'stay unencrypted until "Encrypt existing files" is run',
+      );
+      return recorded.length;
+    }
 
     for (final record in recorded) {
       try {
@@ -412,11 +437,24 @@ class ImportService implements VaultWorkflow {
           'ImportService',
           '_encryptRecordedFiles failed for ${record.item.id}: $e\n$stack',
         );
-        // PIT-044: rollback — clear the saved DEK so maintenance can retry
-        // on next launch.
-        await _mediaRepository.updateEncryptedDek(record.item.id, null);
+        // Roll the DEK back **only** while the file is still plaintext.
+        // `encryptFileWithDek` can finish the native in-place swap and still
+        // fail on the way back (channel restart / process death); clearing the
+        // saved DEK then would orphan an already-encrypted file forever.
+        final stillPlain =
+            !encryptionService.looksEncrypted(File(record.item.privatePath));
+        if (stillPlain) {
+          await _mediaRepository.updateEncryptedDek(record.item.id, null);
+        } else {
+          AppLogger.w(
+            'ImportService',
+            'Kept saved DEK for ${record.item.id}: the file is already '
+            'encrypted even though the encrypt call failed',
+          );
+        }
       }
     }
+    return 0;
   }
 
   /// Unhide one item through the injected reveal pipeline.

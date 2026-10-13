@@ -51,7 +51,17 @@ class VaultRevealRunner {
     final visiblePath = await _resolveTarget(item);
     if (visiblePath == null || session.isCancelled) return false;
 
-    await _decryptIfNeeded(item);
+    // Never move ciphertext to the gallery: if the KEK/DEK cannot be loaded the
+    // reveal must fail *before* the file leaves the vault (the DB row and its
+    // saved DEK are deleted right after a successful unhide, which would make
+    // the media permanently unreadable).
+    try {
+      await _decryptIfNeeded(item);
+    } catch (error, stackTrace) {
+      AppLogger.e('VaultRevealRunner',
+          'decrypt before reveal ${item.id}: $error\n$stackTrace');
+      return false;
+    }
 
     final taken = item.dateTaken;
     final takenSec =
@@ -206,9 +216,21 @@ class VaultRevealRunner {
       final chunk = prepared.sublist(offset, end);
       currentName = chunk.last.item.originalName;
 
+      final blockedIds = <String>{};
       for (final job in chunk) {
         if (session.isCancelled) break;
-        await _decryptIfNeeded(job.item);
+        try {
+          await _decryptIfNeeded(job.item);
+        } catch (error, stackTrace) {
+          AppLogger.e('VaultRevealRunner',
+              'decrypt before reveal ${job.item.id}: $error\n$stackTrace');
+          blockedIds.add(job.item.id);
+          failed++;
+          lastError = 'decrypt_failed';
+          lastErrorCode = ImportErrorCode.transferFailed;
+          completed++;
+          emit(cancelled: session.isCancelled);
+        }
       }
 
       emit();
@@ -229,6 +251,7 @@ class VaultRevealRunner {
       final thumbById = <String, String>{};
       for (final job in chunk) {
         if (session.isCancelled) break;
+        if (blockedIds.contains(job.item.id)) continue;
         final native = await _resolveNativeResult(job, byId[job.item.id]);
         if (native.ok) {
           chunkOkIds.add(job.item.id);
@@ -448,23 +471,37 @@ class VaultRevealRunner {
     return ImportErrorCode.transferFailed;
   }
 
+  /// Throws when [item] is encrypted but cannot be turned back into plaintext.
+  ///
+  /// Callers MUST treat a throw as "do not touch this item": moving ciphertext
+  /// to the gallery and then deleting the DB row (and its saved DEK) destroys
+  /// the media permanently.
   Future<void> _decryptIfNeeded(MediaItem item) async {
     final encryptedDekBase64 = item.encryptedDek;
     if (encryptedDekBase64 == null || encryptedDekBase64.isEmpty) return;
     final encryptionService = _encryptionService;
     final keyManager = _encryptionKeyManager;
-    if (encryptionService == null || keyManager == null) return;
+    if (encryptionService == null || keyManager == null) {
+      throw StateError('Encrypted item ${item.id} cannot be revealed: '
+          'encryption services are unavailable');
+    }
 
     final kek = keyManager.getKey();
-    if (kek == null) return;
+    if (kek == null) {
+      throw StateError('Encrypted item ${item.id} cannot be revealed: vault '
+          'key not loaded (lock and unlock the vault, then retry)');
+    }
+
+    final dek = await encryptionService.decryptDek(
+      encryptedDekBase64: encryptedDekBase64,
+      kek: kek,
+    );
+    if (dek == null) {
+      throw StateError('Encrypted item ${item.id} cannot be revealed: DEK '
+          'decryption failed (wrong key or corrupted data)');
+    }
 
     try {
-      final dek = await encryptionService.decryptDek(
-        encryptedDekBase64: encryptedDekBase64,
-        kek: kek,
-      );
-      if (dek == null) return;
-
       // Decrypt to a temp file, then atomically replace the encrypted file
       // before native unhide transfers it.
       final tempPath = await encryptionService.decryptToTempFile(
@@ -476,21 +513,31 @@ class VaultRevealRunner {
       final bakPath = '${item.privatePath}.dec_bak';
       try {
         await _files.rename(item.privatePath, bakPath);
+      } catch (_) {
+        await _files.delete(tempPath);
+        rethrow;
+      }
+      try {
+        await _files.rename(tempPath, item.privatePath);
+      } catch (_) {
         try {
-          await _files.rename(tempPath, item.privatePath);
-        } catch (_) {
-          // Restore from backup
           await _files.rename(bakPath, item.privatePath);
-          await _files.delete(tempPath);
+        } catch (_) {
+          // Keep the only copy of the ciphertext on disk instead of deleting
+          // it in a finally block.
+          AppLogger.e('VaultRevealRunner',
+              'restore failed for ${item.id}; ciphertext kept at $bakPath');
           rethrow;
         }
-      } finally {
-        try { await _files.delete(bakPath); } catch (_) {}
+        await _files.delete(tempPath);
+        rethrow;
       }
+      try { await _files.delete(bakPath); } catch (_) {}
       AppLogger.d('VaultRevealRunner', 'Decrypted: ${item.privatePath}');
     } catch (e, stack) {
       AppLogger.e('VaultRevealRunner',
           '_decryptIfNeeded failed for ${item.id}: $e\n$stack');
+      rethrow;
     }
   }
 

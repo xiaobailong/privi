@@ -328,6 +328,10 @@ class MediaEncryptionService {
   }
 
   /// Returns true if [bytes] starts with a known plaintext media signature.
+  ///
+  /// Signatures are matched at ≥4 bytes so a random AES-GCM ciphertext cannot
+  /// be mistaken for plaintext (a false "plaintext" verdict would re-encrypt an
+  /// already-encrypted file).
   static bool _looksLikePlainMedia(Uint8List bytes) {
     final header = bytes.sublist(0, 8);
     // JPEG always starts with SOI marker FF D8 FF; the fourth byte varies
@@ -336,16 +340,31 @@ class MediaEncryptionService {
         Uint8List.fromList([0xFF, 0xD8, 0xFF]);
     final commonPng =
         Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-    final commonMp4 =
-        Uint8List.fromList([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70]);
+    final commonGif = Uint8List.fromList([0x47, 0x49, 0x46, 0x38]); // 'GIF8'
+    // ISO-BMFF (`ftyp` box): MP4 / MOV / M4A / 3GP / HEIC / AVIF all carry the
+    // ASCII tag `ftyp` at offset 4 — the 4-byte box size in front of it varies
+    // per file (0x18 / 0x1C / 0x20 / …), so only the tag may be matched.
+    // Matching a fixed 8-byte `00 00 00 20 66 74 79 70` prefix at offset 4
+    // never matched and made every MP4 look "already encrypted" (PIT-050).
+    final ftypTag = Uint8List.fromList([0x66, 0x74, 0x79, 0x70]);
+    final commonRiff = Uint8List.fromList([0x52, 0x49, 0x46, 0x46]); // 'RIFF'
+    final commonAvi = Uint8List.fromList([0x41, 0x56, 0x49, 0x20]); // 'AVI '
+    final commonWebp = Uint8List.fromList([0x57, 0x45, 0x42, 0x50]); // 'WEBP'
     final commonWebm =
         Uint8List.fromList([0x1A, 0x45, 0xDF, 0xA3, 0x93, 0x42, 0x82, 0x88]);
     final commonMkv = Uint8List.fromList([0x1A, 0x45, 0xDF, 0xA3]);
 
     if (_bytesMatch(header, commonJpeg)) return true;
     if (_bytesMatch(header, commonPng)) return true;
-    if (bytes.length >= 12 && _bytesMatch(bytes.sublist(4, 12), commonMp4)) {
+    if (_bytesMatch(header, commonGif)) return true;
+    if (bytes.length >= 8 && _bytesMatch(bytes.sublist(4, 8), ftypTag)) {
       return true;
+    }
+    // RIFF containers keep their fourcc at offset 8 (AVI / WebP).
+    if (_bytesMatch(header, commonRiff) && bytes.length >= 12) {
+      final fourcc = bytes.sublist(8, 12);
+      if (_bytesMatch(fourcc, commonAvi)) return true;
+      if (_bytesMatch(fourcc, commonWebp)) return true;
     }
     if (_bytesMatch(header, commonWebm)) return true;
     if (_bytesMatch(header, commonMkv)) return true;
