@@ -459,6 +459,13 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Active media rows whose encryptedDek is NOT null (already encrypted).
+  Future<List<MediaItemRow>> listEncryptedActiveMediaRows() {
+    return (select(mediaItems)
+          ..where((t) => t.deletedAt.isNull() & t.encryptedDek.isNotNull()))
+        .get();
+  }
+
   Future<void> updateMediaRatings(List<String> ids, int rating) async {
     if (ids.isEmpty) return;
     final r = rating.clamp(0, 3);

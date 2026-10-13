@@ -540,3 +540,84 @@
 - 自检: 改完菜单后 `git diff --stat` 应该显示两个文件都被修改；如果只有一个 `.dart` 文件
   被改而改动涉及三个点菜单项，停一下——大概率漏了另一个。
 - 首次记录: 2026-10-13（基于用户反馈的"三个点菜单改错地方"模式）
+
+## PIT-034 文件原地替换用 delete-then-rename → 中间崩溃窗口导致数据永久丢失
+- 触发条件: 加密/解密需要原地替换文件（覆盖原文件），实现为 `delete(original)` → `rename(temp, original)`。
+  如果进程在这两步之间崩溃（系统杀掉/电池耗尽/OOM），原始文件已删除而临时文件未 rename，
+  文件永久丢失。
+- 错误现象: 
+  - `CryptoHandler.kt encryptFile()`: 加密 35GB 视频时 OOM 崩溃 → 原视频已删，加密临时文件残留但未
+    链入 → 用户丢失唯一副本
+  - `VaultRevealRunner._decryptIfNeeded()`: 还原大批量文件时中途被系统杀进程 → 部分文件已删未 rename
+    → 文件消失
+- 正确做法: backup → rename → delete（三步，永远不先删原始文件）：
+  ```kotlin
+  // Kotlin (CryptoHandler.kt)
+  val bak = File(original + ".bak")
+  if (!original.renameTo(bak)) error  // Step 1: backup (atomic on same fs)
+  try {
+      if (!temp.renameTo(original)) {  // Step 2: promote temp
+          bak.renameTo(original)        // Restore on failure
+          error
+      }
+  } finally {
+      bak.delete()                      // Step 3: cleanup
+  }
+  ```
+  ```dart
+  // Dart (VaultRevealRunner)
+  final bakPath = '$privatePath.bak';
+  await _files.rename(privatePath, bakPath);
+  try {
+    await _files.rename(tempPath, privatePath);
+  } catch (_) {
+    await _files.rename(bakPath, privatePath); // restore
+    await _files.delete(tempPath);
+    rethrow;
+  }
+  try { await _files.delete(bakPath); } catch (_) {}
+  ```
+  每个崩溃窗口:
+  - 1之后崩溃: bak = 原始文件, original 不存在 ⇒ 恢复 = rename(bak→original) ✅
+  - 2之后崩溃: original = 新文件, bak 残留 ⇒ finally delete bak ✅
+  - 2-恢复崩溃: bak 回到 original ✅, temp 仍在 ⇒ delete temp ✅
+- 反例: `inputFile.delete(); tmpFile.renameTo(inputFile);` ← delete 和 rename 之间任何崩溃=数据消失
+- 自检: `git grep -n "\.delete().*\n.*\.renameTo\|\.delete(.*\n.*\.rename("` 跨 Kotlin/Dart 搜
+  delete 紧跟 rename 的模式 → 任何匹配项都是潜在的 PIT-034
+- 首次记录: 2026-10-13（CryptoHandler.kt + VaultRevealRunner._decryptIfNeeded，已修复）
+
+## PIT-035 lookupEncrypted JPEG 魔数过于严格 → 带 EXIF 的 JPEG 被误判为已加密
+- 触发条件: `_looksLikePlainMedia` 的 JPEG 检测用 8 字节 JFIF 魔数 `FF D8 FF E0 00 10 4A 46`。
+  JPEG 文件的 SOI 标记只保证前 3 字节 `FF D8 FF`，第 4 字节表示 APP 标记类型：
+  - E0 = JFIF（最常用）
+  - E1 = EXIF（相机直出 JPEG 几乎都是这个）
+  - E2 = ICC profile
+  - DB = 量化表（无元数据 JPEG）
+  → EXIF JPEG 不匹配 commonJpeg → `_looksLikePlainMedia` 返回 false → `looksEncrypted` 返回 true
+  → `encryptFile` 跳过加密 → 文件始终保持明文且无任何提示
+- 错误现象: 用相机拍的 JPEG（自带 EXIF）导入密册后永远不会被加密；批量加密时这些文件被静默跳过
+- 正确做法: JPEG 只匹配 `FF D8 FF`（3 字节 SOI），不要求 JFIF 特定标记
+- 反例: `[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]` ← 第 4 字节限死 E0，丢失 EXIF/ICC 等
+- 自检: 任何魔数检测的前缀匹配不要含变体字节；宁可用更短的确定前缀
+- 首次记录: 2026-10-13（第三次审计发现，已修复）
+
+## PIT-036 changePattern/changePin/recoverWithSystemAuth 不重加密 DEK → 改密码后文件永久丢失
+- 触发条件: 用户更改密码/图案后，新 KEK 无法解密用旧 KEK 加密的 DEK → 所有已加密文件永久不可读。
+  `recoverWithSystemAuth` 更严重：旧凭证直接清除，恢复后旧 DEK 彻底成孤儿。
+- 错误现象:
+  - 用户导入了 100 个加密文件 → 正常查看 → 去设置改图案 → 锁屏再解锁 → 100 个文件全部打不开
+  - 用户忘记图案 → 系统验证恢复 → 设新图案 → 所有加密文件永久丢失
+- 正确做法: `changePattern` 等入口必须在改凭证后遍历所有 `encryptedDek`，用旧 KEK 解密、
+  新 KEK 重加密、写回 DB。`_rotateAllDeks` 集中处理。`recoverWithSystemAuth` 的对话框已加
+  警告文字。
+- 自检: 任何修改根凭证（pattern/pin）的代码路径都要检查是否做了 DEK 旋转
+- 首次记录: 2026-10-13（第三次审计发现，已修复 changePattern/migratePinToPattern/changePin，
+  recoverWithSystemAuth 加了 UI 警告）
+
+## PIT-037 _resolveDisplayPath 返回 null 后 UI 永远 loading → 用户卡死
+- 触发条件: 加密文件解密失败（KEK 缺失/auth tag 不匹配/文件损坏），`_resolveDisplayPath` 返回 null，
+  但 `_decryptedTempPaths` 未设置任何值 → `_mediaPage` 的 `hasEncryptedDek && cachedPath==null`
+  永远为 true → `CircularProgressIndicator` 永远转圈
+- 修复: 新增 `_decryptFailedIds` 集合记录已尝试且失败的项目。`_mediaPage` 检测到 failed 状态时
+  显示 `broken_image` 图标而非 spinner。
+- 首次记录: 2026-10-13（第三次审计发现，已修复）

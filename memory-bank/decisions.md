@@ -767,9 +767,35 @@
   - **新增任何"读文件路径"的代码都不能直接读 `item.privatePath`**——必须经过
     `_resolveDisplayPath()`（或等价的解密→临时文件链），否则会拿到密文；
   - schema v8→v9 迁移新增 `encrypted_dek` 列（`TEXT, NULL`），不破坏已有数据；
-  - `looksEncrypted()` 只读前 32 字节做启发式检测（`PIT-031` 的教训），不可再用全量读取。
+  - `looksEncrypted()` 只读前 32 字节做启发式检测（`PIT-031` 的教训），不可再用全量读取；
+  - **文件原地替换必须用 backup→rename→delete 三步，永不可 delete-then-rename**（`PIT-034`）；
+  - **三个 setup/unlock 入口（setupPattern/setupPin/enterAppAfterSetup）全部要
+    派生/加载 KEK**——新增入口时按 `unlockWithPattern` 的模式对齐，不要遗漏。
 - 相关文件: `lib/data/services/media_encryption_service.dart`、`encryption_key_manager.dart`、
   `native_crypto_service.dart`、`android/.../CryptoHandler.kt`、`lib/data/db/database.dart`(v8→v9)、
   `lib/presentation/settings/settings_screen.dart`(batch encrypt)、
   `lib/presentation/viewer/viewer_screen.dart`(transparent decrypt)
+- 首次记录: 2026-10-13
+
+## ADR-034: changePattern/changePin/migratePinToPattern 必须旋转所有 DEK
+
+- 日期: 2026-10-13
+- 状态: ✅ 已采纳（第三次审计 → PIT-036）
+- 背景: 双层密钥架构 KEK→DEK→File。`changePattern` 原先只改 credential 不处理 DEK，
+  锁屏再解锁后新 KEK 无法解密旧 DEK → 所有加密文件永久丢失。
+- 决策:
+  - `changePattern`、`changePin`、`migratePinToPattern` 三个入口全部调用
+    `_rotateAllDeks(oldKek, newKek, caller)` 旋转所有 DEK
+  - `_rotateAllDeks` 遍历 `listEncrypted()` → 旧 KEK 解密 DEK → 新 KEK 加密 DEK
+    → `updateEncryptedDek` 写回 DB
+  - 部分失败时记录日志（`lostCount > 0`）但不回滚凭证变更（凭证已改）
+  - `recoverWithSystemAuth` 不加旋转（旧凭证已清除无法恢复），改为 UI 警告
+- 影响 / 约束:
+  - 数据库层新增 `listEncryptedActiveMediaRows` 查询（`encryptedDek IS NOT NULL`）
+  - Repository 新增 `listEncrypted()`
+  - 改密码操作从此包含 DB 全表扫描，加密文件越多越慢（但 DEK 都是 32 字节，
+    解密+加密很快，几百个文件 ≈ 几秒）
+- 备选方案:
+  - 方案 A（已否决）: 不改密码，只改 KEK → 密码不跟着变，安全性弱
+  - 方案 B（已否决）: 旧 KEK 用新 KEK 包一层存下来 → 密钥版本多了管理复杂还降安全性
 - 首次记录: 2026-10-13

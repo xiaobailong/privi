@@ -411,7 +411,7 @@ class AppLocalizations {
   String get forgotPatternTitle => '忘记图案？';
 
   String get forgotPatternBody =>
-      '请使用手机的指纹、面容或屏幕锁验证身份，然后可绘制新的保险库图案。\n\n媒体仍保留在设备上；仅重置保险库解锁图案。';
+      '请使用手机的指纹、面容或屏幕锁验证身份，然后可绘制新的保险库图案。\n\n⚠️ 重置图案后，已加密的媒体文件将永久无法解密。请先将加密文件还原到相册再操作。';
 
   String get enableBiometricTitle => '启用生物识别解锁？';
 

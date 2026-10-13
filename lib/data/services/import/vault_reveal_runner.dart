@@ -471,13 +471,21 @@ class VaultRevealRunner {
         filePath: item.privatePath,
         dek: dek,
       );
+      // Atomically replace: backup → rename temp → delete backup.
+      // Never delete-then-rename: crash window would lose the file (PIT-034).
+      final bakPath = '${item.privatePath}.dec_bak';
       try {
-        await _files.delete(item.privatePath);
-        await _files.rename(tempPath, item.privatePath);
-      } catch (e) {
-        // If rename fails, copy + delete temp
-        await _files.copy(tempPath, item.privatePath);
-        await _files.delete(tempPath);
+        await _files.rename(item.privatePath, bakPath);
+        try {
+          await _files.rename(tempPath, item.privatePath);
+        } catch (_) {
+          // Restore from backup
+          await _files.rename(bakPath, item.privatePath);
+          await _files.delete(tempPath);
+          rethrow;
+        }
+      } finally {
+        try { await _files.delete(bakPath); } catch (_) {}
       }
       AppLogger.d('VaultRevealRunner', 'Decrypted: ${item.privatePath}');
     } catch (e, stack) {

@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/security_service.dart';
+import '../../data/services/media_encryption_service.dart';
+import '../../data/repositories/media_repository.dart';
 import '../../domain/enums.dart';
 import '../providers.dart';
 import '../settings/settings_controller.dart';
@@ -202,12 +205,15 @@ class LockController extends Notifier<VaultLockState> {
         lockKind: SecurityService.kindPattern,
         clearError: true,
       );
+      _deriveAndStoreEncryptionKey(security, pattern);
     } else {
       // Credential exists; keep setup UI alive for optional biometric prompt.
       state = state.copyWith(
         lockKind: SecurityService.kindPattern,
         clearError: true,
       );
+      // Derive KEK in background so enterAppAfterSetup can load it.
+      _deriveAndStoreEncryptionKey(security, pattern);
     }
   }
 
@@ -220,6 +226,13 @@ class LockController extends Notifier<VaultLockState> {
       status: LockStatus.unlocked,
       clearError: true,
     );
+    // setupPattern/setupPin already derived and persisted the KEK;
+    // load it into memory now.
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final persisted = await keyManager.retrievePersistedKek();
+    if (persisted != null) {
+      await keyManager.setKey(persisted);
+    }
   }
 
   /// Legacy PIN setup (still available if needed).
@@ -235,12 +248,15 @@ class LockController extends Notifier<VaultLockState> {
         pinLength: pin.length,
         clearError: true,
       );
+      _deriveAndStoreEncryptionKey(security, pin);
     } else {
       state = state.copyWith(
         lockKind: SecurityService.kindPin,
         pinLength: pin.length,
         clearError: true,
       );
+      // Derive KEK in background so enterAppAfterSetup can load it.
+      _deriveAndStoreEncryptionKey(security, pin);
     }
   }
 
@@ -425,12 +441,32 @@ class LockController extends Notifier<VaultLockState> {
       final pinOk = await security.verifyPin(currentPattern);
       if (!pinOk) throw StateError('Current pattern is incorrect');
     }
+
+    // Save old KEK for DEK re-encryption before credential changes.
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final oldKek = keyManager.getKey();
+
     await security.setPattern(newPattern);
     if (!ref.mounted) return;
+
+    // Derive new KEK synchronously (await, not fire-and-forget), then rotate
+    // all existing encrypted DEKs so they remain decryptable.
+    final newKek = await security.deriveEncryptionKey(newPattern);
+    if (newKek == null || !ref.mounted) {
+      state = state.copyWith(lockKind: SecurityService.kindPattern);
+      return;
+    }
+
+    if (oldKek != null) {
+      await _rotateAllDeks(oldKek, newKek, 'changePattern');
+    }
+
+    await keyManager.setKey(newKek);
     state = state.copyWith(lockKind: SecurityService.kindPattern);
   }
 
   /// Verify legacy PIN then replace root credential with [newPattern].
+  /// Also rotates all encrypted DEKs to the new KEK.
   Future<void> migratePinToPattern({
     required String currentPin,
     required String newPattern,
@@ -438,8 +474,25 @@ class LockController extends Notifier<VaultLockState> {
     final security = ref.read(securityServiceProvider);
     final ok = await security.verifyPin(currentPin);
     if (!ok) throw StateError('Current PIN is incorrect');
+
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final oldKek = keyManager.getKey();
+
     await security.setPattern(newPattern);
     if (!ref.mounted) return;
+
+    final newKek = await security.deriveEncryptionKey(newPattern);
+    if (newKek == null || !ref.mounted) {
+      state = state.copyWith(
+          lockKind: SecurityService.kindPattern, clearError: true);
+      return;
+    }
+
+    if (oldKek != null) {
+      await _rotateAllDeks(oldKek, newKek, 'migratePinToPattern');
+    }
+
+    await keyManager.setKey(newKek);
     state =
         state.copyWith(lockKind: SecurityService.kindPattern, clearError: true);
   }
@@ -451,12 +504,70 @@ class LockController extends Notifier<VaultLockState> {
     final security = ref.read(securityServiceProvider);
     final ok = await security.verifyPin(currentPin);
     if (!ok) throw StateError('Current PIN is incorrect');
+
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    final oldKek = keyManager.getKey();
+
     await security.setPin(newPin);
     if (!ref.mounted) return;
+
+    final newKek = await security.deriveEncryptionKey(newPin);
+    if (newKek == null || !ref.mounted) {
+      state = state.copyWith(
+          pinLength: newPin.length, lockKind: SecurityService.kindPin);
+      return;
+    }
+
+    if (oldKek != null) {
+      await _rotateAllDeks(oldKek, newKek, 'changePin');
+    }
+
+    await keyManager.setKey(newKek);
     state = state.copyWith(
       pinLength: newPin.length,
       lockKind: SecurityService.kindPin,
     );
+  }
+
+  /// Re-encrypt all existing DEKs from [oldKek] to [newKek].
+  /// Logs how many succeeded / were lost.
+  Future<void> _rotateAllDeks(
+      Uint8List oldKek, Uint8List newKek, String caller) async {
+    final encryptionService = ref.read(mediaEncryptionServiceProvider);
+    final repo = ref.read(mediaRepositoryProvider);
+    try {
+      final encryptedItems = await repo.listEncrypted();
+      int okCount = 0;
+      int lostCount = 0;
+      for (final item in encryptedItems) {
+        if (item.encryptedDek == null || item.encryptedDek!.isEmpty) continue;
+        try {
+          final dek = await encryptionService.decryptDek(
+            encryptedDekBase64: item.encryptedDek!,
+            kek: oldKek,
+          );
+          if (dek == null) {
+            lostCount++;
+            continue;
+          }
+          final newEncryptedDek = await encryptionService.encryptDek(
+            dek: dek,
+            kek: newKek,
+          );
+          await repo.updateEncryptedDek(item.id, newEncryptedDek);
+          okCount++;
+        } catch (_) {
+          lostCount++;
+        }
+      }
+      if (lostCount > 0) {
+        AppLogger.e('LockController',
+            'DEK rotation ($caller): $okCount OK, $lostCount LOST');
+      }
+    } catch (e, stack) {
+      AppLogger.e('LockController',
+          'DEK rotation failed ($caller): $e\n$stack');
+    }
   }
 
   void lock() {

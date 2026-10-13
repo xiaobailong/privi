@@ -65,13 +65,23 @@ class CryptoHandler {
                 }
             }
 
-            // Atomic replace: delete original, rename temp
-            if (!inputFile.delete()) {
+            // Atomic replace: backup original → rename temp → delete backup.
+            // Never delete-then-rename: a crash between the two steps permanently
+            // loses the file (PIT-034).  On the same filesystem rename is atomic.
+            val bakFile = File(filePath + ".enc_bak")
+            if (!inputFile.renameTo(bakFile)) {
                 tmpFile.delete()
-                return mapOf("ok" to false, "error" to "Failed to delete original file")
+                return mapOf("ok" to false, "error" to "Failed to back up original file")
             }
-            if (!tmpFile.renameTo(inputFile)) {
-                return mapOf("ok" to false, "error" to "Failed to rename temp file")
+            try {
+                if (!tmpFile.renameTo(inputFile)) {
+                    // Restore from backup
+                    bakFile.renameTo(inputFile)
+                    tmpFile.delete()
+                    return mapOf("ok" to false, "error" to "Failed to rename temp file (restored backup)")
+                }
+            } finally {
+                bakFile.delete()
             }
 
             val encryptedLength = inputFile.length()

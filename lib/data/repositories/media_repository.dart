@@ -124,6 +124,12 @@ class MediaRepository {
     return rows.map(_map).toList(growable: false);
   }
 
+  /// Active items whose encryptedDek is NOT null (already encrypted).
+  Future<List<MediaItem>> listEncrypted() async {
+    final rows = await _db.listEncryptedActiveMediaRows();
+    return rows.map(_map).toList(growable: false);
+  }
+
   Future<void> softDelete(String id) =>
       _db.softDeleteMedia(id, DateTime.now().toUtc());
 

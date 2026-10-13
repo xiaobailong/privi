@@ -779,3 +779,38 @@
 - 相关文件: `lib/presentation/viewer/viewer_screen.dart`、`lib/data/services/media_encryption_service.dart`、
   `lib/application/lock/lock_controller.dart`
 - 首次记录: 2026-10-13
+- **2026-10-13 二次审计追加**（同一天全链路复审发现的新隐患，均已修复）:
+  ④ **非原子文件替换**：`CryptoHandler.kt encryptFile` 和 `VaultRevealRunner._decryptIfNeeded`
+     都是 `delete(original)` → `rename(temp, original)` 两步，中间崩溃窗口 = 文件永久丢失
+     （→ PIT-034，修复为 backup→rename→delete 三步安全替换）
+  ⑤ **首次设置密码不派生 KEK**：`setupPattern`/`setupPin`/`enterAppAfterSetup` 三个入口在
+     解锁后都没调用 `_deriveAndStoreEncryptionKey` → 首次导入的文件不会加密（KEK 为 null 时
+     `_encryptRecordedFiles` 静默跳过）→ 用户需手动锁屏再解锁或手动跑"Encrypt Existing Files"
+     （修复：三个入口全部补上 KEK 派生/加载逻辑）
+  ⑥ **加密图片首次渲染密文竞争**：`_mediaPage` 用 `_decryptedTempPaths[item.id] ?? item.privatePath`
+     但 `_resolveDisplayPath` 是异步的 → 解密未完成时直接用密文路径渲染 → 图片花屏/解码崩溃
+     （修复：`hasEncryptedDek && cachedPath==null` 时显示 loading 圆圈；解密完成后 `.then()` 触发 `setState`）
+
+## ISSUE-025 第三次审计：changePattern DEK 旋转缺失 + JPEG 误判 + UI 死锁 + recovery 数据孤岛
+- 摘要: 密码修改链路缺少 DEK 重加密，改密码 = 丢文件；`looksEncrypted` JPEG 魔数过严导致
+  带 EXIF 的照片永不加密；`_resolveDisplayPath` 失败后 UI 永远转圈；恢复密码时已加密文件
+  彻底成孤儿
+- 根因（按发现顺序）:
+  ① **`looksEncrypted` JPEG 误判**：`_looksLikePlainMedia` 的 JPEG 魔数包含 JFIF 特化字节
+     `E0 00 10 4A 46`，但相机 JPEG 用 EXIF (`E1`) 打头 → 不匹配 → `looksEncrypted=true`
+     → 加密跳过 → （`PIT-035`，修复：改 8 字节为 3 字节 SOI `FF D8 FF`）
+  ② **`_resolveDisplayPath` null → 无限 spinner**：返回 null 后 `_decryptedTempPaths` 无记录
+     → `hasEncryptedDek && cachedPath==null` 永真 → spinner 永转
+     → （`PIT-037`，修复：新增 `_decryptFailedIds` 集合，已失败时显示 `broken_image` 图标）
+  ③ **`changePattern`/`changePin`/`migratePinToPattern` 不旋转 DEK**：改完凭证后旧 KEK 仍可用
+     （因为没更新），但下次锁屏再解锁 = 新 KEK → 旧 DEK 全废 → （`PIT-036`）
+     （修复：三个入口全部加入 DEK 旋转逻辑，提取 `_rotateAllDeks` 共享方法；
+      DB/Repository 新增 `listEncrypted` / `listEncryptedActiveMediaRows`）
+  ④ **`recoverWithSystemAuth` 无加密警告**：忘记图案走系统验证恢复后，所有加密 DEK 成为孤儿
+     （修复：`forgotPatternBody` l10n 文案加 ⚠️ 警告）
+- 教训: 双层密钥架构（KEK→DEK→File）中，任何 KEK 变更都是全量数据重加密事件；
+  改密码 = 改 KEK，必须遍历所有 DEK 做旋转。忘记密码 = KEK 不可恢复 = DEK 全损。
+  忘记了这一层关系写出 `changePattern` 只调 `setPattern` 就返回，是体系性盲区。
+- 相关文件: `lock_controller.dart`、`media_encryption_service.dart`、`viewer_screen.dart`、
+  `database.dart`、`media_repository.dart`、`app_localizations.dart`
+- 首次记录: 2026-10-13（第三次全量审计，已修复）

@@ -289,8 +289,10 @@ class MediaEncryptionService {
   /// Returns true if [bytes] starts with a known plaintext media signature.
   static bool _looksLikePlainMedia(Uint8List bytes) {
     final header = bytes.sublist(0, 8);
+    // JPEG always starts with SOI marker FF D8 FF; the fourth byte varies
+    // (E0=JFIF, E1=EXIF, E2=ICC, DB=quant, etc.).  Match only the first 3.
     final commonJpeg =
-        Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]);
+        Uint8List.fromList([0xFF, 0xD8, 0xFF]);
     final commonPng =
         Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
     final commonMp4 =

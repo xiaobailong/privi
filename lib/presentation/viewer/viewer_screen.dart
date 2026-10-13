@@ -85,6 +85,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   /// Temp decrypted files keyed by media id, cleaned up on dispose / page change.
   final Map<String, String> _decryptedTempPaths = <String, String>{};
 
+  /// Items whose decryption already failed this session; skip retry and
+  /// show an error placeholder instead of a forever-loading spinner.
+  final Set<String> _decryptFailedIds = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -102,7 +106,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     unawaited(VideoSystemUi.apply(false));
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
-        unawaited(_resolveDisplayPath(_current));
+        _resolveDisplayPath(_current).then((_) {
+          if (mounted) setState(() {});
+        });
         unawaited(_syncVideo());
       },
   }
@@ -211,12 +217,15 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       );
       if (tempPath != null) {
         _decryptedTempPaths[item.id] = tempPath;
+        _decryptFailedIds.remove(item.id);
         return tempPath;
       }
+      _decryptFailedIds.add(item.id);
       AppLogger.e('ViewerScreen',
           'Decrypt returned null for ${item.id} — DEK or auth tag mismatch');
       return null;
     } catch (e, stack) {
+      _decryptFailedIds.add(item.id);
       AppLogger.e('ViewerScreen',
           '_resolveDisplayPath failed for ${item.id}: $e\n$stack');
       return null;
@@ -225,6 +234,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
 
   void _cleanupTempFile(String mediaId) {
     final path = _decryptedTempPaths.remove(mediaId);
+    _decryptFailedIds.remove(mediaId);
     if (path != null) {
       try {
         final file = File(path);
@@ -238,6 +248,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     for (final id in ids) {
       _cleanupTempFile(id);
     }
+    _decryptFailedIds.clear();
   }
 
   /// Viewer playback history: one bump per item per viewer session. Random
@@ -517,7 +528,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     });
     if (!widget.items[index].isVideo) _recordPlay(widget.items[index]);
     // Pre-resolve display path for the new page before syncing video.
-    unawaited(_resolveDisplayPath(widget.items[index]));
+    _resolveDisplayPath(widget.items[index]).then((_) {
+      if (mounted) setState(() {});
+    });
     // Clean up temp files for items far from the current page.
     final keepIndices = {index - 1, index, index + 1};
     final idsToClean = <String>[];
@@ -767,8 +780,35 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   }
 
   Widget _mediaPage(MediaItem item, bool active) {
-    // If item is already decrypted to a temp file, use that path.
-    final resolvedPath = _decryptedTempPaths[item.id] ?? item.privatePath;
+    // If the item is encrypted but not yet decrypted to a temp file, show a
+    // loading placeholder while _resolveDisplayPath completes.
+    final hasEncryptedDek =
+        item.encryptedDek != null && item.encryptedDek!.isNotEmpty;
+    final cachedPath = _decryptedTempPaths[item.id];
+    if (hasEncryptedDek && cachedPath == null) {
+      // Already attempted and failed → show error, not a forever-spinner.
+      if (_decryptFailedIds.contains(item.id)) {
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggleChrome,
+          child: const Center(
+            child: Icon(
+              Icons.broken_image_outlined,
+              color: Colors.white54,
+              size: 64,
+            ),
+          ),
+        );
+      }
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleChrome,
+        child: const Center(
+          child: CircularProgressIndicator(color: Colors.white54),
+        ),
+      );
+    }
+    final resolvedPath = cachedPath ?? item.privatePath;
     final file = File(resolvedPath);
     if (!file.existsSync()) {
       return GestureDetector(
