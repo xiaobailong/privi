@@ -865,3 +865,62 @@
   `lib/presentation/player/player_screen.dart`、`lib/presentation/viewer/viewer_screen.dart`、
   `lib/data/services/import/thumbnail_generator.dart`
 - 首次记录: 2026-10-13
+
+## ADR-037 长任务保持屏幕常亮：用 holder 集合仲裁，不要直接置位 `setKeepScreenOn`
+- 日期: 2026-10-13 | 状态: 已采纳
+- 背景: 批量加密 / 导入后的加密阶段可能持续数十秒到数分钟。期间屏幕熄灭会让系统把应用切后台甚至杀掉，
+  而加密最危险的窗口正是"文件已换成密文、DEK 还没写库"（`PIT-044` / `ISSUE-030`）。
+  仓库已有现成通道：`MainActivity.setKeepScreenOn`（`FLAG_KEEP_SCREEN_ON`）← `PlaybackDisplayService`
+  ← `VideoSystemUi.setKeepScreenOn`。但它原本是**播放器语义**：谁最后调用谁说了算
+  （`VideoSystemUi.restore()` 在播放器退出时会 `setKeepScreenOn(false)`）。
+- 决策: 在 `PlaybackDisplayService` 内做**请求仲裁**：
+  - `setKeepScreenOn(bool)` = 播放器请求（语义不变 ⇒ 播放器/查看器代码**零改动**）
+  - `holdScreenOn(holder)` / `releaseScreenOn(holder)` = 长任务 holder 集合（幂等、可重入）
+  - 真正下发的值 = `播放器请求 || holder 非空`；仅当值变化时才调通道（`_applied` 去重）
+  - 现有持有者：`settings.batchEncrypt`（批量加密）、`import.encryptFiles`（导入后的加密阶段）
+- 理由: 长任务若直接 `setKeepScreenOn(true)`，会被随后任何播放器页面退出时的 `restore()/false` 清掉；
+  反之长任务结束时若直接 `setKeepScreenOn(false)`，又会误灭正在播放的播放器。仲裁后两边互不干扰。
+- 备选与为何不选:
+  - 方案 A（已否决）: 在加密流程里直接调 `setKeepScreenOn(true/false)` —— 与播放器互相覆盖（见上）
+  - 方案 B（已否决）: 引入 `wakelock_plus` 依赖 —— 仓库已有通道，为一个 flag 加依赖不划算
+  - 方案 C（已否决）: 用 `SystemChrome` 类 API —— Flutter 没有等价的"保持屏幕常亮"接口
+- 影响 / 约束:
+  - 以后新增长任务（导出备份、扫描孤儿、恢复索引…）只要可能超过屏幕超时，**统一用
+    `holdScreenOn` / `releaseScreenOn`**，不要直接调 `setKeepScreenOn`；
+  - **必须成对调用**（出错也要 `try/finally` 释放）：holder 泄漏会让屏幕永远不灭（费电、用户可感知）。
+    `_batchEncrypt` 里额外留了一层 `finally` 兜底；
+  - 它只防"屏幕熄灭"，**不防**应用自身的自动锁定（`autoLockSeconds`）：若设为"立即锁定"，
+    切后台仍会锁定并中止加密（数据是安全的，只是任务会停）⇒ 加密期间请勿切后台。
+- 相关文件: `lib/data/services/playback_display_service.dart`、`lib/presentation/settings/settings_screen.dart`、
+  `lib/data/services/import_service.dart`、`android/.../MainActivity.kt`（通道未改）
+- 首次记录: 2026-10-13
+
+## ADR-038 加密容器 v2：分块 AES-GCM（每块独立 tag），取代单流格式
+- 日期: 2026-10-13 | 状态: 已采纳（新加密一律 v2；v1 只读兼容）
+- 背景: 单流 GCM 在 Android/Conscrypt 上对大文件会在 `doFinal` 一次性申请 ≈2× 文件大小
+  （`ISSUE-032`：71.8MB 视频 → 134MB 分配 → 进程崩溃，堆上限仅 384MB）。而 `ADR-033` 的目标恰恰是
+  "支持 35GB 级视频且不 OOM"——单流格式从根上不成立。
+- 决策: 新容器 v2：
+  ```
+  [magic 'PRV2' 4][baseNonce 8][plaintextSize 8][chunkSize 4][chunk 0..n-1]
+  chunk = ciphertext(≤chunkSize) + tag(16)
+  chunk nonce = baseNonce(8) || int32be(index)      // 12 字节，全局唯一
+  ```
+  默认 chunkSize = 1MiB。**加密一律写 v2**；解密按 magic 分流，v1（`[nonce12][ciphertext][tag16]`）保持只读兼容。
+- 理由: 每块独立 tag 让加解密都在 1MiB 量级完成 ⇒ 内存与文件大小无关（真正达成 ADR-033 的目标）；
+  nonce 用 `base + 计数器` 保证唯一（GCM 的硬性要求，安全性不降级）；密文仅多出 16×块数 字节
+  （71MB 文件 → +1.1KB，可忽略）。
+- 备选与为何不选:
+  - 方案 A（已否决）: 保留单流 + 限制文件大小 ⇒ 直接违背"支持大视频"的产品前提
+  - 方案 B（已否决）: 换 CTR+HMAC / ChaCha20-Poly1305 ⇒ 同样必须分块才是恒定内存，且"先解密后校验"
+    引入新的安全陷阱；Conscrypt 的 GCM 已有硬件加速
+  - 方案 C（已否决）: 分块但整体一个 tag（块作为 AAD）⇒ 需要两遍读写，实现更复杂而收益相同
+- 影响 / 约束:
+  - **新写入的密文都带 `PRV2` 头**；Dart 侧 `looksEncrypted()` 依据"不像已知明文媒体签名"判断，
+    v2 头不是任何媒体签名 ⇒ 天然兼容，**Dart 侧无需改动**
+  - **v1 大文件解密仍可能 OOM**（格式决定）：现在返回 `out of memory` 错误而不是崩溃；
+    用户应在低内存时刻（重启 app 后立即）先解密回相册，再重新加密（自动 v2）
+  - 加密结果长度校验下界改为 `头部(24) + 块数×16`（`encryptedSize` 相应略增）
+  - 块大小写进头部（`chunkSize`），将来调整不需要改格式
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`
+- 首次记录: 2026-10-13

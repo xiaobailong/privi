@@ -149,5 +149,5 @@
 
 ---
 
-最后更新: 2026-10-13 R11（加密链路补修：`PlayerScreen` 解密、缩略图取帧前解密、备份带
-`encryptionSalt`+`encryptedDek`、导入 KEK 缺失提示、卸载全损警告；详见 `ISSUE-029` 补修段）
+最后更新: 2026-10-13 R13（真机 crash 日志：批量加密大视频 OOM 崩溃 `ISSUE-032`；改用分块 GCM 容器 v2
+`ADR-038` + OOM 单独捕获，v1 只读兼容）

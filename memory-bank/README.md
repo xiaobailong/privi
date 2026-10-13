@@ -142,6 +142,17 @@
 | 保险库里的加密文件没有缩略图、每次启动都在白跑重试 | `ISSUE-029`②（R11 已修：取帧前先解密）、`ADR-036`③ |
 | 备份出来的加密文件恢复后不可读（备份不含 DEK） | `ISSUE-029`③（R11 已修：manifest 带 `encryptionSalt` + `encryptedDek`）、`ADR-036`④ |
 | 导出/备份要不要带加密密钥、salt 能不能覆盖本机 | `ISSUE-029`③、`PIT-054`（只在缺失时采用备份 salt） |
+| 批量加密"大量失败"、部分图片变 0 字节 / 文件消失（同一文件被并发加密） | `ISSUE-030`、`PIT-055`、`PIT-056` |
+| 加密后媒体在网格/查看器一片黑（0 字节文件，或密文但 DB 无 DEK） | `ISSUE-030`、`ISSUE-029`① |
+| 指纹解锁无效、日志 `Biometric OK but no persisted KEK` | `ISSUE-031`、`PIT-057`、`ISSUE-028` |
+| 对话框里的"一次性任务"被重复启动 / 并发处理同一批文件 | `PIT-055` |
+| 加密中途留下 `*.enc_bak` / `*.enc_tmp*`，能否救回原文件 | `ISSUE-030`（启动自愈）、`PIT-056` |
+| 加密/导入期间屏幕不希望熄灭（长任务被锁屏打断） | `ADR-037`（`holdScreenOn`/`releaseScreenOn` 仲裁） |
+| 屏幕一直不灭（常亮泄漏）/ 播放器与长任务互相覆盖常亮 | `ADR-037`（holder 集合 + 必须成对释放） |
+| app 在批量加密大视频时崩溃（`密册_crash_*.txt` 里 `OutOfMemoryError` + `OpenSSLAeadCipher`） | `ISSUE-032`、`PIT-058`、`ADR-038` |
+| 密文为什么带 `PRV2` 头 / 旧密文（v1）还能不能解 | `ADR-038`（新写 v2，v1 只读兼容） |
+| 解密大文件报 `out of memory`（旧格式 v1 的大文件） | `ISSUE-032` 遗留段（重启后立即解密并重新加密） |
+| 手动跑 Gradle 单任务校验 Kotlin（`gradlew` 报找不到 / 开始下载 gradle-9.3.1） | `PIT-013`、`PIT-059` |
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

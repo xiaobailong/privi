@@ -23,6 +23,7 @@ import 'encryption_key_manager.dart';
 import 'media_rename_service.dart';
 import 'media_store_service.dart';
 import 'media_thumbnail_service.dart';
+import 'playback_display_service.dart';
 import 'vault_storage_service.dart';
 
 export 'import/import_models.dart';
@@ -32,6 +33,9 @@ export 'import/import_models.dart';
 /// Cancel is cooperative: checked between prep steps and **between native
 /// chunks**. A single in-flight native chunk cannot be aborted mid-call, so
 /// chunk size stays small enough that Cancel still feels responsive.
+/// Wake-lock holder id used while imported files are being encrypted.
+const String _encryptScreenHolder = 'import.encryptFiles';
+
 class ImportService implements VaultWorkflow {
   ImportService({
     required VaultStorageService storage,
@@ -306,7 +310,16 @@ class ImportService implements VaultWorkflow {
           emit();
         }
 
-        encryptionSkipped += await _encryptRecordedFiles(recorded);
+        // Keep the screen on while this chunk is encrypted: the device locking
+        // mid-pass can kill the app between "file encrypted" and "DEK stored"
+        // (PIT-044 / ISSUE-030).
+        final display = PlaybackDisplayService.instance;
+        await display.holdScreenOn(_encryptScreenHolder);
+        try {
+          encryptionSkipped += await _encryptRecordedFiles(recorded);
+        } finally {
+          await display.releaseScreenOn(_encryptScreenHolder);
+        }
 
         for (final record in recorded) {
           final job = record.outcome.job;

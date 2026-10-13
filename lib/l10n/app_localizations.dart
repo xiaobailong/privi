@@ -690,6 +690,17 @@ class AppLocalizations {
     return '$count 项失败';
   }
 
+  /// Files whose media is already ciphertext but whose DEK is missing: they can
+  /// neither be encrypted again nor decrypted (ISSUE-030).
+  String encryptSkippedNoKey(int count) {
+    return '$count 个文件已是密文但没有密钥记录：无法再加密、也无法解密，请从备份恢复或删除';
+  }
+
+  /// Rows whose media file has disappeared (maintenance removes them).
+  String encryptMissingFiles(int count) {
+    return '$count 条记录对应的文件已不存在（下次启动会自动清理）';
+  }
+
   String encryptResultSuccess(int count) {
     return '已成功加密 $count 个文件。';
   }

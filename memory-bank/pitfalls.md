@@ -908,3 +908,124 @@
 - 自检: 导出后 `privi_manifest.json` 顶层应有 `encryptionSalt`，**已加密项**的条目应有 `encryptedDek`；
   还原到干净安装后用**导出时的图案**解锁 → 加密图片能正常显示
 - 首次记录: 2026-10-13（R11，见 `ISSUE-029`③）
+
+## PIT-055 `StatefulBuilder` 的 builder 里启动"一次性任务"必须加守卫，否则每次 rebuild 都会再起一个并发任务
+- 触发条件: 在 `showDialog` 的 `StatefulBuilder(builder: (ctx, setDialogState) {...})` 里写
+  `WidgetsBinding.instance.addPostFrameCallback((_) => run());`，而 `run()` 内部又会调
+  `setDialogState(() {})` 刷新进度
+- 错误现象: `setDialogState` → rebuild → builder 再执行 → **再注册一个 `run()`** ⇒ 并发任务数逐项递增
+  （1→2→3→…），每个任务都从头处理同一批数据。本项目里表现为同一文件被几十个循环同时加密，
+  产生 **0 字节 / 消失的媒体**（`ISSUE-030`，真机 15 个文件被打坏）
+- 正确做法: 用闭包外的 `var started = false;`（或 State 字段）守卫，只启动一次：
+  ```dart
+  if (!started) {
+    started = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => run());
+  }
+  ```
+  并且**跨调用**也要防重入（用户重复点按钮 / 重复打开对话框）：用一个模块级或 State 级
+  `bool inFlight` + `try { ... } finally { inFlight = false; }`
+- 反例（别这么写）: `builder` 里裸调 `addPostFrameCallback(() => run())`；
+  或者用 `initState` 之外的方式在 build 里触发一次性副作用（`build`/`builder` 都必须是无副作用的）
+- 自检: 日志里同一任务出现**多次并发开始**（时间戳间隔 <1s 的重复首条记录）就是命中了；
+  修完应只看到一条开始记录
+- 首次记录: 2026-10-13（真机 `密册_log_2026-10-13.txt` 定位，见 `ISSUE-030`）
+
+## PIT-056 原地加密：临时文件名必须唯一 + 结果必须做长度校验（否则并发/异常会留下 0 字节文件）
+- 触发条件: 在原生侧用"写临时文件 → rename 覆盖原文件"实现原地加密，且临时名写死
+  （如 `"$filePath.enc_tmp"`），入口还带 `if (tmpFile.exists()) tmpFile.delete()`
+- 错误现象: 两个并发调用会**互相删掉对方正在写的临时文件**：一个把（已被删除的 inode 的）数据写完，
+  另一个 rename 出一个 **0 字节文件**覆盖原始媒体 ⇒ 数据永久丢失。日志里表现为
+  `Encrypted: … (472687 → 0 bytes)` 紧接着 `File not found`
+- 正确做法:
+  ```kotlin
+  // ① 同一路径串行
+  fun encryptFile(path: String, dek: ByteArray, nonce: ByteArray): Map<String, Any?> =
+      synchronized(lockFor(path)) { encryptLocked(path, dek, nonce) }
+
+  // ② 临时名唯一，避免任何"清理旧临时文件"的动作误伤其它 writer
+  val tmpFile = File("$path.enc_tmp-${UUID.randomUUID()}")
+
+  // ③ rename 成功后校验长度：密文 = 明文 + nonce(12) + tag(16)
+  val minimum = originalLength + GCM_NONCE_LENGTH + GCM_TAG_LENGTH / 8
+  if (encryptedLength < minimum) {
+      inputFile.delete()
+      bakFile.renameTo(inputFile)   // 从备份恢复原文，绝不留下坏文件
+      return mapOf("ok" to false, "error" to "Encryption produced a truncated file; original restored")
+  }
+  ```
+  另外：`finally { bak.delete() }` 这类"无条件清理"要改成"只有在确认新文件就位后才删备份"
+  （`PIT-053`③），并保留 `.enc_bak` 供启动时自愈恢复
+- 反例（别这么写）: 固定临时名 + 入口 `tmp.delete()`；只依赖 Dart 侧串行（native 可能被多处调用）；
+  加密后不校验长度直接删备份
+- 自检: `git grep -n "enc_tmp" -- android/` 应看到 `UUID.randomUUID()`；日志里不应再出现 `→ 0 bytes`
+- 首次记录: 2026-10-13（真机日志定位，见 `ISSUE-030`）
+
+## PIT-057 `FlutterSecureStorage` 的两种 Android 后端不能"各用一个"：要么成对写读，要么统一
+- 触发条件: 项目里同时存在 `const FlutterSecureStorage()`（默认后端）与
+  `FlutterSecureStorage(aOptions: AndroidOptions(encryptedSharedPreferences: true))`（ESP 后端），
+  且同一个 key 只往其中一个写
+- 错误现象: 真机上出现"写进去但读不出来"：`setKey` 不抛异常（日志无 `Failed to persist KEK`），
+  但 `retrievePersistedKek()` 每次都返回 null ⇒ 指纹解锁永远报 `no persisted KEK found`
+  （`ISSUE-031`，用户图案解锁成功后依旧如此）
+- 正确做法: 把 KEK 这类"必须能读回来"的密钥**在两个后端都写、读时取第一个非空**：
+  ```dart
+  static const _defaultStorage = FlutterSecureStorage();
+  static const _espStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  // setKey: 两个都写（至少一个成功即可，全失败打 error）
+  // retrievePersistedKek: 依次读，取第一个非空；全空时打 warn
+  ```
+  —— 幂等、能自愈任一方向的失败，也不会 orphan 老版本写入的值
+- 反例（别这么写）: 只用一个实例；或"发现不一致就把两处都改成 ESP"（等于换存储桶，
+  老用户已写入的值当场读不到，见 `ADR-035`④）
+- 自检: 设备日志里 `EncryptionKeyManager` 不应出现 `no persisted KEK found in any of 2 backend(s)`
+  （修复后若仍出现，说明两个后端都写不进去，需要换策略）；`KEK persisted to 1/2 backends` 是允许的
+- 首次记录: 2026-10-13（真机日志定位，见 `ISSUE-031`）
+
+## PIT-058 Android 上"单流 AES-GCM"处理大文件必然 OOM：AEAD 必须分块，且 `OutOfMemoryError` 要单独 catch
+- 触发条件: 对一个文件做"整文件一个 tag"的 AES-GCM 加解密（`cipher.update()` 循环 + 末尾一次
+  `doFinal()` 也算），且文件达到几十 MB 以上
+- 错误现象: 实测 71.8MB 视频：
+  `java.lang.OutOfMemoryError: Failed to allocate a 140444664 byte allocation`（≈2× 文件大小），
+  栈顶 `com.android.org.conscrypt.OpenSSLAeadCipher.reset / doFinalInternal`
+  ⇒ **进程崩溃**（`catch (e: Exception)` 抓不到 Error，日志只留在 `密册_crash_*.txt`）
+- 正确做法:
+  1) **分块 AEAD**：按固定块（1MiB）切分，每块用独立 nonce（`baseNonce(8) || int32be(index)`）与独立 tag，
+     加解密都按块 `doFinal(input, off, len)` ⇒ 峰值内存 = 2×块大小，与文件大小无关；
+     容器头部记录 `plaintextSize`，解密时据此循环
+  2) 所有 native 加解密入口都要单独捕获 OOM：
+     ```kotlin
+     } catch (e: OutOfMemoryError) {          // Error ≠ Exception，必须单独写
+         Log.e(TAG, "...", e)
+         return mapOf("ok" to false, "error" to "Out of memory: file too large")
+     } catch (e: Exception) { ... }
+     ```
+  3) 识别 magic 兼容旧格式；旧的大文件解密失败时返回明确错误（不要崩、不要写成半成品）
+- 反例（别这么写）: `while (...) { cipher.update(...) } ; cipher.doFinal()`；
+  `catch (e: Exception)` 里指望兜住 OOM；用"文件大小上限"当作内存保护
+- 自检: 加密/解密一个 >200MB 的视频，`dumpsys meminfo <pkg>` 的峰值应稳定在几十 MB 量级；
+  日志出现 `Encrypted(v2)` / `Decrypted(v2)`；`密册_crash_*.txt` 不再出现 `OpenSSLAeadCipher`
+- 首次记录: 2026-10-13（见 `ISSUE-032`）
+
+## PIT-059 本机手动跑 Gradle 校验的两个前置条件：`GRADLE_USER_HOME=.gradle_home` + `.\gradlew.bat`
+- 触发条件: 想绕开 `build.bat`，直接在 `android/` 下跑单项任务（如 `:app:compileReleaseKotlin`）验证 Kotlin 改动
+- 错误现象 / 代价:
+  ① **不设 `GRADLE_USER_HOME`** 时 gradlew 用默认 `%USERPROFILE%\.gradle`，其 wrapper dists 里**没有**项目要求的
+     `gradle-9.3.1` ⇒ 立刻去腾讯镜像**下载数百 MB**
+     （日志 `Downloading https://mirrors.cloud.tencent.com/gradle/gradle-9.3.1-all.zip`）
+  ② 在 `.bat` / cmd 里写 `gradlew.bat ...`（不带 `.\`）报 `'gradlew.bat' 不是内部或外部命令` ——
+     本机 cmd **不把当前目录加入可执行搜索路径**（`NoDefaultCurrentDirectoryInExePath`），必须写 `.\gradlew.bat`
+- 正确做法:
+  ```powershell
+  $env:GRADLE_USER_HOME = 'D:\WorkSpace\test\privi\.gradle_home'   # 项目缓存里已有 gradle-9.3.1
+  Set-Location 'D:\WorkSpace\test\privi\android'
+  & .\gradlew.bat -x :app:compileFlutterBuildRelease :app:compileReleaseKotlin --console=plain *> ..\tmp\kotlin_check.log
+  ```
+  长任务用 `Start-Process powershell -File tmp\xxx.ps1` 放独立窗口（`PIT-009`）；
+  **ps1 里不要用嵌套双引号**（命令行传参会炸）：写成 `('RESULT=FAIL rc=' + $rc) | Out-File ...`
+- 反例: `cmd /c "cd /d D:\...\android && gradlew.bat ..."`；用默认 `GRADLE_USER_HOME`（白等下载）
+- 自检: 日志出现 `> Task :app:compileReleaseKotlin`（**不带 UP-TO-DATE**）才算真编译；
+  出现 `Downloading ...gradle-9.3.1-all.zip` 说明 `GRADLE_USER_HOME` 没设对
+- 首次记录: 2026-10-13

@@ -997,3 +997,127 @@
 - 相关条目: `PIT-034`（原子替换）、`PIT-044`（DEK crash 窗口）、`PIT-048`（魔数误判）、
   `ISSUE-024`（解密链路）、`ADR-033`、`ADR-036`
 - 首次记录: 2026-10-13（第十轮审计）
+
+## ISSUE-030 批量加密并发重入 → 同一文件被并发加密 ⇒ 0 字节 / 文件消失（**已造成数据损坏**）
+- 状态: 已修复（应用层 + native 双侧加固 + 启动自愈救援）
+- 症状 / 现场: 用户点「设置 → 加密已有文件」后：
+  - 同一文件在几十毫秒内被**重复处理几十次**（日志里同一 id 连续 `Bad state: File already appears encrypted`）
+  - 部分文件被"加密"成 **0 字节**：`MediaEncryptionService Encrypted with pre-saved DEK: …(472687 → 0 bytes)`
+  - 紧接着同一文件报 `Native encryption failed: File not found: …`
+  - 界面侧：`UncaughtError ... Bad state: No element`（`Navigator.pop`）+ `Null check operator used on a null
+    value`（对已 dispose 的 `StatefulBuilder` 调 `setState`）各上百次
+  - 观感：加密"大量失败"，且这些媒体在网格/查看器里**打不开（一片黑）**
+- 复发判据（读设备日志，5 秒定论）:
+  1) `Select-String 'Encrypted with pre-saved DEK'` 出现 `→ 0 bytes` ⇒ 命中
+  2) 同一 `batch encrypt <uuid>` 在 1 秒内出现 ≥3 次 ⇒ 命中（正常只应 1 次）
+  3) `Bad state: No element` / `Null check operator` 伴随 `SettingsScreen._showEncryptProgress` 堆栈 ⇒ 命中
+- 根因（三个叠加）:
+  ① **`_showEncryptProgress` 的 `run()` 被并发重入**：`builder` 里
+     `WidgetsBinding.instance.addPostFrameCallback((_) => run());` 没有守卫，而 `run()` 每处理完一项就
+     `setDialogState(() {})` → 触发 rebuild → builder 再注册一个 **新的 run()** ⇒ 并发 run() 数量逐项增长，
+     每个 run() 都从 `items[0]` 开始 ⇒ 同一文件被多个循环同时加密。
+  ② **native `encryptFile` 的临时文件名是固定的** `"$filePath.enc_tmp"`，且入口先
+     `if (tmpFile.exists()) tmpFile.delete()` ⇒ 并发循环互相**删掉对方正在写的临时文件**，最后 rename 出一个
+     0 字节文件（或直接把原文件搞没）。
+  ③ 一次加密"成功"后（`472687 → 472715`），3ms 后另一个 run() 又把**密文**再加密一遍（`799115 → 0 bytes`）。
+- 证据: `密册_log_2026-10-13.txt`（1.0.82，19:54:48–19:56:37）
+  - `19:54:48.556 … (43132 → 43160 bytes)` → `19:54:48.592/.614/.629/.649/.663/.678/.691/.711/.727/.746/.758/.776/.794`
+    同一 id 连续 `File already appears encrypted`
+  - `19:54:48.963 … 4adc3c8d….jpg (472687 → 0 bytes)`；`19:54:49.030/.031 File not found: 4adc3c8d….jpg`
+  - `19:54:48.930 batch encrypt 4adc3c8d…: Failed to back up original file`
+  - `19:54:49.159 batch encrypt 4adc3c8d…: Failed to replace original file; it was preserved as 4adc3c8d_….jpg.enc_bak`
+  - `19:54:55.549 (799087 → 799115 bytes)` → `19:54:55.578 (799115 → 0 bytes)`（同一文件，相隔 29ms）
+  - 统计：`0 bytes` 15 次、`File not found` 535 次、`already appears encrypted` 199 次、`UncaughtError` 182 次
+- 修法（本轮）:
+  1. `settings_screen.dart`：模块级 `_batchEncryptInFlight` 守卫 + `_batchEncrypt` 用 `try/finally` 复位；
+     `_showEncryptProgress` 里加 `started` 守卫（`run()` 只启动一次）、`if (ctx.mounted) setDialogState(() {})`、
+     并把"文件不存在 / 已是密文无 DEK / 真正失败"分成 `missing / undecryptable / failed` 三类计数与文案
+  2. `CryptoHandler.kt`：`encryptFile` 用 `synchronized(lockFor(filePath))` **按路径串行**；
+     临时文件改为唯一名 `"$filePath.enc_tmp-${UUID.randomUUID()}"`；残留 `.enc_tmp*` 统一清理；
+     **结果长度校验**：`encryptedLength < originalLength + 12 + 16` ⇒ 视为失败，删掉坏文件并**从 `.enc_bak` 恢复原文**
+  3. `maintenance_service.dart`：启动自愈 `_repairEncryptionArtifacts()` —— 删除残留 `.enc_tmp*`；
+     `.enc_bak` 在主文件缺失或为 0 字节时**恢复为主文件**（救回原始媒体），主文件正常时删除多余备份
+- 反例 / 易误判:
+  - 以为"批量加密失败是因为文件损坏/权限" —— 其实是**同一个文件被并发加密**（看时间戳密度即可分辨）
+  - 以为"`File not found` 是文件真被删了" —— 多数是并发 swap 造成的中间态（`.enc_bak` 里可能还有原件）
+  - **在修复前切勿再点「加密已有文件」**，每点一次都会再损坏一批文件
+- 残留影响（需用户处理）: 已经变成 0 字节、且**没有 `.enc_bak` 残留**的文件，明文已不可恢复（只能从相册原件/备份找回）；
+  "已是密文但 DB 无 DEK"的文件无法解密也无法再加密，新 UI 会明确告知
+- 相关文件: `lib/presentation/settings/settings_screen.dart`、`android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`、
+  `lib/data/services/maintenance_service.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `PIT-034`（原子替换）、`PIT-044`（DEK 顺序）、`PIT-055`、`PIT-056`、`ISSUE-029`
+- 首次记录: 2026-10-13（用户真机日志定位）
+
+## ISSUE-031 指纹解锁一直无效：图案解锁后 KEK 仍"不存在"（两个 secure storage 后端不一致）
+- 状态: 已修复（待真机复核）
+- 症状 / 现场: 锁屏指纹弹窗验证通过，但**不解锁**；日志每次都是
+  `ERROR [LockController] Biometric OK but no persisted KEK found`。
+  用户改用图案解锁后**再次**指纹解锁仍然同样报错（19:54:06 / 19:56:38 / 19:57:09 三次）
+- 复发判据（读设备日志）: 搜 `Biometric OK but no persisted KEK`；
+  同时**不应**出现 `Failed to persist KEK` —— 若两者都出现，说明写入抛异常（另一条分支）
+- 根因: `EncryptionKeyManager` 用的是 `const FlutterSecureStorage()`（**默认后端**），而 `SecurityService`
+  用 `AndroidOptions(encryptedSharedPreferences: true)`（**EncryptedSharedPreferences 后端**）。
+  两个后端在该设备上**一个写不进/读不出**：`setKey` 不抛异常（所以没有 `Failed to persist KEK`），
+  但 `retrievePersistedKek()` 读回来是空 ⇒ 指纹解锁永远拿不到 KEK。
+  内存 KEK 正常（所以图案解锁后能进 app、批量加密也能跑），只有"持久化 → 读回"这一环断了
+- 证据: 日志 15/20/25/30/37/52/57/68/83/5556/5567 行全部为同一条错误；`Failed to persist KEK` = 0 次；
+  同一会话内 19:54 之后用户已解锁成功（有批量加密动作）却仍然读不到持久化 KEK
+- 修法: `EncryptionKeyManager` 改为**双后端成对读写**：
+  - `setKey` 写入**两个**后端（默认 + `encryptedSharedPreferences: true`），任一成功即可，全部失败打 error
+  - `retrievePersistedKek` 依次尝试两个后端，取第一个非空值；都为空时打 warn（含尝试个数）
+  - `clear` 两个后端都删；构造仍支持注入单实例（测试用）
+- 反例 / 易误判:
+  - 以为"是 `lock()` 又把 KEK 删了"（`PIT-042`）—— 现场 `lock()` 用的是 `clearMemory()` ✔ 已排除
+  - 以为"用户没解锁过"—— 内存 KEK 存在（批量加密能跑）说明解锁过，问题在持久化
+  - 不要"简化"回单后端（`PIT-057`）
+- 验证要点（真机）: 图案解锁一次 → 锁屏 → 指纹解锁应直接进入；日志不再出现
+  `Biometric OK but no persisted KEK`
+- 相关文件: `lib/data/services/encryption_key_manager.dart`、`lib/application/lock/lock_controller.dart`
+- 相关条目: `ISSUE-028`（同一现象的上一轮修复：只补了"可见提示"）、`PIT-042`、`PIT-057`、`ADR-035`
+- 首次记录: 2026-10-13（真机日志定位）
+
+## ISSUE-032 批量加密大视频时进程崩溃：单流 AES-GCM 在 Conscrypt 上一次申请 ≈2× 文件大小 ⇒ OutOfMemoryError
+- 状态: 已修复（改用分块 GCM v2 容器；v1 只读兼容；OOM 不再杀进程）
+- 症状 / 现场: 批量加密跑到大文件时 app **直接崩溃**（Flutter 侧无异常，日志停在加密中途）。
+  `密册_crash_2026-10-13.txt`：
+  ```
+  java.lang.OutOfMemoryError: Failed to allocate a 140444664 byte allocation with 25165824 free bytes
+      and 109MB until OOM, target footprint 313194672, growth limit 402653184
+    at com.android.org.conscrypt.OpenSSLAeadCipher.reset(OpenSSLAeadCipher.java:140)
+    at com.android.org.conscrypt.OpenSSLAeadCipher.doFinalInternal(OpenSSLAeadCipher.java:377)
+    at javax.crypto.Cipher.doFinal(Cipher.java:1938)
+    at ii0.c(r8-map-id-…)     ← R8 混淆后的 CryptoHandler
+    at db.run(…)              ← MainActivity 的 ioExecutor 线程池
+  ```
+  应用日志最后一条正是 `Encrypted with pre-saved DEK: …e191852e_5月6日.mp4 (7041101 → 7041129)`、
+  `…26902194_5月12日.mp4 (43449841 → 43449869)`、`…657bfd9d_…mp4 (71810706 → 71810734)`（71.8MB），
+  0.5 秒后崩溃 ⇒ **下一个大文件在 `doFinal` 申请 134MB 失败**
+- 复发判据（5 秒定论）:
+  1) `密册_crash_*.txt` 出现 `java.lang.OutOfMemoryError` + `OpenSSLAeadCipher` ⇒ 命中本条
+  2) 应用日志搜 `Encrypted(v2)`：**修复后**必须出现该字样；若仍是 `Encrypted:`（无 v2）说明还在跑旧容器
+- 根因: 容器 v1 是**单个 GCM 流** `[nonce12][ciphertext][tag16]`。Conscrypt 的 AEAD 实现要在
+  `Cipher.doFinal` 里同时持有明文与输出（tag 校验通过前不能交付明文），因此对 N 字节文件一次性申请
+  **≈2N** 字节：71.8MB → ~140MB；而该次运行堆上限 384MB、基线已占 313MB ⇒ 必然 OOM。
+  另外 `catch (e: Exception)` **抓不到** `OutOfMemoryError`（Error 不是 Exception）⇒ 进程直接死。
+- 修法（`CryptoHandler.kt`）:
+  ① 新增**分块 GCM 容器 v2**：`[magic 'PRV2'][baseNonce 8][plaintextSize 8][chunkSize 4]` + 每块
+     `ciphertext(≤1MiB) + tag16`，块 nonce = `baseNonce || int32be(index)`；加解密都按块 `doFinal`
+     ⇒ 峰值内存恒定 ~2MiB，**与文件大小无关**
+  ② 解密按 magic 自动分流 v2 / v1（v1 老文件仍然能解）
+  ③ 三处 native 入口（encrypt / decryptFile / decryptFileToBytes）全部新增 `catch (e: OutOfMemoryError)`
+     ⇒ 返回错误而不是崩溃进程；加密失败时从 `.enc_bak` 恢复原文
+  ④ `decryptFileToBytes` 同样支持 v2（分块 + `ByteArrayOutputStream`）
+- 反例 / 易误判:
+  - 以为"是磁盘满/权限/并发" —— 崩溃日志里的 `OpenSSLAeadCipher` 才是判据（与 `ISSUE-030` 的并发损坏不同类）
+  - 以为 `update()` 循环 + 末尾一次 `doFinal()` 就是"流式、不会爆内存" —— **对 AEAD 不成立**
+  - 以为 `catch (e: Exception)` 能兜住 —— 必须**单独** catch `OutOfMemoryError`
+  - 把"512MiB 上限校验"当内存保护 —— 它只是拒绝更大的文件，不解决 2N 分配
+- 遗留（需用户操作）: 已存在的 **v1 大文件**（约 >100MB）解密仍可能 OOM（格式决定，应用层无法消除）；
+  现在会明确报错而不是崩溃。建议：**重启 app 后立刻**（堆最干净时）把这些文件解密回相册，再重新加密（自动用 v2）
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`（Dart 侧接口未变，无需改动）
+- 编译复核 2026-10-13: 首次构建报 `CryptoHandler.kt:480 Unresolved reference 'filePath'` —— v2 解密完成后的
+  日志行误用了 `$filePath`，而 `decryptV2File` 的形参是 `inputFile`（`filePath` 只存在于 `encryptFile` /
+  `decryptFile` / `decryptFileToBytes`）⇒ 已改为 `${inputFile.path}`；随后把全文件 24 处 `filePath` 引用
+  逐一核对，确认都落在对应函数作用域内（"改完必须回读"的又一次实践，见 `PIT-028`）
+- 相关条目: `ISSUE-030`（并发损坏，另一类）、`PIT-044`、`PIT-058`、`ADR-038`、`ADR-033`
+- 首次记录: 2026-10-13（真机 crash 日志定位）

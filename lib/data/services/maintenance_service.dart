@@ -100,8 +100,72 @@ class MaintenanceService {
       parts.add('upgraded $videoThumbnails video thumbnails');
     }
     if (thumbs > 0) parts.add('cleared $thumbs orphan thumbs');
+    final encryptionRepairs = await _repairEncryptionArtifacts();
+    if (encryptionRepairs > 0) {
+      parts.add('repaired $encryptionRepairs encryption leftovers');
+    }
     if (parts.isEmpty) return 'ok';
     return parts.join(', ');
+  }
+
+  /// Repairs leftovers of an interrupted or concurrent encryption run
+  /// (ISSUE-030): `.enc_bak` holds the pre-encryption original, `.enc_tmp-*` is
+  /// a half-written ciphertext, and a 0-byte media file is a failed swap.
+  ///
+  /// Rules, in order:
+  ///  * a stale `.enc_tmp*` is always deleted (it is never a valid file);
+  ///  * if `<name>.enc_bak` exists while `<name>` is missing or 0 bytes, the
+  ///    backup is restored to `<name>` — that is the user's original media;
+  ///  * if `<name>` exists and is non-empty, the backup is redundant → deleted.
+  Future<int> _repairEncryptionArtifacts() async {
+    var repaired = 0;
+    try {
+      final root = await _storage.vaultDir;
+      if (!await root.exists()) return 0;
+      final files = <File>[];
+      await for (final entity
+          in root.list(recursive: true, followLinks: false)) {
+        if (entity is File) files.add(entity);
+      }
+      for (final file in files) {
+        final name = p.basename(file.path);
+        if (name.contains('.enc_tmp')) {
+          try {
+            await file.delete();
+            repaired++;
+          } catch (e) {
+            AppLogger.w(
+                'MaintenanceService', 'delete stale temp ${file.path}: $e');
+          }
+          continue;
+        }
+        if (!name.endsWith('.enc_bak')) continue;
+        final main = File(
+          file.path.substring(0, file.path.length - '.enc_bak'.length),
+        );
+        try {
+          final mainExists = await main.exists();
+          final mainLength = mainExists ? await main.length() : 0;
+          if (!mainExists || mainLength == 0) {
+            if (mainExists) await main.delete();
+            await file.rename(main.path);
+            repaired++;
+            AppLogger.w('MaintenanceService',
+                'restored original media from backup: ${main.path}');
+          } else {
+            await file.delete();
+            repaired++;
+          }
+        } catch (e) {
+          AppLogger.w('MaintenanceService',
+              'repair encryption leftover ${file.path}: $e');
+        }
+      }
+    } catch (e, stackTrace) {
+      AppLogger.e('MaintenanceService',
+          'encryption artifact repair failed: $e\n$stackTrace');
+    }
+    return repaired;
   }
 
   /// Re-files rows whose stored media kind disagrees with their file extension.

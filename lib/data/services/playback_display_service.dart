@@ -22,6 +22,23 @@ class PlaybackDisplayService implements VideoDisplayControls {
 
   final MethodChannel _channel;
 
+  /// The player's own request (mirrored by the video screens' build()).
+  bool _playbackWants = false;
+
+  /// Long-running tasks that must not be interrupted by the device locking:
+  /// batch encryption and the encryption pass after an import.  Losing the
+  /// foreground mid-encryption can kill the app and leave ciphertext behind
+  /// without its DEK (see ISSUE-030 / PIT-044).
+  final Set<String> _taskHolders = <String>{};
+
+  /// Last value actually pushed to the platform channel.
+  bool? _applied;
+
+  /// True while some long task is holding the screen on.
+  bool get keepScreenOnHeldByTask => _taskHolders.isNotEmpty;
+
+  bool get _wantsKeepScreenOn => _playbackWants || _taskHolders.isNotEmpty;
+
   @override
   Future<double> getBrightness() => _readUnit('getBrightness');
 
@@ -46,13 +63,39 @@ class PlaybackDisplayService implements VideoDisplayControls {
   @override
   Future<void> setVolume(double value) => _writeUnit('setVolume', value);
 
+  /// Playback asks for / gives up the wake lock.
+  ///
+  /// Routed through the arbiter so a player screen shutting down no longer
+  /// clears the flag while a long task still needs the screen on.
   @override
-  Future<void> setKeepScreenOn(bool enabled) async {
+  Future<void> setKeepScreenOn(bool enabled) {
+    _playbackWants = enabled;
+    return _applyKeepScreenOn();
+  }
+
+  /// Keeps the screen awake while [holder] runs long work (idempotent).
+  Future<void> holdScreenOn(String holder) {
+    _taskHolders.add(holder);
+    return _applyKeepScreenOn();
+  }
+
+  /// Drops [holder]'s hold; the flag follows whatever remains (idempotent).
+  Future<void> releaseScreenOn(String holder) {
+    _taskHolders.remove(holder);
+    return _applyKeepScreenOn();
+  }
+
+  Future<void> _applyKeepScreenOn() async {
+    final wanted = _wantsKeepScreenOn;
+    if (_applied == wanted) return;
     try {
       await _channel.invokeMethod<void>('setKeepScreenOn', {
-        'enabled': enabled,
+        'enabled': wanted,
       });
+      _applied = wanted;
     } catch (error, stackTrace) {
+      // Leave _applied unset so the next request retries.
+      _applied = null;
       AppLogger.e(
           'PlaybackDisplayService', 'setKeepScreenOn: $error\n$stackTrace');
     }

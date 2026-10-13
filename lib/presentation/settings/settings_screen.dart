@@ -12,6 +12,7 @@ import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../data/services/maintenance_service.dart';
+import '../../data/services/playback_display_service.dart';
 import '../../data/services/media_encryption_service.dart';
 import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/vault_backup_service.dart';
@@ -23,6 +24,16 @@ import 'vault_backup_progress_dialog.dart';
 import '../../core/utils/app_logger.dart';
 
 /// Full settings — security, display, playback, storage export/import.
+/// Guards the "Encrypt existing files" flow (ISSUE-030): the progress dialog is
+/// rebuilt after every item, and registering `run()` from the builder without a
+/// guard started a **new** concurrent loop per rebuild — dozens of loops then
+/// encrypted the same file at once, sharing one `.enc_tmp`, which produced
+/// 0-byte media and files that vanished entirely.
+bool _batchEncryptInFlight = false;
+
+/// Wake-lock holder id used while "Encrypt existing files" runs.
+const String _encryptScreenHolder = 'settings.batchEncrypt';
+
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -489,54 +500,75 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _batchEncrypt(BuildContext context, WidgetRef ref) async {
+    // One flow at a time: two concurrent loops encrypt the same file twice,
+    // which produced 0-byte media and vanished files (ISSUE-030).
+    if (_batchEncryptInFlight) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.encryptingTitle)),
+        );
+      }
+      return;
+    }
+    _batchEncryptInFlight = true;
+
     final encryptionService = ref.read(mediaEncryptionServiceProvider);
     final keyManager = ref.read(encryptionKeyManagerProvider);
     final repo = ref.read(mediaRepositoryProvider);
 
-    final kek = keyManager.getKey();
-    if (kek == null) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.vaultLockedPleaseUnlock)),
-        );
+    try {
+      final kek = keyManager.getKey();
+      if (kek == null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.l10n.vaultLockedPleaseUnlock)),
+          );
+        }
+        return;
       }
-      return;
-    }
 
-    final unencrypted = await repo.listUnencrypted();
-    if (unencrypted.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.allFilesAlreadyEncrypted)),
-        );
+      final unencrypted = await repo.listUnencrypted();
+      if (unencrypted.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.l10n.allFilesAlreadyEncrypted)),
+          );
+        }
+        return;
       }
-      return;
+
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(context.l10n.encryptExistingFiles),
+          content:
+              Text(context.l10n.encryptConfirmationBody(unencrypted.length)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(context.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(context.l10n.encryptAction),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !context.mounted) return;
+
+      await _showEncryptProgress(
+          context, ref, encryptionService, keyManager, repo, unencrypted);
+    } finally {
+      _batchEncryptInFlight = false;
+      // Safety net: `run()` releases it too, but the dialog can be dismissed
+      // from outside (system back) while the loop sits between two items.
+      await PlaybackDisplayService.instance
+          .releaseScreenOn(_encryptScreenHolder);
     }
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(context.l10n.encryptExistingFiles),
-        content: Text(context.l10n.encryptConfirmationBody(unencrypted.length)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(context.l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(context.l10n.encryptAction),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-
-    _showEncryptProgress(context, ref, encryptionService, keyManager, repo,
-        unencrypted);
   }
 
-  void _showEncryptProgress(
+  Future<void> _showEncryptProgress(
     BuildContext context,
     WidgetRef ref,
     MediaEncryptionService encryptionService,
@@ -546,15 +578,25 @@ class SettingsScreen extends ConsumerWidget {
   ) {
     int completed = 0;
     int failed = 0;
+    int missing = 0;
+    int undecryptable = 0;
     bool cancelled = false;
+    // `run()` must start exactly once: the builder re-runs on every
+    // setDialogState(), so registering the callback without a guard spawned a
+    // new concurrent loop per rebuild (ISSUE-030).
+    var started = false;
 
-    showDialog<void>(
+    return showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             Future<void> run() async {
+              // Keep the screen on for the whole pass: the device locking would
+              // background (and may kill) the app mid-encryption.
+              await PlaybackDisplayService.instance
+                  .holdScreenOn(_encryptScreenHolder);
               for (final item in items) {
                 if (cancelled) break;
                 final kekNow = keyManager.getKey();
@@ -565,7 +607,19 @@ class SettingsScreen extends ConsumerWidget {
                 try {
                   final file = File(item.privatePath);
                   if (!file.existsSync()) {
-                    failed++;
+                    // Row without a file: maintenance drops it on next launch.
+                    missing++;
+                  } else if (encryptionService.looksEncrypted(file)) {
+                    // Already ciphertext while the DB has no DEK for it: it can
+                    // neither be encrypted again (that would corrupt it) nor
+                    // decrypted.  Counted separately so the user learns which
+                    // files are broken (ISSUE-030).
+                    undecryptable++;
+                    AppLogger.w(
+                      'SettingsScreen',
+                      'batch encrypt skipped ${item.id}: already ciphertext '
+                      'without a stored DEK',
+                    );
                   } else {
                     // PIT-044 order: generate the DEK → persist it → then
                     // encrypt the file.  Encrypting first leaves a crash window
@@ -599,23 +653,36 @@ class SettingsScreen extends ConsumerWidget {
                   failed++;
                 }
                 completed++;
-                setDialogState(() {});
+                // The dialog may already be gone (system back): calling
+                // setState on a disposed State throws.
+                if (ctx.mounted) setDialogState(() {});
               }
               if (ctx.mounted) Navigator.pop(ctx);
+              await PlaybackDisplayService.instance
+                  .releaseScreenOn(_encryptScreenHolder);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(
+                    content: Text([
                       failed > 0
                           ? context.l10n.encryptResultPartial(completed, failed)
                           : context.l10n.encryptResultSuccess(completed),
-                    ),
+                      if (missing > 0)
+                        context.l10n.encryptMissingFiles(missing),
+                      if (undecryptable > 0)
+                        context.l10n.encryptSkippedNoKey(undecryptable),
+                    ].join('\n')),
                   ),
                 );
               }
             }
 
-            WidgetsBinding.instance.addPostFrameCallback((_) => run());
+            // Start exactly once — the builder re-runs on every rebuild and
+            // used to spawn one extra concurrent loop each time (ISSUE-030).
+            if (!started) {
+              started = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) => run());
+            }
 
             final progress = items.isEmpty
                 ? 0.0
@@ -643,6 +710,12 @@ class SettingsScreen extends ConsumerWidget {
                   if (failed > 0)
                     Text(
                       context.l10n.encryptFailedCount(failed),
+                      style: TextStyle(
+                          color: Theme.of(ctx).colorScheme.error),
+                    ),
+                  if (undecryptable > 0)
+                    Text(
+                      context.l10n.encryptSkippedNoKey(undecryptable),
                       style: TextStyle(
                           color: Theme.of(ctx).colorScheme.error),
                     ),
