@@ -795,22 +795,30 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
                   '${_index + 1}/${widget.items.length}',
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
-                IconButton(
-                  tooltip: context.l10n.moveToRecycleBin,
-                  icon: const Icon(Icons.delete_outline, color: Colors.white70),
-                  onPressed: () => unawaited(_deleteCurrent()),
-                ),
-                IconButton(
-                  tooltip: context.l10n.deleteForever,
-                  icon: const Icon(Icons.delete_forever, color: Colors.white70),
-                  onPressed: () => unawaited(_purgeCurrent()),
-                ),
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.white70),
                   onSelected: (value) {
-                    if (value == 'unhide') unawaited(_unhide());
+                    switch (value) {
+                      case 'unhide':
+                        unawaited(_unhide());
+                        break;
+                      case 'delete':
+                        unawaited(_deleteCurrent());
+                        break;
+                      case 'purge':
+                        unawaited(_purgeCurrent());
+                        break;
+                    }
                   },
                   itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(context.l10n.moveToRecycleBin),
+                    ),
+                    PopupMenuItem(
+                      value: 'purge',
+                      child: Text(context.l10n.deleteForever),
+                    ),
                     PopupMenuItem(
                       value: 'unhide',
                       child: Text(context.l10n.unhideRestoreOriginal),
