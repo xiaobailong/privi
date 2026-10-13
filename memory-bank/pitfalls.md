@@ -958,7 +958,12 @@
   （`PIT-053`③），并保留 `.enc_bak` 供启动时自愈恢复
 - 反例（别这么写）: 固定临时名 + 入口 `tmp.delete()`；只依赖 Dart 侧串行（native 可能被多处调用）；
   加密后不校验长度直接删备份
-- 自检: `git grep -n "enc_tmp" -- android/` 应看到 `UUID.randomUUID()`；日志里不应再出现 `→ 0 bytes`
+- 自检: `git grep -n "enc_tmp" -- android/` 应看到 `UUID.randomUUID()` 且**看不到** `"$filePath.enc_tmp`
+  （临时名不得拼在媒体名之后，见 `PIT-061`）；日志里不应再出现 `→ 0 bytes`
+- 补充 2026-10-13（同一条链路上的第二处坑）: **唯一 ≠ 长度安全** —— 把 `.enc_tmp-<uuid>` 拼在媒体名后面，
+  会让 227 字节的中文/日文名变成 272 字节 > 255 ⇒ `ENAMETOOLONG`，批量加密永远剩一个失败项
+  （`ISSUE-034` / `PIT-061`）。另外清理逻辑不能再按"原文件名的前缀"匹配（新命名与原名无关），
+  改为"同目录 + 前缀 + mtime 年龄阈值"，否则会误删并发在写的临时文件（`ISSUE-030` 复发）
 - 首次记录: 2026-10-13（真机日志定位，见 `ISSUE-030`）
 
 ## PIT-057 `FlutterSecureStorage` 的两种 Android 后端不能"各用一个"：要么成对写读，要么统一
@@ -1029,3 +1034,113 @@
 - 自检: 日志出现 `> Task :app:compileReleaseKotlin`（**不带 UP-TO-DATE**）才算真编译；
   出现 `Downloading ...gradle-9.3.1-all.zip` 说明 `GRADLE_USER_HOME` 没设对
 - 首次记录: 2026-10-13
+
+## PIT-060 Dart 侧加并发 ≠ 原生并发：MethodChannel 的 handler 跑在共享线程池上，池子多小并发就多小
+- 触发条件: 给一个批量任务（本仓库是 6 000+ 文件的「加密已有文件」）在 Dart 侧加"多队列"，
+  但没动原生 handler 的执行线程池
+- 错误现象: 队列数从 1 加到 24，耗时几乎不变。本仓库实测原因：三处 crypto 调用都走
+  `MainActivity.runIo()` → `Executors.newFixedThreadPool(3)`（原本给 metadata / libVLC parse 用），
+  真正并行的只有 3 个，其余全部在排队（`ISSUE-033`）
+- 正确做法: 批量任务要"真并发"时，给原生侧一个**专用且显式**的池，量与 Dart 队列同量级：
+  ```kotlin
+  private val cryptoExecutor = Executors.newFixedThreadPool(
+      Runtime.getRuntime().availableProcessors().coerceIn(4, 8),
+  )
+
+  private fun <T> runCrypto(result: MethodChannel.Result, block: () -> T) {
+      cryptoExecutor.execute {
+          try {
+              mainHandler.post { result.success(block()) }
+          } catch (e: Throwable) {   // 必须 Throwable：不回复 = Dart 侧 future 永久 pending
+              Log.w("PriviMain", "crypto call failed: ${e.message}", e)
+              mainHandler.post { result.error("io_error", e.message, null) }
+          }
+      }
+  }
+  ```
+  上限别给大：本仓库每个并发加解密峰值内存 ~2 MiB（`ISSUE-032`），4~8 是内存与吞吐的折中
+- 反例（别这么写）: 只改 Dart（`for` → `Future.wait` / 多队列）就宣布"已并行"；
+  或把 `ioExecutor` 的 3 直接改成 32（会连带改掉 metadata、libVLC parse 的并发，影响面没评估过）
+- 自检: 用**并发证据**而不是队列数验证 —— 日志时间戳密度（同一毫秒级窗口内 ≥4 条
+  `Encrypted with pre-saved DEK`）或 `dumpsys meminfo` 看峰值；
+  静态自检: `git grep -n "runIo(result) { crypto" -- android/` 必须无命中（crypto 一律走 `runCrypto`）
+- 首次记录: 2026-10-13（`ISSUE-033`）
+
+## PIT-061 给媒体文件加后缀命名"临时/中间文件"前，先算 255 字节的预算（`ENAMETOOLONG`）
+- 触发条件: 在媒体文件旁边新建中间文件，且名字 = **媒体原名 + 后缀**（例如
+  `"$filePath.enc_tmp-${UUID.randomUUID()}"`，后缀 45 字节），媒体名又是中文/日文长名
+- 错误现象: `FileOutputStream` 打不开临时文件：`open failed: ENAMETOOLONG (File name too long)`；
+  表现是"批量加密永远剩下那一个失败项"，与并发、磁盘、密钥都无关（`ISSUE-034`）
+- 正常做法: 让中间文件**与媒体名解耦**，同时保持"同目录"（同文件系统 ⇒
+  `renameTo` 原子，`PIT-034`）：
+  ```kotlin
+  private const val TEMP_PREFIX = ".enc_tmp-"
+
+  private fun tempFileFor(inputFile: File): File =
+      File(inputFile.parentFile, "$TEMP_PREFIX${UUID.randomUUID()}")   // 固定 45 字节
+  ```
+  清理也要跟着改：新命名匹配不到"原名前缀"，必须按
+  "**同目录 + 前缀 + mtime 年龄阈值（如 1h）**"，否则会误删并发加密**正在写**的临时文件
+  （`ISSUE-030` 的 0 字节事故就是这么来的）
+- 反例（别这么写）: `File("$filePath.enc_tmp-$uuid")` / `File(original.name + ".tmp")`；
+  把临时文件放 `cacheDir`（跨文件系统 rename 不原子）；
+  清理时"删掉同目录所有 `.enc_tmp*`"
+- 自检: 复现用的媒体名要**故意长**（中文/日文 80+ 字 + 原后缀 = 200+ 字节）——
+  短名不会暴露这个坑；命令参考:
+  ```powershell
+  # 从日志原文精确算字节数（255 = Linux/ext4/f2fs 单文件名上限）
+  $line=(Select-String -LiteralPath <log> -Pattern 'ENAMETOOLONG').Line
+  [Text.Encoding]::UTF8.GetBytes($line).Length   # 目视媒体名 + 后缀的字节数
+  ```
+  静态自检: `git grep -n '"$filePath.enc_tmp' -- android/` 必须无命中
+- 首次记录: 2026-10-13（`ISSUE-034`，用户真机日志）
+- 补充 2026-10-13（同一条链路上的第二处）: 备份名 `<媒体名>.enc_bak` 吃**同一个 255 字节预算**
+  —— 第二次真机日志里出现了 6 次 `Failed to back up original file`。
+  若备份名**必须**带原名（启动自愈靠它反推主文件），就要为"名字过长"准备退化路径：
+  不建备份槽，直接 `tmp.renameTo(原文件)` 原子覆盖，并且该路径下**永不删主文件**
+  （没有备份可恢复 ⇒ 删了就是丢数据），见 `ISSUE-034` 修法④
+
+
+## PIT-062 本仓库的老 Dart 文件没跟上当前 SDK 的 `dart format`：写入式格式化会带进大量无关重排
+- 触发条件: 对**早于当前 formatter 风格**的文件跑 `dart format <file>`（写模式）
+- 错误现象: 只改了 30~50 行，diff 却几百行 —— 参数续行、`AppLogger.w(...)` 的换行与缩进会被整体重排
+  （实测 `player_screen.dart`：逻辑改动 35 行 / diff 135 行；`settings_screen.dart`：diff 303 行）
+- 正确做法:
+  - 自测优先用**只读**检查 `dart format --output=none --set-exit-if-changed <file>`；
+    但注意对仓库里的**老文件**它必然报 `Changed`（文件本来就不符合当前格式）⇒ `exit=1` **不代表**"我的改动有问题"；
+  - 判断真实改动量用 `git --no-pager diff -w --stat`（忽略空白），行数应≈实际改动量，
+    与 `git diff --stat` 的差额就是格式化噪音；
+  - 只关心"能不能解析/类型对不对"时，用 `frontend_server` 编译检查（`PIT-014`）；
+  - 真要写入格式化：先确认该文件本来就是 format 干净的，或**明确接受**这次重排并在交付说明里写清楚
+- 反例: 直接 `dart format <一批老文件>`，把 300 行 diff 一起交出去 —— 用户 review 时找不到真实改动
+- 自检: `git --no-pager diff -w --numstat -- <file>`，若"新增行数"≈你实际写的行数 ⇒ 噪音只是缩进
+- 首次记录: 2026-10-13（本轮：Dart 侧 3 个老文件被顺带重排）
+
+
+## PIT-063 重命名"已被 DB 引用的媒体文件"必须三步：rename → 校验 → 更新 DB（失败要改回原名）
+- 触发条件: 对 `media_items.private_path` 指向的文件做 `rename`（文件名加密迁移 `ADR-042`、批量整理…）
+- 错误现象（两个方向都不行）:
+  ① **先更新 DB 再 rename**：rename 失败 ⇒ DB 指向不存在的文件（媒体在网格里"消失"，启动维护当孤儿清掉）；
+  ② **rename 成功但 DB 没更新**（抛异常/进程被杀）⇒ 磁盘上多一个没人认得的文件，DB 仍指向旧名字（同样表现为丢文件）
+- 正确做法（本仓库实现见 `FilenameEncryptionService.renameOne`）:
+  ```dart
+  await file.rename(target.path);                     // 同目录 ⇒ 同一文件系统 ⇒ 原子
+  if (!target.existsSync() || target.lengthSync() != originalLength) {
+    await _restore(target, item.privatePath);         // 校验不通过 ⇒ 改回
+    return FilenameRenameOutcome.failed;
+  }
+  try {
+    await _repository.updatePrivatePath(item.id, target.path);
+  } catch (_) {
+    await _restore(target, item.privatePath);         // 写库失败 ⇒ 改回，保持两者一致
+    return FilenameRenameOutcome.failed;
+  }
+  ```
+  另外：目标**必须同目录**（跨卷 rename 不原子甚至直接失败）；随机名要**检查存在性**并重试；
+  迁移要**幂等**（"已经是新命名"就跳过），失败项可重跑
+- 反例（别这么写）: 先 `updatePrivatePath` 再 `rename`；rename 后不校验、不 try/catch；
+  跨目录/跨卷改名；用"原名 + 序号"这类可能撞名的规则且不检查存在性
+- 自检: 改名中途杀进程（或让 DB 更新故意抛异常）后重启：网格里不应出现"打不开/消失"的项；
+  日志应出现 `restoring the old name`（`could not restore` 才是真问题）
+- 首次记录: 2026-10-13（`ISSUE-038`）
+

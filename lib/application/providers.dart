@@ -11,13 +11,16 @@ import '../core/utils/album_query_utils.dart';
 import '../data/db/database.dart';
 import '../data/repositories/album_repository.dart';
 import '../data/repositories/media_repository.dart';
+import '../data/services/batch_encryption_service.dart';
 import '../data/services/biometric_service.dart';
 import '../data/services/encryption_key_manager.dart';
+import '../data/services/filename_encryption_service.dart';
 import '../data/services/grid_thumbnail_service.dart';
 import '../data/services/import/asset_gateway.dart';
 import '../data/services/import/file_system_gateway.dart';
 import '../data/services/import_service.dart';
 import '../data/services/intent_service.dart';
+import '../data/services/key_backup_service.dart';
 import '../data/services/maintenance_service.dart';
 import '../data/services/media_encryption_service.dart';
 import '../data/services/media_rename_service.dart';
@@ -113,6 +116,37 @@ final encryptionKeyManagerProvider = Provider<EncryptionKeyManager>((ref) {
 final mediaEncryptionServiceProvider = Provider<MediaEncryptionService>((ref) {
   return MediaEncryptionService(
     nativeCrypto: ref.watch(nativeCryptoServiceProvider),
+  );
+});
+
+/// Parallel batch encryption behind "Settings → Encrypt existing files":
+/// a 6 000+ file pass used to run one file at a time (see
+/// `BatchEncryptionService`).
+final batchEncryptionServiceProvider = Provider<BatchEncryptionService>((ref) {
+  return BatchEncryptionService(
+    encryption: ref.watch(mediaEncryptionServiceProvider),
+    keyManager: ref.watch(encryptionKeyManagerProvider),
+    repository: ref.watch(mediaRepositoryProvider),
+  );
+});
+
+/// Vault-key export/import ("key package"), used after a reinstall or device
+/// change so the imported key can decrypt files encrypted before it.
+final keyBackupServiceProvider = Provider<KeyBackupService>((ref) {
+  return KeyBackupService(
+    keyManager: ref.watch(encryptionKeyManagerProvider),
+    security: ref.watch(securityServiceProvider),
+    encryption: ref.watch(mediaEncryptionServiceProvider),
+    repository: ref.watch(mediaRepositoryProvider),
+  );
+});
+
+/// Filename encryption for ciphertext media — see `FilenameEncryptionService`
+/// and `ADR-042`.
+final filenameEncryptionServiceProvider =
+    Provider<FilenameEncryptionService>((ref) {
+  return FilenameEncryptionService(
+    repository: ref.watch(mediaRepositoryProvider),
   );
 });
 

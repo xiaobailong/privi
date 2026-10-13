@@ -924,3 +924,156 @@
   - 块大小写进头部（`chunkSize`），将来调整不需要改格式
 - 相关文件: `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`
 - 首次记录: 2026-10-13
+
+## ADR-039 批量加密 = 「N 条共享游标的队列」+ 原生专用 crypto 线程池（4~8）
+- 日期: 2026-10-13 | 状态: 已采纳（待真机验证吞吐）
+- 背景: 保险库有 6 000+ 明文文件时，「设置 → 加密已有文件」是**单文件串行**（每项要读文件头、
+  包 DEK、写 DB、跑一次原生 AES-GCM），耗时分钟级；而原生 crypto 又挂在 `ioExecutor(3)` 上，
+  天生把并发压到 3（`ISSUE-033`）。
+- 决策:
+  ① Dart 侧：`BatchEncryptionService.run()` 起 N 条队列（默认 `2 × numberOfProcessors`，
+     clamp `6…24`，且 ≤ 待处理项数），**共用一个游标**领任务（工作窃取）；单项逻辑统一走
+     `encryptOne()`（含 `PIT-051` 的"先落 DEK 再加密文件"与"确认是明文才回滚 DEK"）。
+  ② 原生侧：新增专用 `cryptoExecutor`（`availableProcessors().coerceIn(4, 8)`）+ `runCrypto()`，
+     三个 crypto 方法（encrypt / decrypt / decryptToBytes）改走它；`ioExecutor(3)` 保持不动。
+  ③ UI：进度回调节流 100 ms 再 rebuild 对话框（`_encryptProgressUiIntervalMs = 100`）。
+- 理由:
+  - 每项开销的大头是**等待**（跨平台往返 + sqflite 写 + 文件头读），不是 CPU ⇒ Dart 侧允许
+    oversubscribe（2 × 核数）才能把原生池喂满；旧实现只有 1 条队列时这些等待全被串起来。
+  - 用共享游标而不是"预先切成 N 段"：一个 500 MB 视频落到某条队列时，该队列不会拖住后面一大串
+    小文件（动态负载均衡），取消也能更快生效。
+  - 原生池上限取 4~8：每次并发加解密峰值 ~2 MiB（`ISSUE-032` / `ADR-038` 的分块 GCM），
+    8 × 2 MiB ≈ 16 MiB 堆增量可控；再往上只是增加 IO 抖动与 OOM 风险。
+  - crypto 单独一个池，批量加密就不会把 metadata / libVLC parse 饿死（它们仍在 ioExecutor）。
+- 备选与为何不选:
+  - **保持串行、只优化单项**（例如批量写 DB）：天花板太低（仍是 1 项/轮），且要改 DB 层
+  - **纯 Dart `Isolate` 并行**：加解密在原生侧、DB 在 sqflite 单队列，Isolate 帮不上，
+    还多出跨 isolate 传 KEK 的安全面
+  - **直接把 `ioExecutor` 从 3 调大**：会连带改掉 metadata / VLC parse 的并发，影响面没评估过
+  - **"几十条队列 = 几十个原生线程"**：内存与 IO 抖动不可接受（`ISSUE-032` 的教训）
+  - **原生侧一次调用批量加密多个文件**：要跨 Dart / native 协调 DEK 落库与失败回滚，收益不明显
+- 影响 / 约束:
+  - 新增批量加密入口**一律走 `BatchEncryptionService`**（别再写 `for (item in items)` 的串行循环）；
+    单项行为要改就改 `encryptOne()`。
+  - 队列数可调，但**必须**与原生池同量级；`cryptoExecutor` 的上限（4~8）与内存预算绑定（`ADR-038`）。
+  - `runCrypto` 必须 catch `Throwable` 并回复 `result.error`：一次未捕获的 `Error`
+    会让 Dart future 永久 pending，整批任务不结束。
+  - 并发**不改变** `ISSUE-030` 的两道重入守卫（模块级 `_batchEncryptInFlight` + 对话框级 `started`）；
+    也不要删 UI 节流，否则 6 000 项 × rebuild 会拖慢主 isolate。
+  - 取消只在"项目之间"生效：在途的原生调用不会被中断（中断会留下 `.enc_tmp*`，见 `PIT-056`）。
+- 相关文件: `lib/data/services/batch_encryption_service.dart`、`lib/application/providers.dart`、
+  `lib/presentation/settings/settings_screen.dart`、`android/app/src/main/kotlin/com/privi/app/MainActivity.kt`
+- 首次记录: 2026-10-13
+
+## ADR-040 加密中间文件放「媒体同目录 + 固定短名」；`.enc_bak` 保持原名（不为此牺牲自愈）
+- 日期: 2026-10-13 | 状态: 已采纳
+- 背景: `CryptoHandler.encryptFile` 的临时文件原为 `"$filePath.enc_tmp-<uuid>"`（媒体名 + 45 字节）。
+  一个 227 字节的中文/日文 jpg 名因此变成 272 字节，超过 Linux 单文件名上限 255 字节，
+  `open failed: ENAMETOOLONG` ⇒ 该文件永远加密失败（`ISSUE-034`）。
+- 决策:
+  ① 原地加密的临时文件 = **同目录** + `.enc_tmp-<uuid>`（45 字节定长，与媒体名无关）——
+     同目录是为了同一文件系统，`renameTo` 保持原子（`PIT-034`）。
+  ② 陈旧临时文件的清理改成"同目录 + `TEMP_PREFIX` + mtime 早于 1 小时"，
+     **不再**按"媒体名前缀"匹配（新命名与之无关），也不允许"见 `.enc_tmp*` 就删"。
+  ③ **`.enc_bak` 不改名**（仍是 `媒体名 + .enc_bak`）：启动自愈靠
+     `<name>.enc_bak` → `<name>` 反推主文件，改成短名就丢了这个映射。
+- 理由:
+  - 失败面只需"临时文件名"可控即可消除；`.enc_bak` 的映射是**救援**能力，价值高于支持极端长名。
+  - 年龄阈值是"既能清残留、又不会误删并发在写的临时文件"的最小代价手段（`ISSUE-030` 的教训：
+    误删 live 临时文件 = 0 字节媒体）。
+- 备选与为何不选:
+  - **临时文件放 `cacheDir`/`getExternalCacheDir`**：跨文件系统时 `rename` 退化成"复制+删除"甚至直接失败，
+    原子替换（`PIT-034`）不再成立
+  - **截断媒体名再拼后缀**（如 `take(120)`）：字节数仍不确定（UTF-8 中文 3 字节/字），治标不治本
+  - **`.enc_bak` 也用短名 + 把原名写进 sidecar / DB**：要跨 Dart/native 维护新映射，
+    只为支持"媒体名 ≥ 248 字节"这种本就连导入都困难的极端情况，不值
+  - **把 `.enc_bak` 换成"先复制原件到缓存"**：等于把大文件复制一遍，35 GB 视频不可接受
+- 影响 / 约束:
+  - 以后新增任何"媒体旁边的中间文件"（临时、分片、缩略图候选……）都要按 `PIT-061`：
+    名字**不得**拼在媒体名之后，且必须与媒体同目录。
+  - 临时文件的清理规则与命名绑定：改前缀必须同时改 `deleteStaleTemps` 与启动自愈
+    （`maintenance_service` 用 `name.contains('.enc_tmp')`，对新旧命名都兼容）。
+  - 已知**安全失败**：媒体名 ≥ 248 字节时 `.enc_bak` 的 rename 会失败，主文件不受损、
+    返回 `Failed to back up original file`（不静默）；要支持这类名字需要先解决"备份→原名"的映射问题。
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`、
+  `lib/data/services/maintenance_service.dart`
+- 相关条目: `ISSUE-034`、`PIT-061`、`PIT-056`、`PIT-034`、`ISSUE-030`
+- 首次记录: 2026-10-13
+
+
+## ADR-041 密钥备份包 = 明文 `salt + KEK`，导入后"导入的 KEK 优先"（解锁不再覆盖）
+- 日期: 2026-10-13 | 状态: 已采纳（待真机复核）
+- 背景: KEK = `PBKDF2(密码|图案, encryption_salt)`（`ADR-033`①），salt 存安全存储。卸载重装后 salt 消失，
+  `SecurityService.deriveEncryptionKey()` 会**新建随机 salt** ⇒ 派生出另一个 KEK ⇒ 旧文件全部打不开。
+  用户要求：能把密钥导出到网盘防丢，重装后导入即恢复解密能力（`ISSUE-036`）。
+- 决策:
+  ① 密钥包 = **明文 JSON**：`{format:'privi-key-backup', version:1, createdAt, encryptionSalt, kek(base64)}`；
+  ② 导入 = 写 salt（**仅当本机没有** salt 时采用，沿用 `adoptEncryptionSaltIfAbsent`）+ `setImportedKey(kek)`；
+  ③ `EncryptionKeyManager` 记 `privi_kek_source_v1 = imported|derived`；**导入态下解锁只加载持久化 KEK、不再派生**
+     （`LockController._deriveAndStoreEncryptionKey`）；
+  ④ 改密码/图案（`changePattern` / `changePin` / `migratePinToPattern`）在"派生新 KEK + 旋转全部 DEK"成功后
+     `markDerivedKey()`，回到派生态；
+  ⑤ 导入前必须通过 `matchesVault()`（最多 8 条 `encryptedDek` 实测解密）与 salt 冲突检查，任何一项不过就**拒绝**。
+- 理由:
+  - 只导 salt 不够：用户导密钥的动机就是"怕忘密码 / 怕 salt 丢"，带上 KEK 后**任意新图案**都能解锁；
+  - 不做二次密码包裹：包裹要多记一个口令，而身份校验已由图案/PIN 承担；真正的风险边界是"密钥包文件本身怎么保管"，
+    所以用 UI 明确警告 + 建议离线/加密网盘；
+  - 固定持久化 KEK（而不是每次派生）是"重装后仍能解密"的必要条件；把"导入态"显式化成 source 标志，
+    便于用一行日志判定（`unlock: using the imported vault key`）。
+- 备选与为何不选:
+  - **只导出 salt**：真忘了密码就没救，达不到防丢目的；
+  - **密码二次加密密钥包**：多一层口令与失败点（用户已有一个密码/图案）；
+  - **改成"KEK 随机生成 + 密码包裹存储"（LUKS 式）**：架构上更正确，但会牵动 `ADR-033`/`ADR-034` 的
+    KEK 生命周期与所有解锁路径，属大重构，本 ADR 只在派生模型上加"导入态"这一条分支；
+  - **导入时覆盖本机已有 salt**：会让本机已加密文件全部变孤儿（`ISSUE-029`③ 的老坑），直接否决。
+- 影响 / 约束:
+  - 密钥包 = 全部文件的钥匙：**不得**写入日志、备份 manifest 或除用户选定目录以外的任何位置；
+  - `key_backup_service.dart` 是包格式的唯一定义处，改格式必须升 `version`；
+  - 导入态下"忘记密码也能进"是**设计意图**，但用户若想回到"密码派生密钥"，用「更改图案」即可
+    （自动旋转 DEK + 退出导入态）；
+  - 导出要求已解锁（`buildPackage` 在无 KEK 时抛 `StateError`），UI 先提示"请先解锁"；
+  - 导入态**不改变** `ISSUE-030` 的重入守卫与 `decryptDek` 的失败语义。
+- 相关文件: `lib/data/services/key_backup_service.dart`、`lib/data/services/encryption_key_manager.dart`、
+  `lib/application/lock/lock_controller.dart`、`lib/presentation/settings/settings_screen.dart`
+- 相关条目: `ISSUE-036`、`ADR-033`、`ADR-034`、`ADR-035`、`ISSUE-029`③
+- 首次记录: 2026-10-13
+
+## ADR-042 加密文件名：已加密媒体一律用「纯随机名、不带扩展名」，并提供一次性迁移按钮
+- 日期: 2026-10-13 | 状态: 已采纳（**阶段 1 已实施**：见 `ISSUE-038`；阶段 2「新导入直接短名」未实施）
+- 背景: 现在密文文件名是 `<uuid8>_<原文件名带扩展名>`（如 `1e795213_xxxx.jpg`）。虽然保险库目录有
+  `.nomedia` + 隐藏目录，但"文件名带原扩展名"仍会**被按扩展名扫描的第三方程序**认出是媒体
+  （用户诉求：加密时连文件名一起加密）。另外这批名字太长还引出过 `ISSUE-034`（临时/备份名超 255 字节）。
+- 决策:
+  ① 已加密媒体的文件名 = **32 位随机 hex，无扩展名**（例：`9f3c…c7a1`），原名继续只存 DB
+     （`media_items.original_name` 已有，还原到相册仍用原名）；
+  ② 入口**复用「加密已有文件」**（用户要求，不新增菜单项）：确认弹框里两个勾选项
+     「加密文件内容」/「加密文件名」；勾了改名就对 `listEncrypted()` 中"命名仍是原样"的项逐项
+     `rename` + 更新 `private_path`；**幂等**（`basename` 已匹配 `^[0-9a-f]{32}$` 的项跳过）——
+     实现要点与判据见 `ISSUE-038`；
+  ③ 阶段 2：导入/隐藏链路（`hide_preparer` 一侧）直接生成随机短名，新库不再产生长名；
+     迁移按钮仍保留（兼容老库）。
+- 理由:
+  - **不含扩展名**才能挡住"按扩展名/关键词扫描"；统一后缀（`.prv`）仍会让扫描器建立关联，效果差一截；
+  - "无扩展名也能正常用"在本仓库**已经验证**：解密到临时文件的名字一直是 `privi_dec_<millis>_<hex>`
+    （无扩展名），照片与视频都能正常显示/播放 ⇒ 类型判定走 DB + 内容魔数，不依赖文件名；
+  - 随机名同时顺带解决长名（`ISSUE-034` 的两处上限问题在新库里彻底消失）。
+- 备选与为何不选:
+  - **保留扩展名只打乱主名**：挡不住按扩展名扫描，等于没做；
+  - **统一后缀 `.prv`**：仍可被"按后缀聚类"的程序识别成保险库文件，且引入新命名规则；
+  - **放进单一大文件容器（虚拟文件系统）**：最彻底但工程量大，本项目不做（超出当前范围）。
+- 影响 / 约束（实施前必须逐项确认，实施后必须真机验证）:
+  - 依赖点：`MediaItem.isVideo` / `mimeType`（DB）、缩略图取帧（按内容探测）、播放器（ExifPlayer/VLC 按内容，
+    且播放路径本来就经"解密到无扩展名临时文件"）、`Image.file`（按内容）、还原到相册（用 `original_name`）、
+    备份 manifest（存路径 + 原名）、启动自愈（`.enc_tmp-*` / `.enc_bak`，已与媒体名解耦）；
+  - 迁移**只动"已加密"项**；保险库锁定期间导入的明文项暂不改名（阶段 2 再统一），
+    避免明文项在其它链路被按类型扫描时出现"文件没后缀"的新问题；
+  - 迁移顺序：`rename` 成功 → 更新 DB；DB 更新失败则**尝试改回原名**，保持"DB 路径 = 实际文件"不变；
+    失败项计数并汇总提示，可重跑（幂等）；
+  - 迁移**必须**在已解锁状态执行（要读 `encrypted_dek`，且改名后立刻要能解密校验）；
+  - 不许在迁移里顺手做别的（加密/解密/去重），一次只做改名。
+- 相关文件（实施时）: `lib/data/services/vault_storage_service.dart`、`lib/data/services/import/hide_preparer.dart`、
+  `lib/presentation/settings/settings_screen.dart`、`lib/data/repositories/media_repository.dart` + 新增迁移服务
+- 相关条目: `ISSUE-034`（长名上限）、`ADR-033`（加密架构）、`PIT-031`（不要按扩展名判类型）、
+  `ISSUE-029`③（还原用原名）
+- 首次记录: 2026-10-13
+

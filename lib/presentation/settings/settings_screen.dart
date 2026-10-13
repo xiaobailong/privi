@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,12 +11,13 @@ import '../../application/providers.dart';
 import '../../application/settings/settings_controller.dart';
 import '../../core/constants.dart';
 import '../../core/l10n.dart';
+import '../../data/repositories/media_repository.dart';
+import '../../data/services/batch_encryption_service.dart';
+import '../../data/services/filename_encryption_service.dart';
+import '../../data/services/key_backup_service.dart';
 import '../../data/services/maintenance_service.dart';
 import '../../data/services/playback_display_service.dart';
-import '../../data/services/media_encryption_service.dart';
-import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/vault_backup_service.dart';
-import '../../data/repositories/media_repository.dart';
 import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../lock/pattern_lock.dart';
@@ -33,6 +34,11 @@ bool _batchEncryptInFlight = false;
 
 /// Wake-lock holder id used while "Encrypt existing files" runs.
 const String _encryptScreenHolder = 'settings.batchEncrypt';
+
+/// How often the progress dialog may rebuild during the pass.  One rebuild per
+/// item was tolerable in the serial loop but is pure overhead now that dozens
+/// of queues finish items in parallel (6 000+ items × setDialogState).
+const int _encryptProgressUiIntervalMs = 100;
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -63,6 +69,18 @@ class SettingsScreen extends ConsumerWidget {
               ref.read(lockControllerProvider.notifier).lock();
               Navigator.of(context).popUntil((r) => r.isFirst);
             },
+          ),
+          ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: Text(context.l10n.exportVaultKey),
+            subtitle: Text(context.l10n.exportVaultKeySubtitle),
+            onTap: () => _exportVaultKey(context, ref),
+          ),
+          ListTile(
+            leading: const Icon(Icons.vpn_key_outlined),
+            title: Text(context.l10n.importVaultKey),
+            subtitle: Text(context.l10n.importVaultKeySubtitle),
+            onTap: () => _importVaultKey(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.gesture),
@@ -499,6 +517,138 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  /// Reads a key package the user picks and adopts it as this install's key.
+  ///
+  /// Validates **before** asking for confirmation (a rejected package must never
+  /// look like a successful import) and lets the service refuse a package that
+  /// would invalidate files already encrypted here.
+  Future<void> _importVaultKey(BuildContext context, WidgetRef ref) async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      withData: false,
+    );
+    final path = picked?.files.single.path;
+    if (path == null || !context.mounted) return;
+
+    final service = ref.read(keyBackupServiceProvider);
+    String raw;
+    try {
+      raw = await File(path).readAsString();
+    } catch (e, stackTrace) {
+      AppLogger.e('SettingsScreen', 'read vault key: $e\n$stackTrace');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.vaultKeyImportReadFailed)),
+        );
+      }
+      return;
+    }
+
+    final preview = await service.validatePackage(raw);
+    if (!context.mounted) return;
+    if (preview != KeyImportOutcome.imported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_keyImportMessage(context, preview))),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.l10n.importVaultKey),
+        content: Text(context.l10n.importVaultKeyWarning),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(context.l10n.continueAction),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final outcome = await service.importPackage(raw);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_keyImportMessage(context, outcome))),
+    );
+  }
+
+  String _keyImportMessage(BuildContext context, KeyImportOutcome outcome) {
+    switch (outcome) {
+      case KeyImportOutcome.imported:
+        return context.l10n.vaultKeyImported;
+      case KeyImportOutcome.malformed:
+        return context.l10n.vaultKeyImportMalformed;
+      case KeyImportOutcome.saltConflict:
+        return context.l10n.vaultKeyImportSaltConflict;
+      case KeyImportOutcome.keyMismatch:
+        return context.l10n.vaultKeyImportKeyMismatch;
+      case KeyImportOutcome.failed:
+        return context.l10n.vaultKeyImportFailed;
+    }
+  }
+
+  /// Writes the vault key material (KEK + salt) to a JSON file the user picks a
+  /// directory for, so a reinstall/device change can still decrypt old files.
+  Future<void> _exportVaultKey(BuildContext context, WidgetRef ref) async {
+    if (ref.read(encryptionKeyManagerProvider).getKey() == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.vaultKeyExportLocked)),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.l10n.exportVaultKey),
+        content: Text(context.l10n.exportVaultKeyWarning),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(context.l10n.continueAction),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final pickDirectory = ref.read(vaultBackupDirectoryPickerProvider);
+    final directory = await pickDirectory(context.l10n.exportVaultKey);
+    if (directory == null || !context.mounted) return;
+
+    try {
+      final package = await ref.read(keyBackupServiceProvider).buildPackage();
+      final file = File(
+        '$directory/${KeyBackupService.suggestedFileName(DateTime.now())}',
+      );
+      await file.writeAsString(package, flush: true);
+      AppLogger.i('SettingsScreen', 'vault key exported to ${file.path}');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.vaultKeyExported(file.path))),
+        );
+      }
+    } catch (e, stackTrace) {
+      AppLogger.e('SettingsScreen', 'export vault key: $e\n$stackTrace');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.vaultKeyExportFailed)),
+        );
+      }
+    }
+  }
+
   Future<void> _batchEncrypt(BuildContext context, WidgetRef ref) async {
     // One flow at a time: two concurrent loops encrypt the same file twice,
     // which produced 0-byte media and vanished files (ISSUE-030).
@@ -512,7 +662,11 @@ class SettingsScreen extends ConsumerWidget {
     }
     _batchEncryptInFlight = true;
 
-    final encryptionService = ref.read(mediaEncryptionServiceProvider);
+    // Both passes run over parallel queues (BatchEncryptionService /
+    // FilenameEncryptionService): the serial loops were the bottleneck at
+    // 6 000+ files.
+    final batch = ref.read(batchEncryptionServiceProvider);
+    final filenames = ref.read(filenameEncryptionServiceProvider);
     final keyManager = ref.read(encryptionKeyManagerProvider);
     final repo = ref.read(mediaRepositoryProvider);
 
@@ -528,7 +682,11 @@ class SettingsScreen extends ConsumerWidget {
       }
 
       final unencrypted = await repo.listUnencrypted();
-      if (unencrypted.isEmpty) {
+      // Ciphertext rows whose file name is still readable (ADR-042).
+      final renamePending =
+          FilenameEncryptionService.pendingItems(await repo.listEncrypted());
+
+      if (unencrypted.isEmpty && renamePending.isEmpty) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(context.l10n.allFilesAlreadyEncrypted)),
@@ -537,28 +695,38 @@ class SettingsScreen extends ConsumerWidget {
         return;
       }
 
-      final ok = await showDialog<bool>(
+      final choice = await showDialog<_EncryptChoice>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(context.l10n.encryptExistingFiles),
-          content:
-              Text(context.l10n.encryptConfirmationBody(unencrypted.length)),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(context.l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(context.l10n.encryptAction),
-            ),
-          ],
+        builder: (ctx) => _EncryptOptionsDialog(
+          plaintextCount: unencrypted.length,
+          renameCount: renamePending.length,
         ),
       );
-      if (ok != true || !context.mounted) return;
+      if (choice == null || !context.mounted) return;
+      // Validation: the dialog disables OK when nothing is ticked — this is the
+      // belt-and-braces check so a pass never starts with no work to do.
+      if (!choice.encryptContent && !choice.renameFilenames) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.encryptOptionsPickOne)),
+        );
+        return;
+      }
 
-      await _showEncryptProgress(
-          context, ref, encryptionService, keyManager, repo, unencrypted);
+      final renameStats = await _showEncryptProgress(
+        context: context,
+        batch: batch,
+        filenames: filenames,
+        repo: repo,
+        contentItems: unencrypted,
+        encryptContent: choice.encryptContent,
+        encryptFilenames: choice.renameFilenames,
+      );
+
+      // The views cache file paths: refresh them once files were renamed.
+      if ((renameStats?.renamed ?? 0) > 0) {
+        ref.invalidate(albumsProvider);
+        ref.invalidate(vaultSizeBytesProvider);
+      }
     } finally {
       _batchEncryptInFlight = false;
       // Safety net: `run()` releases it too, but the dialog can be dismissed
@@ -568,25 +736,37 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _showEncryptProgress(
-    BuildContext context,
-    WidgetRef ref,
-    MediaEncryptionService encryptionService,
-    EncryptionKeyManager keyManager,
-    MediaRepository repo,
-    List<MediaItem> items,
-  ) {
-    int completed = 0;
-    int failed = 0;
-    int missing = 0;
-    int undecryptable = 0;
+  /// Runs the selected passes and reports progress in one dialog.
+  ///
+  /// Phase 1 encrypts the contents of [contentItems] over parallel queues;
+  /// phase 2 re-reads the encrypted rows and renames every file whose name is
+  /// still readable — so the files encrypted in phase 1 are renamed, too
+  /// (ADR-042).  Returns the rename stats so the caller can refresh cached
+  /// paths.
+  Future<FilenameRenameStats?> _showEncryptProgress({
+    required BuildContext context,
+    required BatchEncryptionService batch,
+    required FilenameEncryptionService filenames,
+    required MediaRepository repo,
+    required List<MediaItem> contentItems,
+    required bool encryptContent,
+    required bool encryptFilenames,
+  }) {
+    final contentTotal = encryptContent ? contentItems.length : 0;
+    // Live counters, filled by the services through `onProgress` below.
+    var stats = BatchEncryptionStats();
+    var renameStats = FilenameRenameStats();
+    var renameTotal = 0;
+    // 0 = content pass, 1 = filename pass (drives the status text/title).
+    var phase = 0;
     bool cancelled = false;
     // `run()` must start exactly once: the builder re-runs on every
     // setDialogState(), so registering the callback without a guard spawned a
     // new concurrent loop per rebuild (ISSUE-030).
     var started = false;
+    FilenameRenameStats? renameResult;
 
-    return showDialog<void>(
+    return showDialog<FilenameRenameStats?>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
@@ -597,83 +777,75 @@ class SettingsScreen extends ConsumerWidget {
               // background (and may kill) the app mid-encryption.
               await PlaybackDisplayService.instance
                   .holdScreenOn(_encryptScreenHolder);
-              for (final item in items) {
-                if (cancelled) break;
-                final kekNow = keyManager.getKey();
-                if (kekNow == null) {
-                  cancelled = true;
-                  break;
-                }
-                try {
-                  final file = File(item.privatePath);
-                  if (!file.existsSync()) {
-                    // Row without a file: maintenance drops it on next launch.
-                    missing++;
-                  } else if (encryptionService.looksEncrypted(file)) {
-                    // Already ciphertext while the DB has no DEK for it: it can
-                    // neither be encrypted again (that would corrupt it) nor
-                    // decrypted.  Counted separately so the user learns which
-                    // files are broken (ISSUE-030).
-                    undecryptable++;
-                    AppLogger.w(
-                      'SettingsScreen',
-                      'batch encrypt skipped ${item.id}: already ciphertext '
-                      'without a stored DEK',
-                    );
-                  } else {
-                    // PIT-044 order: generate the DEK → persist it → then
-                    // encrypt the file.  Encrypting first leaves a crash window
-                    // in which the media is ciphertext while its DEK never
-                    // reached the DB (unrecoverable).
-                    final dek = encryptionService.generateDek();
-                    final nonce = encryptionService.generateNonce();
-                    final encryptedDek = await encryptionService.encryptDek(
-                      dek: dek,
-                      kek: kekNow,
-                    );
-                    await repo.updateEncryptedDek(item.id, encryptedDek);
-                    try {
-                      await encryptionService.encryptFileWithDek(
-                        filePath: item.privatePath,
-                        dek: dek,
-                        nonce: Uint8List.fromList(nonce),
-                      );
-                    } catch (e) {
-                      // Keep the DEK when the file did get encrypted — the
-                      // native swap can succeed even if its reply is lost.
-                      if (!encryptionService.looksEncrypted(file)) {
-                        await repo.updateEncryptedDek(item.id, null);
-                      }
-                      rethrow;
-                    }
-                  }
-                } catch (e, stackTrace) {
-                  AppLogger.e('SettingsScreen',
-                      'batch encrypt ${item.id}: $e\n$stackTrace');
-                  failed++;
-                }
-                completed++;
-                // The dialog may already be gone (system back): calling
-                // setState on a disposed State throws.
+              // The dialog may already be gone (system back): calling
+              // setState on a disposed State throws.
+              var lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+              void onTick() {
+                final elapsedMs =
+                    DateTime.now().difference(lastUiUpdate).inMilliseconds;
+                if (elapsedMs < _encryptProgressUiIntervalMs) return;
+                lastUiUpdate = DateTime.now();
                 if (ctx.mounted) setDialogState(() {});
               }
-              if (ctx.mounted) Navigator.pop(ctx);
+
+              if (encryptContent && contentItems.isNotEmpty) {
+                // Phase 1: `run()` returns when every queue drained, the vault
+                // got locked, or the user cancelled.  Each item is claimed by
+                // exactly one queue, so no file is ever encrypted twice
+                // (ISSUE-030).
+                stats = await batch.run(
+                  items: contentItems,
+                  isCancelled: () => cancelled,
+                  onProgress: (live) {
+                    stats = live;
+                    onTick();
+                  },
+                );
+              }
+              if (encryptFilenames && !cancelled) {
+                // Phase 2: re-read the rows — the files encrypted above are
+                // ciphertext now and still carry their old names.
+                final pending = FilenameEncryptionService.pendingItems(
+                  await repo.listEncrypted(),
+                );
+                renameTotal = pending.length;
+                phase = 1;
+                if (ctx.mounted) setDialogState(() {});
+                renameResult = await filenames.run(
+                  items: pending,
+                  isCancelled: () => cancelled,
+                  onProgress: (live) {
+                    renameStats = live;
+                    onTick();
+                  },
+                );
+              }
+              if (ctx.mounted) Navigator.pop(ctx, renameResult);
               await PlaybackDisplayService.instance
                   .releaseScreenOn(_encryptScreenHolder);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text([
-                      failed > 0
-                          ? context.l10n.encryptResultPartial(completed, failed)
-                          : context.l10n.encryptResultSuccess(completed),
-                      if (missing > 0)
-                        context.l10n.encryptMissingFiles(missing),
-                      if (undecryptable > 0)
-                        context.l10n.encryptSkippedNoKey(undecryptable),
-                    ].join('\n')),
-                  ),
-                );
+                final lines = <String>[
+                  if (encryptContent)
+                    stats.failed > 0
+                        ? context.l10n
+                            .encryptResultPartial(stats.encrypted, stats.failed)
+                        : context.l10n
+                            .encryptResultSuccess(stats.encrypted),
+                  if (encryptContent && stats.missing > 0)
+                    context.l10n.encryptMissingFiles(stats.missing),
+                  if (encryptContent && stats.skippedNoKey > 0)
+                    context.l10n.encryptSkippedNoKey(stats.skippedNoKey),
+                  if (encryptFilenames)
+                    context.l10n.filenameEncryptResult(renameStats.renamed),
+                  if (encryptFilenames && renameStats.failed > 0)
+                    context.l10n
+                        .filenameEncryptFailedCount(renameStats.failed),
+                ];
+                if (lines.isNotEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(lines.join('\n'))),
+                  );
+                }
               }
             }
 
@@ -684,40 +856,62 @@ class SettingsScreen extends ConsumerWidget {
               WidgetsBinding.instance.addPostFrameCallback((_) => run());
             }
 
-            final progress = items.isEmpty
-                ? 0.0
-                : completed / items.length;
-            final kekNow = keyManager.getKey();
-            final lockedOut = kekNow == null && completed < items.length;
+            final contentHandled = stats.handled;
+            final renameHandled = renameStats.handled;
+            final total = contentTotal + renameTotal;
+            final handled = contentHandled + renameHandled;
+            final progress =
+                total == 0 ? 0.0 : (handled / total).clamp(0.0, 1.0);
+            // `keyLost` is set by whichever queue found the KEK gone — i.e. the
+            // vault was locked while the content pass was running.
+            final lockedOut =
+                stats.keyLost && stats.unhandledOf(contentTotal) > 0;
+            final stageTotal = phase == 1 ? renameTotal : contentTotal;
+            final stageHandled = phase == 1 ? renameHandled : contentHandled;
             String status;
             if (lockedOut) {
               status = context.l10n.vaultLockedOperationStopped;
-            } else if (completed >= items.length) {
+            } else if (stageTotal == 0 || stageHandled >= stageTotal) {
               status = context.l10n.done;
+            } else if (phase == 1) {
+              status = context.l10n.renamingProgress(
+                stageHandled + 1,
+                stageTotal,
+              );
             } else {
-              status = context.l10n
-                  .encryptingProgress(completed + 1, items.length);
+              status = context.l10n.encryptingProgress(
+                stageHandled + 1,
+                stageTotal,
+              );
             }
 
             return AlertDialog(
-              title: Text(context.l10n.encryptingTitle),
+              title: Text(
+                phase == 1
+                    ? context.l10n.encryptOptionFilenames
+                    : context.l10n.encryptingTitle,
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   LinearProgressIndicator(value: progress),
                   const SizedBox(height: 16),
                   Text(status),
-                  if (failed > 0)
+                  if (stats.failed > 0)
                     Text(
-                      context.l10n.encryptFailedCount(failed),
-                      style: TextStyle(
-                          color: Theme.of(ctx).colorScheme.error),
+                      context.l10n.encryptFailedCount(stats.failed),
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
                     ),
-                  if (undecryptable > 0)
+                  if (stats.skippedNoKey > 0)
                     Text(
-                      context.l10n.encryptSkippedNoKey(undecryptable),
-                      style: TextStyle(
-                          color: Theme.of(ctx).colorScheme.error),
+                      context.l10n.encryptSkippedNoKey(stats.skippedNoKey),
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                    ),
+                  if (renameStats.failed > 0)
+                    Text(
+                      context.l10n
+                          .filenameEncryptFailedCount(renameStats.failed),
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
                     ),
                 ],
               ),
@@ -1370,3 +1564,124 @@ class _SectionHeader extends StatelessWidget {
     );
   }
 }
+
+/// Confirmation dialog for "Encrypt existing files".
+///
+/// The user picks the content pass, the filename pass, or both (ADR-042):
+///  * content pass — encrypts the bytes of rows that are still plaintext;
+///  * filename pass — renames ciphertext files to random, extension-less names.
+///
+/// Defaults are deliberately conservative: an available content pass is ticked,
+/// the irreversible rename only when no content work is left (the "already
+/// encrypted, I only want the names done" case).  OK stays disabled while
+/// nothing is ticked, so a pass can never start with no work (validation).
+class _EncryptOptionsDialog extends StatefulWidget {
+  const _EncryptOptionsDialog({
+    required this.plaintextCount,
+    required this.renameCount,
+  });
+
+  final int plaintextCount;
+  final int renameCount;
+
+  @override
+  State<_EncryptOptionsDialog> createState() => _EncryptOptionsDialogState();
+}
+
+class _EncryptOptionsDialogState extends State<_EncryptOptionsDialog> {
+  late bool _content = widget.plaintextCount > 0;
+  late bool _filenames = widget.plaintextCount == 0 && widget.renameCount > 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final canPickContent = widget.plaintextCount > 0;
+    final canPickFilenames = widget.renameCount > 0;
+    final picked =
+        (_content && canPickContent) || (_filenames && canPickFilenames);
+
+    return AlertDialog(
+      title: Text(l10n.encryptExistingFiles),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              canPickContent
+                  ? l10n.encryptConfirmationBody(widget.plaintextCount)
+                  : l10n.encryptFilenamesConfirmationBody(widget.renameCount),
+            ),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              value: _content && canPickContent,
+              onChanged: canPickContent
+                  ? (value) => setState(() => _content = value ?? false)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              title: Text(l10n.encryptOptionContent),
+              subtitle: Text(
+                l10n.encryptOptionContentSubtitle(widget.plaintextCount),
+              ),
+            ),
+            CheckboxListTile(
+              value: _filenames && canPickFilenames,
+              onChanged: canPickFilenames
+                  ? (value) => setState(() => _filenames = value ?? false)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              title: Text(l10n.encryptOptionFilenames),
+              subtitle: Text(
+                l10n.encryptOptionFilenamesSubtitle(widget.renameCount),
+              ),
+            ),
+            if (!picked)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  l10n.encryptOptionsPickOne,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          onPressed: picked
+              ? () => Navigator.pop(
+                    context,
+                    _EncryptChoice(
+                      encryptContent: _content && canPickContent,
+                      renameFilenames: _filenames && canPickFilenames,
+                    ),
+                  )
+              : null,
+          child: Text(l10n.encryptAction),
+        ),
+      ],
+    );
+  }
+}
+
+/// What the user ticked in [_EncryptOptionsDialog].
+class _EncryptChoice {
+  const _EncryptChoice({
+    required this.encryptContent,
+    required this.renameFilenames,
+  });
+
+  final bool encryptContent;
+  final bool renameFilenames;
+}
+

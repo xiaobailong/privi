@@ -72,6 +72,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   String? _loadingItemId;
   bool? _nativeInitialized;
   bool _reconcileScheduled = false;
+
   /// De-duplication keys for the diagnostic lines written from build(): a
   /// per-item state change is readable in the log, a per-frame one is not.
   String? _loggedItemId;
@@ -103,7 +104,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     AppLogger.i(
       'PlayerScreen',
       'initState: items=${widget.items.length}, '
-      'startItemId=${widget.startItemId ?? '-'}, shuffle=${widget.shuffle}',
+          'startItemId=${widget.startItemId ?? '-'}, shuffle=${widget.shuffle}',
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(playerControllerProvider.notifier).start(
@@ -120,7 +121,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     AppLogger.i(
       'PlayerScreen',
       'dispose: item=${_nVideoItemId ?? '-'}, '
-      'hasController=${_nVideo != null}, request=$_videoRequest',
+          'hasController=${_nVideo != null}, request=$_videoRequest',
     );
     _disposeNativeVideo();
     _cleanupDecryptedPaths();
@@ -219,7 +220,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     AppLogger.w(
       'PlayerScreen',
       'Spurious end right after start (${pos.inMilliseconds}ms): recreating '
-      'the player and continuing from there, item=${item.id}',
+          'the player and continuing from there, item=${item.id}',
     );
     _replayItemId = item.id;
     _replayStartMs = pos.inMilliseconds;
@@ -301,7 +302,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'Disposing native player: item=${previousItemId ?? '-'}, '
-        'textureId=${c.textureId}, request=$_videoRequest',
+            'textureId=${c.textureId}, request=$_videoRequest',
       );
       final pos = c.value.position.inMilliseconds;
       final dur = c.value.duration.inMilliseconds;
@@ -315,7 +316,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         AppLogger.d(
           'PlayerScreen',
           'Saved resume position: item=$previousItemId, '
-          'pos=${pos}ms, dur=${dur}ms',
+              'pos=${pos}ms, dur=${dur}ms',
         );
       }
       c.removeListener(_onNativeVideoValueChanged);
@@ -343,10 +344,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     AppLogger.i(
       'PlayerScreen',
       'Native value changed: item=${_nVideoItemId ?? '-'}, '
-      'textureId=${video.textureId}, initialized=$initialized, '
-      'playing=${video.value.isPlaying}, error=${video.value.hasError}, '
-      'size=${video.value.size.width.toInt()}x'
-      '${video.value.size.height.toInt()}',
+          'textureId=${video.textureId}, initialized=$initialized, '
+          'playing=${video.value.isPlaying}, error=${video.value.hasError}, '
+          'size=${video.value.size.width.toInt()}x'
+          '${video.value.size.height.toInt()}',
     );
     setState(() {});
   }
@@ -366,20 +367,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       final status = await controller.fetchStatus();
       if (!mounted || !identical(controller, _nVideo)) return;
       if (status == null) {
-        AppLogger.w('PlayerScreen',
+        AppLogger.w(
+            'PlayerScreen',
             'Status fallback for ${item.id}: getStatus returned null '
-            '(textureId=${controller.textureId})');
+                '(textureId=${controller.textureId})');
         return;
       }
       if (!status.isReady) {
-        AppLogger.w('PlayerScreen',
+        AppLogger.w(
+            'PlayerScreen',
             'Status fallback for ${item.id}: native player still not ready '
-            '(textureId=${controller.textureId}, position=${status.position})');
+                '(textureId=${controller.textureId}, position=${status.position})');
         return;
       }
-      AppLogger.w('PlayerScreen',
+      AppLogger.w(
+          'PlayerScreen',
           'Recovered video state from native status: ${item.id} '
-          '(initialized event was missed)');
+              '(initialized event was missed)');
       controller.applyStatus(status);
     });
   }
@@ -405,7 +409,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         AppLogger.w(
           'PlayerScreen',
           'Video did not initialize within 15s '
-          '(controller=${showing ? 'published' : 'missing'}): $id',
+              '(controller=${showing ? 'published' : 'missing'}): $id',
         );
         unawaited(_retryLoad(item));
       },
@@ -438,7 +442,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.w(
         'PlayerScreen',
         'VLC engine produced no frame within 15s, retrying with the '
-        'exoPlayer engine: ${item.id}',
+            'exoPlayer engine: ${item.id}',
       );
       await _disposeNativeVideo();
       if (!mounted) return;
@@ -485,9 +489,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         AppLogger.w(
           'PlayerScreen',
           'Self-heal: reconciling native video for ${ui.current?.id ?? '-'} '
-          '(loadedItem=${_nVideoItemId ?? '-'}, '
-          'hasController=${_nVideo != null}, '
-          'initialized=${_nVideo?.value.isInitialized})',
+              '(loadedItem=${_nVideoItemId ?? '-'}, '
+              'hasController=${_nVideo != null}, '
+              'initialized=${_nVideo?.value.isInitialized})',
         );
       }
       _syncNativeVideo(ui);
@@ -515,8 +519,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     AppLogger.d(
       'PlayerScreen',
       'loadVideo(${item.id}) playing=$playing force=$force, '
-      'loadedItem=${_nVideoItemId ?? '-'}, '
-      'hasController=${_nVideo != null}',
+          'loadedItem=${_nVideoItemId ?? '-'}, '
+          'hasController=${_nVideo != null}',
     );
     try {
       await _loadVideoInner(item, playing);
@@ -542,9 +546,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.d(
         'PlayerScreen',
         'Reusing loaded video for ${item.id} '
-        '(textureId=${currentVideo.textureId}, '
-        'initialized=${currentVideo.value.isInitialized}, '
-        'playing=${currentVideo.value.isPlaying}, want=$playing)',
+            '(textureId=${currentVideo.textureId}, '
+            'initialized=${currentVideo.value.isInitialized}, '
+            'playing=${currentVideo.value.isPlaying}, want=$playing)',
       );
       try {
         if (playing && !currentVideo.value.isPlaying) {
@@ -594,8 +598,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final playbackPath = await _resolveMediaPath(item);
     if (_isStaleLoad(request, item)) return;
     if (playbackPath == null) {
-      AppLogger.e('PlayerScreen',
-          'Encrypted video could not be decrypted: ${item.id}');
+      AppLogger.e(
+          'PlayerScreen', 'Encrypted video could not be decrypted: ${item.id}');
       setState(() {
         _videoError = 'Encrypted video could not be decrypted';
         _videoErrorItemId = item.id;
@@ -658,16 +662,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         AppLogger.i(
           'PlayerScreen',
           'Video completed callback: ${item.id} '
-          '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
-          'playing=${ui.playing}, '
-          'next=${pl?.peekNext()?.id ?? 'none'}',
+              '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
+              'playing=${ui.playing}, '
+              'next=${pl?.peekNext()?.id ?? 'none'}',
         );
         ref.read(playerControllerProvider.notifier).onItemCompleted();
       };
       // 起播竞态（原生 input 刚起来就报结束）不是真的播完：重建播放器继续，
       // 而不是把播放列表往后推一格（见 `ISSUE-023`）。
-      controller.onSpuriousCompletion = () =>
-          _onSpuriousCompletion(item, controller);
+      controller.onSpuriousCompletion =
+          () => _onSpuriousCompletion(item, controller);
       controller.onError = () {
         if (!mounted) return;
         AppLogger.e('PlayerScreen',
@@ -692,13 +696,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'Video loaded successfully: ${item.id}, '
-        'textureId=${controller.textureId}, '
-        'initialized=${controller.value.isInitialized} (request=$request)',
+            'textureId=${controller.textureId}, '
+            'initialized=${controller.value.isInitialized} (request=$request)',
       );
     } catch (error, stackTrace) {
       if (_isStaleLoad(request, item)) return;
-      AppLogger.e('PlayerScreen',
-          'Video load failed for ${item.id}: $error', stackTrace);
+      AppLogger.e('PlayerScreen', 'Video load failed for ${item.id}: $error',
+          stackTrace);
       setState(() {
         _videoError = error.toString();
         _videoErrorItemId = item.id;
@@ -726,7 +730,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'sync: loading ${item.id} (loaded=${_nVideoItemId ?? '-'}, '
-        'hasController=${video != null}, playing=${ui.playing})',
+            'hasController=${video != null}, playing=${ui.playing})',
       );
       unawaited(_loadVideo(item, ui.playing));
       return;
@@ -735,7 +739,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'sync: correcting play state of ${item.id} '
-        '(native=${video.value.isPlaying}, wanted=${ui.playing})',
+            '(native=${video.value.isPlaying}, wanted=${ui.playing})',
       );
       unawaited(_loadVideo(item, ui.playing));
     }
@@ -776,9 +780,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'Showing ${item?.id ?? '-'} '
-        '(${item?.isVideo == true ? 'video' : 'image'}) '
-        '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
-        'playing=${ui.playing}',
+            '(${item?.isVideo == true ? 'video' : 'image'}) '
+            '(${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}), '
+            'playing=${ui.playing}',
       );
     }
     final landscape = _isLandscape(context);
@@ -798,8 +802,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.d(
         'PlayerScreen',
         'build: $branchKey, chrome=$_chrome, '
-        'externalHandedOff=${ui.externalHandedOff}, '
-        'playlist=${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}',
+            'externalHandedOff=${ui.externalHandedOff}, '
+            'playlist=${pl?.positionDisplay ?? 0}/${pl?.length ?? 0}',
       );
     }
     _syncSystemUi(immersive);
@@ -942,21 +946,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Widget _buildImage(MediaItem item) {
-    final cachedPath = _decryptedPaths[item.id];
-    final file = File(cachedPath ?? item.privatePath);
-    if (!file.existsSync()) {
-      // Encrypted but not decrypted yet: keep trying instead of showing a
-      // permanent broken-image icon.
-      if (_isEncrypted(item) && !_decryptFailedIds.contains(item.id)) {
+    // Encrypted media must **never** fall back to `item.privatePath`: that file
+    // exists, so the old `existsSync()` check passed and `Image.file` decoded
+    // ciphertext → black frame + `Invalid image data` on every slide
+    // (ISSUE-035).  Decrypt first: spinner until the temp file is ready,
+    // broken-image only after a real decryption failure.
+    if (_isEncrypted(item)) {
+      final cachedPath = _decryptedPaths[item.id];
+      if (cachedPath == null || !File(cachedPath).existsSync()) {
+        if (_decryptFailedIds.contains(item.id)) {
+          return const Center(
+            child: Icon(Icons.broken_image, color: Colors.white38, size: 64),
+          );
+        }
+        // `_ensureDecrypted` rebuilds this screen once the plaintext exists.
         _ensureDecrypted(item);
         return const Center(
           child: CircularProgressIndicator(color: Colors.white54),
         );
       }
+      return _imageView(File(cachedPath));
+    }
+    final file = File(item.privatePath);
+    if (!file.existsSync()) {
       return const Center(
         child: Icon(Icons.broken_image, color: Colors.white38, size: 64),
       );
     }
+    return _imageView(file);
+  }
+
+  /// Plaintext image view: tap toggles the chrome, pinch zooms.
+  Widget _imageView(File file) {
     return GestureDetector(
       onTap: _toggleChrome,
       child: InteractiveViewer(
@@ -1036,11 +1057,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         AppLogger.w(
           'PlayerScreen',
           'Video view: spinner for ${item.id} '
-          '(hasController=${c != null}, loadedItem=${_nVideoItemId ?? '-'}, '
-          'initialized=${c?.value.isInitialized}, '
-          'nativeError=${c?.value.hasError}, '
-          'loadingItem=${_loadingItemId ?? '-'}, '
-          'watchdog=$isLoadWatchdogArmed)',
+              '(hasController=${c != null}, loadedItem=${_nVideoItemId ?? '-'}, '
+              'initialized=${c?.value.isInitialized}, '
+              'nativeError=${c?.value.hasError}, '
+              'loadingItem=${_loadingItemId ?? '-'}, '
+              'watchdog=$isLoadWatchdogArmed)',
         );
       }
       return GestureDetector(
@@ -1056,8 +1077,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       AppLogger.i(
         'PlayerScreen',
         'Video surface visible: ${item.id}, textureId=${c.textureId}, '
-        'size=${c.value.size.width.toInt()}x'
-        '${c.value.size.height.toInt()}, playing=${c.value.isPlaying}',
+            'size=${c.value.size.width.toInt()}x'
+            '${c.value.size.height.toInt()}, playing=${c.value.isPlaying}',
       );
     }
     return GestureDetector(

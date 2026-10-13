@@ -363,10 +363,11 @@ class LockController extends Notifier<VaultLockState> {
         state = state.copyWith(status: LockStatus.unlocked, clearError: true);
         return true;
       }
-      AppLogger.e('LockController',
+      AppLogger.e(
+          'LockController',
           'Biometric OK but no persisted KEK found — '
-          'user must unlock with pattern/pin first to derive the '
-          'encryption key before biometric unlock can load it.');
+              'user must unlock with pattern/pin first to derive the '
+              'encryption key before biometric unlock can load it.');
       if (!ref.mounted) return false;
       // Stay locked, but tell the user *why* — a bare `false` made the
       // fingerprint button look broken (no prompt result, no error).
@@ -507,6 +508,9 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
+    // A credential change re-derives the KEK and rotates every DEK to it, so the
+    // vault no longer runs on an imported key (ISSUE-036).
+    await keyManager.markDerivedKey();
     state = state.copyWith(lockKind: SecurityService.kindPattern);
   }
 
@@ -545,6 +549,9 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
+    // Credential change: DEKs are rotated onto the freshly derived KEK, so drop
+    // the imported-key flag (ISSUE-036).
+    await keyManager.markDerivedKey();
     state =
         state.copyWith(lockKind: SecurityService.kindPattern, clearError: true);
   }
@@ -582,6 +589,9 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
+    // Credential change: DEKs are rotated onto the freshly derived KEK, so drop
+    // the imported-key flag (ISSUE-036).
+    await keyManager.markDerivedKey();
     state = state.copyWith(
       pinLength: newPin.length,
       lockKind: SecurityService.kindPin,
@@ -613,9 +623,10 @@ class LockController extends Notifier<VaultLockState> {
             kek: oldKek,
           );
           if (dek == null) {
-            AppLogger.e('LockController',
+            AppLogger.e(
+                'LockController',
                 'DEK rotation ($caller): could not decrypt DEK for ${item.id} '
-                'with either old or new KEK — file is orphaned');
+                    'with either old or new KEK — file is orphaned');
             lostCount++;
             continue;
           }
@@ -634,8 +645,8 @@ class LockController extends Notifier<VaultLockState> {
             'DEK rotation ($caller): $okCount OK, $lostCount LOST');
       }
     } catch (e, stack) {
-      AppLogger.e('LockController',
-          'DEK rotation failed ($caller): $e\n$stack');
+      AppLogger.e(
+          'LockController', 'DEK rotation failed ($caller): $e\n$stack');
     }
   }
 
@@ -656,6 +667,22 @@ class LockController extends Notifier<VaultLockState> {
     String secret,
   ) async {
     final gen = ++_kekGen;
+    final keyManager = ref.read(encryptionKeyManagerProvider);
+    // An imported key package wins over this install's pattern/PIN: the stored
+    // DEKs were wrapped with the imported KEK, so re-deriving from the current
+    // secret would silently make every encrypted file unreadable (ISSUE-036).
+    // Changing the pattern/PIN still works — that path rotates all DEKs and then
+    // calls `markDerivedKey()`.
+    if (await keyManager.isImportedKey()) {
+      if (gen != _kekGen) return;
+      if (await keyManager.loadPersistedKey()) {
+        AppLogger.i('LockController',
+            'unlock: using the imported vault key (key package)');
+        return;
+      }
+      AppLogger.w('LockController',
+          'imported key flag set but no persisted KEK — deriving from secret');
+    }
     final kek = await security.deriveEncryptionKey(secret);
     if (gen != _kekGen) return;
     if (kek != null && ref.mounted) {
@@ -663,9 +690,10 @@ class LockController extends Notifier<VaultLockState> {
     } else if (kek == null) {
       // PBKDF2 failed (secure-storage read error): nothing is persisted, so
       // biometric unlock cannot load a KEK later (VaultLockErrorCode.kekUnavailable).
-      AppLogger.e('LockController',
+      AppLogger.e(
+          'LockController',
           'KEK derivation returned null — encrypted media stays '
-          'inaccessible and biometric unlock has no persisted KEK to load.');
+              'inaccessible and biometric unlock has no persisted KEK to load.');
     }
   }
 

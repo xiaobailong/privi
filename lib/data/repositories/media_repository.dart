@@ -105,6 +105,10 @@ class MediaRepository {
   Future<void> updateEncryptedDek(String id, String? encryptedDek) =>
       _db.updateMediaEncryptedDek(id, encryptedDek);
 
+  /// Points [id] at its renamed ciphertext file (filename encryption, ADR-042).
+  Future<void> updatePrivatePath(String id, String privatePath) =>
+      _db.updateMediaPrivatePath(id, privatePath);
+
   /// Playback history: one bump per play. Random playback weights its order by
   /// the counter, so the items that already had their turn come up less often.
   Future<void> recordPlay(String id) =>

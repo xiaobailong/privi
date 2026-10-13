@@ -28,6 +28,20 @@ import java.util.concurrent.TimeUnit
  */
 class MainActivity : FlutterFragmentActivity() {
     private val ioExecutor = Executors.newFixedThreadPool(3)
+
+    /**
+     * Dedicated pool for file crypto.
+     *
+     * The shared [ioExecutor] has only 3 threads (metadata probes / libVLC
+     * parse), so batch encryption could never run more than 3 files at a time
+     * no matter how many queues the Dart side started (BatchEncryptionService).
+     * Bounded to the core count so peak memory stays ~2 MiB per in-flight file
+     * — per-chunk GCM tags are what keep it independent of file size
+     * (ISSUE-032 / ADR-038).
+     */
+    private val cryptoExecutor = Executors.newFixedThreadPool(
+        Runtime.getRuntime().availableProcessors().coerceIn(4, 8),
+    )
     private val mainHandler = Handler(Looper.getMainLooper())
     private var externalPlayer: ExternalPlayerHandler? = null
     private val videoPlayers = mutableMapOf<Long, PlayerHandler>()
@@ -39,6 +53,27 @@ class MainActivity : FlutterFragmentActivity() {
                 val value = block()
                 mainHandler.post { result.success(value) }
             } catch (e: Exception) {
+                mainHandler.post { result.error("io_error", e.message, null) }
+            }
+        }
+    }
+
+    /**
+     * Like [runIo] but on [cryptoExecutor], so many encrypted files can be in
+     * flight at once (batch encryption) without starving metadata work.
+     *
+     * Catches [Throwable], not just `Exception`: an unreported failure would
+     * leave the Dart future pending forever, and one hung queue never lets the
+     * pass finish.  CryptoHandler already turns `OutOfMemoryError` into an
+     * `ok=false` map (ISSUE-032) — this is only the last resort.
+     */
+    private fun <T> runCrypto(result: MethodChannel.Result, block: () -> T) {
+        cryptoExecutor.execute {
+            try {
+                val value = block()
+                mainHandler.post { result.success(value) }
+            } catch (e: Throwable) {
+                Log.w("PriviMain", "crypto call failed: ${e.message}", e)
                 mainHandler.post { result.error("io_error", e.message, null) }
             }
         }
@@ -484,7 +519,7 @@ class MainActivity : FlutterFragmentActivity() {
                         if (filePath.isNullOrEmpty() || dek == null || nonce == null) {
                             result.success(mapOf("ok" to false, "error" to "bad_args"))
                         } else {
-                            runIo(result) { crypto.encryptFile(filePath, dek, nonce) }
+                            runCrypto(result) { crypto.encryptFile(filePath, dek, nonce) }
                         }
                     }
                     "decryptFile" -> {
@@ -494,7 +529,7 @@ class MainActivity : FlutterFragmentActivity() {
                         if (filePath.isNullOrEmpty() || destPath.isNullOrEmpty() || dek == null) {
                             result.success(mapOf("ok" to false, "error" to "bad_args"))
                         } else {
-                            runIo(result) { crypto.decryptFile(filePath, destPath, dek) }
+                            runCrypto(result) { crypto.decryptFile(filePath, destPath, dek) }
                         }
                     }
                     "decryptFileToBytes" -> {
@@ -503,7 +538,7 @@ class MainActivity : FlutterFragmentActivity() {
                         if (filePath.isNullOrEmpty() || dek == null) {
                             result.success(mapOf("ok" to false, "error" to "bad_args"))
                         } else {
-                            runIo(result) { crypto.decryptFileToBytes(filePath, dek) }
+                            runCrypto(result) { crypto.decryptFileToBytes(filePath, dek) }
                         }
                     }
                     else -> result.notImplemented()
@@ -527,6 +562,13 @@ class MainActivity : FlutterFragmentActivity() {
         ioExecutor.shutdown()
         try {
             ioExecutor.awaitTermination(1, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+        }
+        // Same 1s cap as ioExecutor: in-flight encryptions finish, onDestroy
+        // never ANRs on them.
+        cryptoExecutor.shutdown()
+        try {
+            cryptoExecutor.awaitTermination(1, TimeUnit.SECONDS)
         } catch (_: InterruptedException) {
         }
         VlcPlayerHandler.releaseLibVlc()

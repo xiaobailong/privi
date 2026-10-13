@@ -52,6 +52,38 @@ class CryptoHandler {
         private const val V2_CHUNK_SIZE = 1024 * 1024 // 1 MiB
 
         /**
+         * Temp-file prefix.  The temp name is **deliberately unrelated to the
+         * media name**: the old `"$filePath.enc_tmp-<uuid>"` form appended 45
+         * bytes to an already long Chinese/Japanese name and blew past the
+         * 255-byte per-name limit of Linux filesystems (`ENAMETOOLONG`,
+         * ISSUE-034).  Cleanup therefore matches this prefix, never the media
+         * name.
+         */
+        private const val TEMP_PREFIX = ".enc_tmp-"
+
+        /**
+         * A temp file older than this cannot belong to a running encryption, so
+         * [deleteStaleTemps] may delete it.  Deleting a *live* temp file of a
+         * concurrent encryption is what produced 0-byte media before
+         * (ISSUE-030).
+         */
+        private const val STALE_TEMP_AGE_MS = 60 * 60 * 1000L
+
+        /**
+         * Linux filesystems cap a single file name at 255 **bytes** (UTF-8), not
+         * characters.  Decides whether the `<name>.enc_bak` slot is usable at
+         * all (`ISSUE-034`).
+         */
+        private const val MAX_FILE_NAME_BYTES = 255
+
+        /**
+         * Directories already swept for stale temps in this process — a vault
+         * folder can hold thousands of media files, and re-listing it for every
+         * single encryption would make a batch pass quadratic.
+         */
+        private val sweptTempDirs = ConcurrentHashMap.newKeySet<String>()
+
+        /**
          * Per-path locks: concurrent encryptions of the same file used to share
          * a single `.enc_tmp` and destroy each other's output, leaving 0-byte
          * media behind (ISSUE-030).
@@ -62,9 +94,12 @@ class CryptoHandler {
     /**
      * Encrypt file in-place: replaces [filePath] content with encrypted data.
      *
-     * Calls for the **same path** are serialized and the temp file name is
-     * unique: a fixed `.enc_tmp` was shared by parallel loops, which deleted
-     * each other's output and left 0-byte media behind (ISSUE-030).
+     * Calls for the **same path** are serialized, and the temp file gets a
+     * unique, **fixed-length** name inside the media's own directory: a fixed
+     * `.enc_tmp` was shared by parallel loops, which deleted each other's output
+     * and left 0-byte media behind (ISSUE-030), while *appending* the suffix to
+     * the media name breached the 255-byte file-name limit for long names
+     * (ISSUE-034).
      */
     fun encryptFile(
         filePath: String,
@@ -72,6 +107,10 @@ class CryptoHandler {
         nonce: ByteArray,
     ): Map<String, Any?> = synchronized(lockFor(filePath)) {
         val inputFile = File(filePath)
+        // NOTE: the backup **must** keep the media name (+ 8 bytes), because
+        // startup repair maps `<name>.enc_bak` back to `<name>` — so a media
+        // name of 248+ bytes has no usable backup slot and encryption falls back
+        // to a single atomic overwrite (`useBackupSlot` below, ISSUE-034).
         val bakFile = File(filePath + ".enc_bak")
         deleteStaleTemps(inputFile)
         if (!inputFile.exists()) {
@@ -84,7 +123,13 @@ class CryptoHandler {
             }
         }
         val originalLength = inputFile.length()
-        val tmpFile = File("$filePath.enc_tmp-${UUID.randomUUID()}")
+        val tmpFile = tempFileFor(inputFile)
+        // A media name of 248+ bytes leaves no room for the `<name>.enc_bak` slot,
+        // so the swap below overwrites the original in one atomic `rename(2)`
+        // instead (the DEK is already persisted by the caller, so a crash leaves
+        // either the plaintext original or a complete ciphertext).
+        val useBackupSlot =
+            bakFile.name.toByteArray(Charsets.UTF_8).size <= MAX_FILE_NAME_BYTES
 
         try {
             val key = SecretKeySpec(dek, "AES")
@@ -123,12 +168,22 @@ class CryptoHandler {
             // Atomic replace: backup original → rename temp → delete backup.
             // Never delete-then-rename: a crash between the two steps permanently
             // loses the file (PIT-034).  On the same filesystem rename is atomic.
-            if (!inputFile.renameTo(bakFile)) {
+            // Without a backup slot (very long name) the second rename replaces
+            // the original directly.
+            if (useBackupSlot && !inputFile.renameTo(bakFile)) {
                 tmpFile.delete()
                 return@synchronized mapOf("ok" to false, "error" to "Failed to back up original file")
             }
             if (!tmpFile.renameTo(inputFile)) {
                 tmpFile.delete()
+                if (!useBackupSlot) {
+                    // Nothing was moved yet, so the original is still intact.
+                    Log.e(TAG, "Encrypt rename failed, original kept at ${inputFile.path}")
+                    return@synchronized mapOf(
+                        "ok" to false,
+                        "error" to "Failed to replace original file; it was left untouched",
+                    )
+                }
                 if (!bakFile.renameTo(inputFile)) {
                     // Keep the backup on disk: deleting it here would destroy
                     // the only remaining copy of the user's media.
@@ -148,6 +203,19 @@ class CryptoHandler {
             val minimumLength = V2_HEADER_SIZE.toLong() +
                 (originalLength / V2_CHUNK_SIZE + 1) * (GCM_TAG_LENGTH / 8).toLong()
             if (encryptedLength < minimumLength) {
+                if (!useBackupSlot) {
+                    // The original is already replaced and there is no backup to
+                    // restore from: deleting the short file would destroy the
+                    // only remaining copy.
+                    Log.e(
+                        TAG,
+                        "Encrypt produced $encryptedLength bytes for $originalLength input; keeping file (no backup slot)",
+                    )
+                    return@synchronized mapOf(
+                        "ok" to false,
+                        "error" to "Encryption produced a truncated file; the media was left in place",
+                    )
+                }
                 Log.e(
                     TAG,
                     "Encrypt produced $encryptedLength bytes for $originalLength input; restoring original",
@@ -194,11 +262,41 @@ class CryptoHandler {
     /** Serializes encryption of the same path inside this process. */
     private fun lockFor(path: String): Any = pathLocks.computeIfAbsent(path) { Any() }
 
-    /** Removes temp files left behind by an older build or a crash. */
+    /**
+     * Temp file for an in-place encryption.
+     *
+     * Same directory as the media (same filesystem ⇒ the final
+     * [File.renameTo] stays atomic, `PIT-034`) but with a name of its own, so a
+     * long media name can no longer make the temp path too long
+     * (`ENAMETOOLONG`, `ISSUE-034`).
+     */
+    private fun tempFileFor(inputFile: File): File =
+        File(inputFile.parentFile, "$TEMP_PREFIX${UUID.randomUUID()}")
+
+    /**
+     * Deletes leftover temp files in this media's directory that are old enough
+     * to be dead ([STALE_TEMP_AGE_MS]).
+     *
+     * The temp name no longer contains the media name (`ISSUE-034`), so the
+     * match is by [TEMP_PREFIX] — and it must **not** touch a temp file that a
+     * concurrent encryption is still writing (`ISSUE-030`), hence the age
+     * threshold.  Legacy `<media>.enc_tmp-*` leftovers do not match here; the
+     * startup repair in `maintenance_service` removes anything containing
+     * `.enc_tmp`.
+     *
+     * Runs at most **once per directory per process** (`sweptTempDirs`): the
+     * directory may hold thousands of media files, and sweeping it for every
+     * single file would make a batch pass quadratic.
+     */
     private fun deleteStaleTemps(inputFile: File) {
         val parent = inputFile.parentFile ?: return
-        val prefix = inputFile.name + ".enc_tmp"
-        parent.listFiles { file -> file.isFile && file.name.startsWith(prefix) }?.forEach {
+        if (!sweptTempDirs.add(parent.path)) return
+        val staleBefore = System.currentTimeMillis() - STALE_TEMP_AGE_MS
+        parent.listFiles { file ->
+            file.isFile &&
+                file.name.startsWith(TEMP_PREFIX) &&
+                file.lastModified() < staleBefore
+        }?.forEach {
             if (!it.delete()) Log.w(TAG, "Could not delete stale temp ${it.path}")
         }
     }

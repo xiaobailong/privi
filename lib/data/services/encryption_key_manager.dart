@@ -28,6 +28,15 @@ import '../../core/utils/app_logger.dart';
 class EncryptionKeyManager {
   static const _storageKey = 'privi_kek_v1';
 
+  /// Records where the persisted KEK came from: `derived` (PBKDF2 of this
+  /// install's pattern/PIN) or `imported` (a key package, see
+  /// `KeyBackupService`).  An imported KEK must not be replaced by a freshly
+  /// derived one — the stored DEKs were wrapped with the imported key
+  /// (ISSUE-036).
+  static const _sourceKey = 'privi_kek_source_v1';
+  static const String sourceDerived = 'derived';
+  static const String sourceImported = 'imported';
+
   /// Default backend (legacy installs persisted the KEK here).
   static const FlutterSecureStorage _defaultStorage = FlutterSecureStorage();
 
@@ -37,14 +46,17 @@ class EncryptionKeyManager {
   );
 
   EncryptionKeyManager({FlutterSecureStorage? storage})
-      : _storages = storage == null
-            ? const [_defaultStorage, _espStorage]
-            : [storage];
+      : _storages =
+            storage == null ? const [_defaultStorage, _espStorage] : [storage];
 
   final List<FlutterSecureStorage> _storages;
 
   Uint8List? _kek;
   String? _lockKind;
+
+  /// Mirror of [_sourceKey] so unlock paths do not hit secure storage on every
+  /// check; `null` until loaded (see [isImportedKey]).
+  bool? _importedCache;
 
   Uint8List? get key => _kek;
   Uint8List? getKey() => _kek;
@@ -67,12 +79,73 @@ class EncryptionKeyManager {
       }
     }
     if (persisted == 0) {
-      AppLogger.e('EncryptionKeyManager',
+      AppLogger.e(
+          'EncryptionKeyManager',
           'KEK could not be persisted to any backend — biometric unlock will '
-          'not be able to load it after a lock');
+              'not be able to load it after a lock');
     } else if (persisted < _storages.length) {
       AppLogger.w('EncryptionKeyManager',
           'KEK persisted to $persisted/${_storages.length} backends');
+    }
+  }
+
+  /// True when the persisted KEK came from an imported key package.
+  ///
+  /// Cached per process.  Unlock paths use this to decide whether the current
+  /// pattern/PIN may overwrite the stored KEK (ISSUE-036).
+  Future<bool> isImportedKey() async {
+    final cached = _importedCache;
+    if (cached != null) return cached;
+    var imported = false;
+    for (var i = 0; i < _storages.length; i++) {
+      try {
+        final value = await _storages[i].read(key: _sourceKey);
+        if (value == sourceImported) {
+          imported = true;
+          break;
+        }
+      } catch (e) {
+        AppLogger.w('EncryptionKeyManager', 'read KEK source (backend $i): $e');
+      }
+    }
+    _importedCache = imported;
+    return imported;
+  }
+
+  /// Adopts [kek] from an imported key package: it becomes the vault KEK (memory
+  /// + secure storage) and unlock paths stop replacing it with a derived key.
+  Future<void> setImportedKey(Uint8List kek) async {
+    await setKey(kek);
+    _importedCache = true;
+    await _writeSource(sourceImported);
+  }
+
+  /// Marks the KEK as *derived* again — call **after** a credential change has
+  /// rotated every DEK to a freshly derived KEK (`changePattern` / `changePin` /
+  /// `migratePinToPattern`), otherwise the next unlock would load the stale
+  /// imported key while the DEKs were re-wrapped with the new one.
+  Future<void> markDerivedKey() async {
+    _importedCache = false;
+    await _writeSource(sourceDerived);
+  }
+
+  /// Loads the persisted KEK into memory **without** re-persisting it and
+  /// without touching the source flag.
+  Future<bool> loadPersistedKey() async {
+    final persisted = await retrievePersistedKek();
+    if (persisted == null) return false;
+    _kek = persisted;
+    return true;
+  }
+
+  Future<void> _writeSource(String source) async {
+    for (var i = 0; i < _storages.length; i++) {
+      try {
+        await _storages[i].write(key: _sourceKey, value: source);
+      } catch (e) {
+        AppLogger.w(
+            'EncryptionKeyManager', 'write KEK source (backend $i): $e');
+      }
     }
   }
 
@@ -81,9 +154,11 @@ class EncryptionKeyManager {
   Future<void> clear() async {
     _kek = null;
     _lockKind = null;
+    _importedCache = null;
     for (var i = 0; i < _storages.length; i++) {
       try {
         await _storages[i].delete(key: _storageKey);
+        await _storages[i].delete(key: _sourceKey);
       } catch (e, stack) {
         AppLogger.e('EncryptionKeyManager',
             'Failed to delete persisted KEK (backend $i): $e\n$stack');

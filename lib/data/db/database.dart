@@ -438,6 +438,16 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Repoints a row at its renamed file (filename encryption, ADR-042).
+  ///
+  /// Only the name changes — the bytes stay the same — so every other column
+  /// (mime type, original name, dates) stays valid.
+  Future<void> updateMediaPrivatePath(String id, String privatePath) {
+    return (update(mediaItems)..where((t) => t.id.equals(id))).write(
+      MediaItemsCompanion(privatePath: Value(privatePath)),
+    );
+  }
+
   Future<List<MediaItemRow>> listActiveMediaRows() {
     return (select(mediaItems)..where((t) => t.deletedAt.isNull())).get();
   }

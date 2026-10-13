@@ -1121,3 +1121,242 @@
   逐一核对，确认都落在对应函数作用域内（"改完必须回读"的又一次实践，见 `PIT-028`）
 - 相关条目: `ISSUE-030`（并发损坏，另一类）、`PIT-044`、`PIT-058`、`ADR-038`、`ADR-033`
 - 首次记录: 2026-10-13（真机 crash 日志定位）
+
+## ISSUE-033 「加密已有文件」几千个文件太慢：单文件串行 + 原生 crypto 只能 3 线程并发
+- 状态: 已修复（Dart 侧拆成 N 条队列 + 原生专用 crypto 线程池；吞吐待真机复核）
+- 症状 / 现场: 保险库里有 6 000+ 个明文文件时，点「设置 → 加密已有文件」，进度条一格一格走，
+  整个流程要几十分钟量级；日志里只有逐项的 `Encrypted with pre-saved DEK: …`，没有任何汇总行。
+- 复发判据（5 秒定论）: 设备日志搜 `BatchEncryptionService` —— 修复后一定有
+  `batch encrypt pass done: … queues=<N>`（N ≥ 6）。若只看到逐项 `Encrypted with pre-saved DEK:`
+  而没有 `pass done`（旧版逐项日志的 logger 是 `SettingsScreen`）⇒ 又跑回串行了。
+  静态等价判据: `git grep -n "BatchEncryptionService" -- lib/presentation/settings/settings_screen.dart` 必须有命中。
+- 根因（两条叠加，缺一条都慢）:
+  ① **Dart 层完全串行**：`SettingsScreen._showEncryptProgress` 的 `run()` 里
+     `for (final item in items)` 逐个 await —— 每项 = 读 32 字节文件头 + 纯 Dart 包 DEK +
+     一次 sqflite 写 + 一次 MethodChannel 原生加密；6 000 项 × 每项几十毫秒 = 分钟级。
+  ② **原生侧天花板只有 3 线程**：`MainActivity.runIo()` 把 crypto 调用丢到
+     `ioExecutor = Executors.newFixedThreadPool(3)`（原本是给 metadata / libVLC parse 用的），
+     所以 Dart 侧就算开 24 条队列，真正同时加密的文件也永远 ≤ 3。
+- 证据（改前）: `lib/presentation/settings/settings_screen.dart:597-656`（`for (final item in items)` 逐个 await）；
+  `android/app/src/main/kotlin/com/privi/app/MainActivity.kt:31`（`newFixedThreadPool(3)`），
+  以及三处 crypto 调用全部走 `runIo`（`MainActivity.kt:522 / 532 / 541`）。
+- 修法:
+  1. 新增 `lib/data/services/batch_encryption_service.dart`：N 条队列（默认 `2 × 核数`，clamp 到 `6…24`，
+     且不超过待处理项数）**共用一个游标**领任务；单项逻辑 `encryptOne()` 保持 `PIT-051` 的顺序
+     （包 DEK → 落库 → 加密文件；失败时仅当"确认仍是明文"才回滚 DEK）。
+  2. `settings_screen.dart` 的 `_showEncryptProgress` 改为调用该服务；进度回调**节流 100 ms** 才
+     `setDialogState`；`_batchEncryptInFlight` 与 `started` 两道重入守卫原样保留（ISSUE-030）。
+  3. `MainActivity.kt` 新增专用 `cryptoExecutor`（`availableProcessors().coerceIn(4, 8)`）+ `runCrypto()`
+     （catch `Throwable`，避免最坏情况下 Dart future 永久 pending），三个 crypto 方法改走它；
+     `onDestroy` 里按 `ioExecutor` 的方式 `shutdown()` + 1s `awaitTermination`。
+- 反例 / 易误判:
+  - 只加 Dart 并发、不动原生线程池 ⇒ 速度几乎不变（并发被 `ioExecutor(3)` 吃掉），见 `PIT-060`
+  - 以为"慢"是加密算法慢 —— 单块 1 MiB 的 GCM 是硬件加速的；瓶颈是**每项一次的 DB 写 +
+    跨平台往返**以及这些等待全被串起来
+  - 把队列数开到几十却不限原生池 ⇒ 只是把文件排进 3 线程队列，还多占内存（每项并发 ~2 MiB，`ISSUE-032`）
+- 相关文件: `lib/data/services/batch_encryption_service.dart`（新增）、`lib/application/providers.dart`、
+  `lib/presentation/settings/settings_screen.dart`、`android/app/src/main/kotlin/com/privi/app/MainActivity.kt`
+- 真机实测基线（2026-10-13 用户日志 `密册_log_2026-10-13.txt`，**修复前的串行版**）:
+  `21:04:00.958` → `21:05:14.494` 共 **73.5 秒**处理 **179 项**（178 成功 + 1 失败）
+  = **≈0.41 s/项** ⇒ 6 000 项约 **41 分钟**，"有点慢"的体感由此而来。
+  该日志里**没有** `BatchEncryptionService` / `pass done` 行、逐项 logger 是 `SettingsScreen`，
+  即这仍是串行版；并行版上线后应改为看 `pass done … queues=<N>` 并对比同一批文件的耗时。
+  同一条日志还暴露了**另一个独立缺陷**（长文件名 `ENAMETOOLONG`）→ 见 `ISSUE-034`
+- 相关条目: `ISSUE-030`（重入守卫）、`PIT-051` / `PIT-044`（DEK 顺序）、
+  `ISSUE-032` / `PIT-058` / `ADR-038`（内存上限）、`PIT-060`、`ADR-039`（为什么是 N 队列 + 原生池 4~8）、
+  `ISSUE-034`（另一个"只剩 1 个失败"的原因，与并发无关）
+- 首次记录: 2026-10-13
+
+## ISSUE-034 批量加密永远剩一个失败项：临时文件名拼在媒体名之后 ⇒ `ENAMETOOLONG`
+- 状态: 已修复（临时短名 + 超长名走"无备份槽原子覆盖"；待真机复核）
+- 症状 / 现场: 「加密已有文件」跑完后只有 **1 项失败**（178 成功 / 1 失败），每次重跑都还是它。
+  应用日志（旧串行版）:
+  ```
+  ERROR [SettingsScreen] batch encrypt 1e795213-…: Exception: Native encryption failed:
+  /storage/emulated/0/.privateheart_vault/图片/1e795213_[到圆形〇线的主要街道！ !! ] Paipan无毛，…第3部分.mp4_20231114_205900169.jpg.enc_tmp-6405650a-1c48-4ca3-ae13-b7e377518ee8:
+  open failed: ENAMETOOLONG (File name too long)
+  #0 MediaEncryptionService.encryptFileWithDek (media_encryption_service.dart:186)
+  #1 SettingsScreen._showEncryptProgress.…run (settings_screen.dart:636)
+  ```
+- 复发判据（5 秒定论）: 应用日志搜 `ENAMETOOLONG`（或 `File name too long`）；命中即本条。
+  等价静态判据: `git grep -n '"$filePath.enc_tmp' -- android/` 必须**无命中**；
+  `git grep -n "tempFileFor" -- android/` 应有命中（CryptoHandler）。
+- 根因: `CryptoHandler.encryptFile` 的临时文件写成 `File("$filePath.enc_tmp-${UUID.randomUUID()}")`
+  ⇒ 名字 = 媒体名 + 45 字节（`.enc_tmp-` 9 + UUID 36）。Linux（ext4/f2fs）单文件名上限 **255 字节**
+  （按 UTF-8 字节算，中文/日文每字 3 字节），媒体名一长就撞上上限 ⇒ `FileOutputStream` 打不开临时文件。
+- 证据（本机从日志原文实测）: 该媒体名 **227 字节**（109 个字符），加后缀后 **272 字节**；
+  `delta=45 bytes`、`255 < 272` ⇒ 必然 `ENAMETOOLONG`。同一目录其它名字短的媒体都成功。
+- 修法（`CryptoHandler.kt`）:
+  1. 新增 `TEMP_PREFIX = ".enc_tmp-"` 与 `tempFileFor(inputFile)`：临时文件放在**媒体所在目录**
+     （同文件系统 ⇒ 最终 `renameTo` 仍原子，`PIT-034`），名字固定为 `.enc_tmp-<uuid>`（45 字节，与媒体名无关）。
+  2. `deleteStaleTemps(inputFile)` 由"按 `媒体名 + .enc_tmp` 前缀匹配"改为
+     "**同目录 + `TEMP_PREFIX` + mtime 早于 1 小时**"：新命名匹配不到旧前缀，而**绝不能**删掉并发在写的临时文件
+     （那正是 `ISSUE-030` 的 0 字节事故）。旧命名残留交给启动自愈（`maintenance_service` 用
+     `name.contains('.enc_tmp')`，两种命名都能清）。
+  3. `.enc_bak` **保持**"媒体名 + `.enc_bak`"（启动自愈靠 `<name>.enc_bak` → `<name>` 反推，不能改名）——
+     副作用已写进 KDoc：媒体名 ≥ 248 字节时这一步会失败，但属**安全失败**（主文件未动，
+     返回 `Failed to back up original file`）。
+  4. **复发 2026-10-13（第二次真机日志 `密册_log_2026-10-13.txt`）**: 临时名修好后，同一根因的另一半暴露 ——
+     `<name>.enc_bak`（媒体名 + 8 字节）同样会超 255：日志里
+     `ERROR [BatchEncryptionService] batch encrypt acc1b3a3-… / a31b0a87-…: Exception: Native encryption failed:
+     Failed to back up original file` 共 **6 次**（同 2 个 id 各 3 次 ⇒ 每次重跑都失败，用户看到的"还是有失败项"）。
+     这两项**明文安全**（rename 失败发生在改名之前，主文件没被动过）。修法：`encryptFile` 增加
+     `useBackupSlot`（`bakFile.name` 的 UTF-8 字节数 ≤ `MAX_FILE_NAME_BYTES`=255）—— 超长时**不建备份槽**，
+     直接 `tmp.renameTo(原文件)` 原子覆盖（DEK 已由 Dart 侧先落库 ⇒ 崩溃后要么明文原件、要么完整密文）；
+     该路径下"长度校验失败"分支**绝不删主文件**（没有备份可恢复），改为报错并保留。
+     **反例**：把 `.enc_bak` 也改成短名 ⇒ 启动自愈无法把备份映射回原文件（救援能力丢失）；
+     正确做法是"只在超长名时退化成无备份槽"，而不是换命名规则。
+- 反例 / 易误判:
+  - 以为"1 个失败"是并发/权限/存储问题 —— 报错原文 `ENAMETOOLONG` 才是判据（与并发、磁盘、DEK 全无关）
+  - 以为把临时文件挪到 `cacheDir` 就行 —— 跨文件系统 `rename` 不再是原子替换，`PIT-034` 的保障会丢
+  - 顺手把"同目录所有 `.enc_tmp*`"都删掉当清理 —— 会删掉并发加密正在写的临时文件（`ISSUE-030` 复发）
+  - 顺手把 `.enc_bak` 也改成短名 —— 启动自愈将无法把备份映射回原文件（救援能力丢失）
+- 该文件的当前状态: 仍是**明文**、DEK 已被回滚（native 失败时主文件未被改动，Dart catch 里
+  `looksEncrypted == false` ⇒ `updateEncryptedDek(id, null)`）⇒ 修复后重跑一次「加密已有文件」即可成功加密它
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/CryptoHandler.kt`、
+  `lib/data/services/maintenance_service.dart`（启动自愈，命名兼容性）
+- 相关条目: `PIT-056`（临时名唯一性，本条是它的"长度"补充）、`PIT-034`（原子替换）、`PIT-061`、
+  `ISSUE-030`（并发误删临时文件）、`ISSUE-033`（同一条日志，另一类问题：慢）
+- 首次记录: 2026-10-13（用户真机日志 `密册_log_2026-10-13.txt`）
+
+
+## ISSUE-035 幻灯片（播放列表页）里的加密图片**一片黑**：`_buildImage` 回退到密文路径
+- 状态: 已修复（待真机复核）
+- 症状 / 现场: 「播放」入口的幻灯片（`slideshowSeconds` 自动切图）中，加密图片**全黑**，
+  每张都黑、连续黑；日志里每切一张就有一条 `ERROR [FlutterError] image resource service: Exception: Invalid image data`，
+  堆栈 `ImageDescriptor.encoded → instantiateImageCodecWithSize → FileImage._loadAsync`
+  （即 Flutter 真的去解码了那个文件）；`PlayerScreen` 日志显示 `Showing <id> (image)` 之后 **14ms** 就报错，
+  快到来不及解密（native 解密一张图要几十 ms）。
+- 复发判据（5 秒定论）: app 日志搜 `Invalid image data`，且伴随 `PlayerScreen … Showing <id> (image)`；
+  对照 `git grep -n "cachedPath ?? item.privatePath" -- lib/` 若**有命中**即命中本条
+  （修复后该表达式必须不存在）。
+- 根因: `player_screen.dart._buildImage()` 写的是
+  ```dart
+  final file = File(cachedPath ?? item.privatePath);   // ← 加密项没有缓存时回退到密文
+  if (!file.existsSync()) { ...转圈/裂图... }
+  return ... Image.file(file ...);
+  ```
+  加密项的 `privatePath` **存在**（就是密文文件），所以 `existsSync()` 恒为 true ⇒ 跳过"还没解密→转圈"分支
+  ⇒ 直接把密文喂给 `Image.file` ⇒ 解码失败 ⇒ 黑帧。而"启动解密"的 `_ensureDecrypted(item)` 恰恰**只在**
+  那个 `!existsSync()` 分支里调用 ⇒ 幻灯片里的加密图片**永远不会被解密**（视频路径用的是 `_resolveMediaPath()`，是对的）。
+- 证据: 用户真机日志 `密册_log_2026-10-13.txt`（22:26:16 / 22:26:55 / 22:27:05 三次切图，各一条
+  `Invalid image data`，均紧跟 `Showing <id> (image) (N/5440), playing=true`）。
+- 修法（`lib/presentation/player/player_screen.dart`）: 拆分两条路径 ——
+  加密项**只看解密缓存**，没缓存就 `_ensureDecrypted()` + 转圈（`_decryptFailedIds` 才显示裂图），
+  **绝不回退到 `privatePath`**；未加密项才用 `privatePath`（不存在 → 裂图）。两处共用一个新的
+  `_imageView(File)`（`GestureDetector` + `InteractiveViewer` + `Image.file`）。
+- 反例 / 易误判:
+  - 以为"是图片损坏 / 缩略图没生成 / 解码器不支持" —— `Invalid image data` + **秒级延迟**才是判据（解密都还没跑）
+  - 以为"`_buildImage` 已经有解密兜底" —— 兜底写在"文件不存在"分支里，对密文文件**永远不会执行**
+  - 只给 `Image.file` 加 `errorBuilder` 掩盖黑屏 —— 掩盖后用户看到的是裂图，图片依然打不开
+- 相关文件: `lib/presentation/player/player_screen.dart`（`_buildImage` / `_imageView`）
+- 相关条目: `ISSUE-029`①（PlayerScreen 接解密层，同一文件）、`ISSUE-024`⑥（ViewerScreen 的密文竞争）、
+  `PIT-037`（解密失败仍转圈）、`ADR-036`（每个展示入口都要有解密层）
+- 首次记录: 2026-10-13（用户真机日志）
+
+## ISSUE-036 重装后导入密钥无效：KEK 是"密码+本机 salt"派生的，解锁会把它覆盖掉
+- 状态: 已修复（新增「导出/导入加密密钥」+ 解锁路径支持"导入 KEK 优先"；待真机复核）
+- 症状 / 现场（用户需求）: 卸载重装后，即便拿回旧密钥文件，"基于导入的密钥加解密"也不成立 ——
+  本机 `encryption_salt` 已随卸载消失，`deriveEncryptionKey()` 会**新建随机 salt**，
+  于是解锁时派生出的是**另一个 KEK**；此时：
+  - 旧文件（DEK 用旧 KEK 包裹）解密必定失败（表现为打不开/黑屏/`Decryption failed`）；
+  - 新加密的文件用的是新 KEK，与旧文件**不通用**。
+- 复发判据（5 秒定论）: 日志搜 `LockController` 的
+  `unlock: using the imported vault key (key package)` —— 导入后解锁**必须**出现该行；
+  若看到 `KEK derivation` 覆盖了导入（无该行），或 `KeyBackupService` 的
+  `import refused: …` 出现，即为本条现场。
+  静态判据: `git grep -n "isImportedKey" -- lib/application/lock/lock_controller.dart` 必须有命中。
+- 根因（架构层面）: 本仓库 KEK **不是**随机生成后包裹存储，而是 `PBKDF2(密码|图案, encryption_salt)`
+  的确定性派生（`ADR-033` ①）。派生型密钥在"同一 salt + 同一密码"下可重现，但换了安装/生成新 salt 就失配。
+- 修法:
+  1. 新增 `lib/data/services/key_backup_service.dart`：密钥包 JSON
+     `{format:'privi-key-backup', version:1, createdAt, encryptionSalt, kek(b64)}`；
+     `buildPackage()`（要求已解锁）、`validatePackage()`（**只校验不写入**）、
+     `importPackage()`（写入 salt + KEK）、`matchesVault(kek)`（用库里的 `encryptedDek` 实测能否解出 DEK）。
+  2. `EncryptionKeyManager`：新增 `privi_kek_source_v1` 标志（`derived` / `imported`）+
+     `setImportedKey` / `markDerivedKey` / `isImportedKey` / `loadPersistedKey`；`clear()` 一并删标志。
+  3. `LockController._deriveAndStoreEncryptionKey()`：**导入标志为真时优先加载持久化 KEK，不再派生**
+     （否则解锁就把导入的 KEK 覆盖掉）；`changePattern` / `changePin` / `migratePinToPattern`
+     在"派生新 KEK + 旋转全部 DEK"成功后调 `markDerivedKey()` 结束导入态
+     （这两条路径自洽：KEK 变了，但 DEK 也全部重新包裹了）。
+  4. 设置 → 安全：新增「导出加密密钥」「导入加密密钥」，导出前/导入前各有明确警告；
+     导入**先校验再确认**，被拒绝的包不会留下任何半成品状态。
+- 安全约束（务必保留）:
+  - 密钥包是**明文 KEK**（等同全部文件的钥匙）⇒ UI 必须警告"离线/加密网盘保存"，不得分享；
+  - **本机已有不同 salt 时拒绝导入**（`saltConflict`），否则本机已加密文件会全部失效
+    （沿用 `SecurityService.adoptEncryptionSaltIfAbsent` 的规则，见 `ISSUE-029`③）；
+  - 导入前用 `matchesVault()` 实测（最多 8 条 `encryptedDek`），不匹配就拒绝
+    （避免"导入成功但全部打不开"）。
+- 反例 / 易误判:
+  - 以为"导出密钥 = 导出密码/图案" —— 密钥包里没有密码，导入后**可用任意新图案解锁**（这是它的价值）
+  - 以为"导入后要重设成原密码才能解密" —— 不需要；但也意味着**密钥文件泄露 = 保险库全开**
+  - 直接覆盖 salt 图省事 ⇒ 本机原有加密文件全部变孤儿
+- 相关文件: `lib/data/services/key_backup_service.dart`（新增）、`lib/data/services/encryption_key_manager.dart`、
+  `lib/application/lock/lock_controller.dart`、`lib/presentation/settings/settings_screen.dart`、
+  `lib/l10n/app_localizations.dart`
+- 相关条目: `ADR-033`（KEK/DEK 双层架构）、`ADR-041`（密钥包格式与"导入优先"的取舍）、
+  `ISSUE-029`③（备份里的 `encryptionSalt`）、`PIT-057` / `ADR-035`（安全存储后端策略）、
+  `PIT-036` / `ISSUE-025`（DEK 旋转）
+- 首次记录: 2026-10-13（用户需求 + 代码排查）
+
+## ISSUE-037 导出备份时日志报 `Bad state: Vault backup dialog requires an operation state.`
+- 状态: 未修复（待决；已定位到断言位置，未改行为）
+- 症状 / 现场: 备份导出/恢复过程中日志出现
+  ```
+  ERROR [FlutterError] widgets library: Bad state: Vault backup dialog requires an operation state.
+  #0  VaultBackupProgressDialog.build (vault_backup_progress_dialog.dart:65)
+  ```
+  用户界面未见异常（对话框本身没崩），只是日志被污染（`密册_log_2026-10-13.txt:6005`，22:15:56，
+  紧跟在指纹解锁 + 一次备份操作之后）。
+- 复发判据（5 秒定论）: 日志搜 `Vault backup dialog requires an operation state`；命中即本条。
+- 根因: `VaultBackupProgressDialog.build()` 第 63-66 行是**主动断言**：
+  ```dart
+  if (!state.dialogVisible) {
+    throw StateError('Vault backup dialog requires an operation state.');
+  }
+  ```
+  操作结束（`dialogVisible=false`）与对话框路由出栈之间有一帧窗口，此时路由仍会 rebuild ⇒ 命中断言。
+  属"调用点没有按 visible 控制是否 push/保留对话框"的生命周期问题，不是数据/加密问题。
+- 证据: `lib/presentation/settings/vault_backup_progress_dialog.dart:63-66`；
+  调用点见 `lib/presentation/settings/settings_screen.dart` 的备份入口（`vaultBackupControllerProvider`）。
+- 修法（**尚未实施**，实施时二选一，并真机复核）:
+  ① 调用点改为按 `dialogVisible` 决定是否展示（`if (!visible) return const SizedBox.shrink();`
+     或先 pop 再清状态），把"可见性"收在一个地方；
+  ② 或让对话框在不可见时返回空 widget **并同时**由 controller 触发 pop（避免留下空白对话框）。
+  不要只是把 `throw` 删掉 —— 会留下一个空白对话框。
+- 反例 / 易误判: 以为"备份失败/数据损坏" —— 该断言不影响备份结果；也**不要**当成加密链路问题排查。
+- 相关文件: `lib/presentation/settings/vault_backup_progress_dialog.dart`、
+  `lib/application/backup/vault_backup_controller.dart`、`lib/presentation/settings/settings_screen.dart`
+- 相关条目: `ISSUE-029`③（备份 manifest 带密钥材料）、`PIT-055`（一次性任务守卫）
+- 首次记录: 2026-10-13（用户真机日志，报告时未处理）
+
+## ISSUE-038 「加密已有文件」支持"只加密文件名"：弹框双选项 + 改名迁移（ADR-042 阶段 1 落地）
+- 状态: 已实现（待真机复核）
+- 需求 / 现场: 库里 5 400+ 个文件**内容已经加密**，只想补做"加密文件名"（避免被按扩展名扫描的程序认出）。
+  原实现只有内容加密一条路径，且 `unencrypted.isEmpty` 会直接早退（提示"所有文件都已加密"）⇒ **根本没有入口**做改名。
+- 判据（5 秒定论）: 设备日志搜 `FilenameEncryptionService` —— 改名跑过一定有
+  `filename encryption pass done: N renamed, … queues=K`；静态判据：
+  `git grep -n "pendingItems" -- lib/` 与 `git grep -n "updatePrivatePath" -- lib/` 都必须有命中。
+- 实现:
+  ① 确认弹框改为 `_EncryptOptionsDialog`：两个勾选项「加密文件内容」「加密文件名」，各自带数量副标题，
+     数量为 0 的项**禁用**；默认策略 = 有明文就勾内容；**全部已加密时不勾内容、勾文件名**（正是"补做"场景）。
+     **校验**：一项都没勾 ⇒ 「确定」禁用 + 红字 `请至少选择一项`，`_batchEncrypt` 里再兜底判断一次。
+  ② 执行顺序：阶段 1 内容加密（`BatchEncryptionService`，勾了才跑）→ 阶段 2 **重新读取** `listEncrypted()`
+     取"命名仍是原样"的项再改名 ⇒ 阶段 1 新加密的文件也会一起改名。
+  ③ 改名逻辑（新增 `FilenameEncryptionService`）：只处理 `encrypted_dek != null` 的项（明文项**拒绝改名**）；
+     新名 = 32 位随机 hex、**无扩展名**、同目录（原子 rename）；**先校验**（目标存在 + 字节数一致）再更新 DB；
+     DB 更新失败就把文件改回原名；已是随机名 → 跳过（幂等，可重跑）。
+  ④ 进度对话框：标题与状态按阶段切换（`正在加密文件名，第 N 项（共 M 项）…`），结束的 SnackBar 同时给出
+     内容加密与改名结果；完成后 `ref.invalidate(albumsProvider / vaultSizeBytesProvider)` 刷新缓存路径。
+- 反例 / 易误判:
+  - **给明文项改名** ⇒ 用户在其它入口看到"没有扩展名的怪文件"、失去"这是照片/视频"的线索；
+    所以前置条件是"有 DEK"，且判断放在**服务内部**（不依赖 UI 勾选顺序）
+  - 改名成功但 DB 没更新 ⇒ 启动维护按 DB 路径比对会把它当孤儿（`ISSUE-030` 的自愈逻辑）
+  - 以为"改名后查看/播放要重新解密" ⇒ 不需要：显示与播放本来就走"解密到临时文件"
+  - 以为"还原到相册会变成随机名" ⇒ 不会：还原用 `original_name`
+- 相关文件: `lib/data/services/filename_encryption_service.dart`（新增）、`lib/presentation/settings/settings_screen.dart`、
+  `lib/data/db/database.dart`、`lib/data/repositories/media_repository.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `ADR-042`（方案；阶段 1 已落地）、`ISSUE-033`（并行队列模式复用）、
+  `ISSUE-034`（长名上限，随机名顺带根除）、`PIT-063`（改名三步一致性）
+- 首次记录: 2026-10-13（用户需求）
+

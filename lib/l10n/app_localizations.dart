@@ -1,6 +1,3 @@
-
-
-
 /// Chinese strings for 密册.
 class AppLocalizations {
   const AppLocalizations._();
@@ -682,6 +679,38 @@ class AppLocalizations {
 
   String get encryptingTitle => '正在加密…';
 
+  // ── "Encrypt existing files" options (content + file name) ──
+
+  /// Checkbox 1 of the confirmation dialog.
+  String get encryptOptionContent => '加密文件内容';
+
+  String encryptOptionContentSubtitle(int count) =>
+      count > 0 ? '还有 $count 个文件的内容是明文' : '所有文件的内容都已加密';
+
+  /// Checkbox 2: renames ciphertext files to random, extension-less names.
+  String get encryptOptionFilenames => '加密文件名';
+
+  String encryptOptionFilenamesSubtitle(int count) => count > 0
+      ? '有 $count 个已加密文件仍保留原文件名（含扩展名）'
+      : '所有已加密文件的文件名都已加密';
+
+  String get encryptOptionsPickOne => '请至少选择一项';
+
+  /// Body shown when the only selected work is the filename pass.
+  String encryptFilenamesConfirmationBody(int count) =>
+      '将把 $count 个已加密文件的文件名改成不含扩展名的随机名，避免被"按扩展名扫描"的程序认出来。\n'
+      '原文件名仍保存在应用内：查看、播放、还原到相册时都不变。\n\n继续？';
+
+  String renamingProgress(int current, int total) =>
+      '正在加密文件名，第 $current 项（共 $total 项）…';
+
+  String filenameEncryptResult(int count) => '已加密 $count 个文件名。';
+
+  String filenameEncryptFailedCount(int count) => '$count 个文件名加密失败';
+
+  String filenameEncryptSkippedCount(int count) =>
+      '$count 个文件名已是加密文件名（跳过）';
+
   String encryptingProgress(int current, int total) {
     return '正在加密，第 $current 项（共 $total 项）…';
   }
@@ -708,6 +737,29 @@ class AppLocalizations {
   String encryptResultPartial(int completed, int failed) {
     return '已加密 $completed 个文件，$failed 个失败。';
   }
+
+  // ── Vault key backup (export / import) ──
+
+  String get exportVaultKey => '导出加密密钥';
+  String get exportVaultKeySubtitle => '保存成文件，可放网盘或离线介质防丢';
+  String get importVaultKey => '导入加密密钥';
+  String get importVaultKeySubtitle => '重装/换机后，用导出的密钥恢复解密能力';
+  String get exportVaultKeyWarning =>
+      '导出的文件保存的是「未加密」的保险库密钥：任何同时拿到该文件与本应用保险库目录的人，都能解密全部文件。\n\n'
+      '请放到加密网盘或离线介质，不要分享给别人。\n\n继续导出？';
+  String get importVaultKeyWarning => '导入会用文件里的密钥接管本机密钥：\n'
+      '• 只在本机还没有自己的加密文件时使用（例如刚重装、刚换机）；\n'
+      '• 若本机已有自己的密钥，导入会被拒绝，以免本机已加密文件全部失效。\n\n继续导入？';
+  String vaultKeyExported(String path) => '密钥已导出：$path';
+  String get vaultKeyExportFailed => '导出失败，请重试';
+  String get vaultKeyExportLocked => '请先解锁保险库，再导出密钥';
+  String get pickVaultKeyTitle => '选择密钥文件';
+  String get vaultKeyImported => '密钥导入成功：现在可用该密钥解密已加密的文件';
+  String get vaultKeyImportMalformed => '该文件不是有效的密册密钥包';
+  String get vaultKeyImportSaltConflict => '本机已有自己的密钥材料，已拒绝导入（否则本机已加密文件会全部失效）';
+  String get vaultKeyImportKeyMismatch => '该密钥与库中已加密文件不匹配，已拒绝导入';
+  String get vaultKeyImportFailed => '导入失败，请重试';
+  String get vaultKeyImportReadFailed => '无法读取该文件';
 
   String get scanOrphans => '扫描孤立隐藏文件';
 
