@@ -621,3 +621,41 @@
 - 修复: 新增 `_decryptFailedIds` 集合记录已尝试且失败的项目。`_mediaPage` 检测到 failed 状态时
   显示 `broken_image` 图标而非 spinner。
 - 首次记录: 2026-10-13（第三次审计发现，已修复）
+
+## PIT-038 changePattern/changePin/migratePinToPattern 在 oldKek==null 时静默跳过 DEK 轮转
+- 触发条件: `changePattern` 获取 `oldKek = keyManager.getKey()`，若此时 KEK 已被清空
+  （auto-lock 在图案绘制对话框期间触发 / 其他异常路径），`if (oldKek != null)` 分支跳过，
+  DEK 轮转不执行 → 新凭证 + 旧 DEK → 所有加密文件永久丢失。
+- 修复:
+  - 三个修改凭证入口统一在 `oldKek == null` 时查询 `listEncrypted()` 数量
+  - 有加密文件 → 抛 `StateError` 阻止操作，提示用户先锁屏再解锁以重载 KEK
+  - 无加密文件 → 安全放行
+- 首次记录: 2026-10-13（第四次审计发现，已修复）
+
+## PIT-039 _rotateAllDeks 非幂等 + 先改凭证后轮转 → 崩溃窗口全损
+- 触发条件:
+  - 原 `_rotateAllDeks` 只用 `oldKek` 解密 DEK → 若上次轮转中断（部分 DEK 已是 newKek），
+    重跑时无法解密已轮转 DEK → 永久成为孤儿
+  - 原顺序 `setPattern → deriveNewKek → rotate`：若 `setPattern` 成功后、`rotate` 前崩溃，
+    重启后用新 pattern 解锁 → 新 KEK 覆盖旧 KEK → 所有旧 DEK 失效 → 全损
+- 修复:
+  - `_rotateAllDeks` 幂等化：先试 `newKek`（已轮转），再试 `oldKek`（未轮转），
+    两种都失败才标记 lost
+  - 操作顺序改为 `deriveNewKek → rotate → setPattern → setKey`：
+    轮转在改凭证之前 → 崩溃后旧凭证仍有效 → 可重跑轮转
+- 首次记录: 2026-10-13（第四次审计发现，已修复）
+
+## PIT-040 viewer 并发解密同一文件 → 临时文件泄漏
+- 触发条件: `initState` 的 `addPostFrameCallback` 回调中同时调用
+  `_resolveDisplayPath(current)` 和 `_syncVideo()` → `_syncVideoBody` 也调用
+  `_resolveDisplayPath` → 同一 item 启动两次解密 → 第一个 temp 文件的路径被第二个覆盖
+  → 文件泄漏在 `systemTemp` 中
+- 修复: 新增 `_decryptFutures` 互斥表，`_resolveDisplayPath` 检测到已有 in-flight future
+  时直接返回同一 future
+- 首次记录: 2026-10-13（第四次审计发现，已修复）
+
+## PIT-041 _showEncryptProgress 死参数 kek
+- 触发条件: `_batchEncrypt` 传入 `kek` 参数但在 `_showEncryptProgress` 中从未使用，
+  循环内改为每次读 `keyManager.getKey()` —— 参数冗余
+- 修复: 移除死参数，保持循环内实时读取的模式
+- 首次记录: 2026-10-13（第四次审计发现，已修复）

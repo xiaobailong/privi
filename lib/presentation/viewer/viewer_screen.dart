@@ -89,6 +89,11 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   /// show an error placeholder instead of a forever-loading spinner.
   final Set<String> _decryptFailedIds = <String>{};
 
+  /// In-flight decryptions keyed by media id.  Prevents concurrent
+  /// [_resolveDisplayPath] calls for the same item from producing two temp
+  /// files (one of which leaks).
+  final Map<String, Future<String?>> _decryptFutures = <String, Future<String?>>{};
+
   @override
   void initState() {
     super.initState();
@@ -190,6 +195,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   /// Returns a displayable file path for [item], decrypting to a temp file
   /// if the file is encrypted. Callers MUST use this instead of [item.privatePath]
   /// directly.
+  ///
+  /// Deduplicates concurrent calls for the same item: if a decryption is
+  /// already in-flight the same Future is returned instead of starting a
+  /// second one (which would leak a temp file).
   Future<String?> _resolveDisplayPath(MediaItem item) async {
     final encryptedDek = item.encryptedDek;
     if (encryptedDek == null || encryptedDek.isEmpty) {
@@ -200,6 +209,24 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       final cached = _decryptedTempPaths[item.id]!;
       if (File(cached).existsSync()) return cached;
       _decryptedTempPaths.remove(item.id);
+    }
+    // Already in-flight?
+    final inFlight = _decryptFutures[item.id];
+    if (inFlight != null) return inFlight;
+    // Start and register.
+    final future = _decryptPathInternal(item);
+    _decryptFutures[item.id] = future;
+    try {
+      return await future;
+    } finally {
+      _decryptFutures.remove(item.id);
+    }
+  }
+
+  Future<String?> _decryptPathInternal(MediaItem item) async {
+    final encryptedDek = item.encryptedDek;
+    if (encryptedDek == null || encryptedDek.isEmpty) {
+      return item.privatePath;
     }
     final encryptionService = ref.read(mediaEncryptionServiceProvider);
     final keyManager = ref.read(encryptionKeyManagerProvider);
@@ -235,6 +262,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   void _cleanupTempFile(String mediaId) {
     final path = _decryptedTempPaths.remove(mediaId);
     _decryptFailedIds.remove(mediaId);
+    _decryptFutures.remove(mediaId);
     if (path != null) {
       try {
         final file = File(path);
@@ -245,6 +273,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
 
   void _cleanupAllTempFiles() {
     final ids = _decryptedTempPaths.keys.toList();
+    _decryptFutures.clear();
     for (final id in ids) {
       _cleanupTempFile(id);
     }

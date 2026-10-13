@@ -437,29 +437,37 @@ class LockController extends Notifier<VaultLockState> {
     final security = ref.read(securityServiceProvider);
     final ok = await security.verifyPattern(currentPattern);
     if (!ok) {
-      // Allow changing from legacy PIN install by verifying current as PIN too.
       final pinOk = await security.verifyPin(currentPattern);
       if (!pinOk) throw StateError('Current pattern is incorrect');
     }
 
-    // Save old KEK for DEK re-encryption before credential changes.
     final keyManager = ref.read(encryptionKeyManagerProvider);
     final oldKek = keyManager.getKey();
+    final repo = ref.read(mediaRepositoryProvider);
 
-    await security.setPattern(newPattern);
-    if (!ref.mounted) return;
-
-    // Derive new KEK synchronously (await, not fire-and-forget), then rotate
-    // all existing encrypted DEKs so they remain decryptable.
-    final newKek = await security.deriveEncryptionKey(newPattern);
-    if (newKek == null || !ref.mounted) {
-      state = state.copyWith(lockKind: SecurityService.kindPattern);
-      return;
+    if (oldKek == null) {
+      final encryptedCount = (await repo.listEncrypted()).length;
+      if (encryptedCount > 0) {
+        throw StateError(
+            'Cannot change pattern: $encryptedCount encrypted file(s) exist '
+            'but the current key is unavailable. '
+            'Lock and unlock the vault first to reload the encryption key.');
+      }
     }
 
+    // Derive new KEK BEFORE changing credential so we can rotate with both
+    // keys available.  If this fails nothing has been changed yet.
+    final newKek = await security.deriveEncryptionKey(newPattern);
+    if (newKek == null || !ref.mounted) return;
+
+    // Rotate DEKs BEFORE changing credential so a crash during rotation can be
+    // recovered by re-running with the still-valid old credential.
     if (oldKek != null) {
       await _rotateAllDeks(oldKek, newKek, 'changePattern');
     }
+
+    await security.setPattern(newPattern);
+    if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
     state = state.copyWith(lockKind: SecurityService.kindPattern);
@@ -477,20 +485,27 @@ class LockController extends Notifier<VaultLockState> {
 
     final keyManager = ref.read(encryptionKeyManagerProvider);
     final oldKek = keyManager.getKey();
+    final repo = ref.read(mediaRepositoryProvider);
 
-    await security.setPattern(newPattern);
-    if (!ref.mounted) return;
+    if (oldKek == null) {
+      final encryptedCount = (await repo.listEncrypted()).length;
+      if (encryptedCount > 0) {
+        throw StateError(
+            'Cannot migrate to pattern: $encryptedCount encrypted file(s) exist '
+            'but the current key is unavailable. '
+            'Lock and unlock the vault first to reload the encryption key.');
+      }
+    }
 
     final newKek = await security.deriveEncryptionKey(newPattern);
-    if (newKek == null || !ref.mounted) {
-      state = state.copyWith(
-          lockKind: SecurityService.kindPattern, clearError: true);
-      return;
-    }
+    if (newKek == null || !ref.mounted) return;
 
     if (oldKek != null) {
       await _rotateAllDeks(oldKek, newKek, 'migratePinToPattern');
     }
+
+    await security.setPattern(newPattern);
+    if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
     state =
@@ -507,20 +522,27 @@ class LockController extends Notifier<VaultLockState> {
 
     final keyManager = ref.read(encryptionKeyManagerProvider);
     final oldKek = keyManager.getKey();
+    final repo = ref.read(mediaRepositoryProvider);
 
-    await security.setPin(newPin);
-    if (!ref.mounted) return;
+    if (oldKek == null) {
+      final encryptedCount = (await repo.listEncrypted()).length;
+      if (encryptedCount > 0) {
+        throw StateError(
+            'Cannot change PIN: $encryptedCount encrypted file(s) exist '
+            'but the current key is unavailable. '
+            'Lock and unlock the vault first to reload the encryption key.');
+      }
+    }
 
     final newKek = await security.deriveEncryptionKey(newPin);
-    if (newKek == null || !ref.mounted) {
-      state = state.copyWith(
-          pinLength: newPin.length, lockKind: SecurityService.kindPin);
-      return;
-    }
+    if (newKek == null || !ref.mounted) return;
 
     if (oldKek != null) {
       await _rotateAllDeks(oldKek, newKek, 'changePin');
     }
+
+    await security.setPin(newPin);
+    if (!ref.mounted) return;
 
     await keyManager.setKey(newKek);
     state = state.copyWith(
@@ -530,6 +552,9 @@ class LockController extends Notifier<VaultLockState> {
   }
 
   /// Re-encrypt all existing DEKs from [oldKek] to [newKek].
+  ///
+  /// Idempotent: tries [newKek] first (already-rotated DEKs), then [oldKek]
+  /// (still-pending DEKs).  Safe to re-run after an interrupted rotation.
   /// Logs how many succeeded / were lost.
   Future<void> _rotateAllDeks(
       Uint8List oldKek, Uint8List newKek, String caller) async {
@@ -542,11 +567,18 @@ class LockController extends Notifier<VaultLockState> {
       for (final item in encryptedItems) {
         if (item.encryptedDek == null || item.encryptedDek!.isEmpty) continue;
         try {
-          final dek = await encryptionService.decryptDek(
+          Uint8List? dek = await encryptionService.decryptDek(
+            encryptedDekBase64: item.encryptedDek!,
+            kek: newKek,
+          );
+          dek ??= await encryptionService.decryptDek(
             encryptedDekBase64: item.encryptedDek!,
             kek: oldKek,
           );
           if (dek == null) {
+            AppLogger.e('LockController',
+                'DEK rotation ($caller): could not decrypt DEK for ${item.id} '
+                'with either old or new KEK — file is orphaned');
             lostCount++;
             continue;
           }

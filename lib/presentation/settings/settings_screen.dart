@@ -537,7 +537,7 @@ class SettingsScreen extends ConsumerWidget {
     if (ok != true || !context.mounted) return;
 
     _showEncryptProgress(context, ref, encryptionService, keyManager, repo,
-        unencrypted, kek);
+        unencrypted);
   }
 
   void _showEncryptProgress(
@@ -547,7 +547,6 @@ class SettingsScreen extends ConsumerWidget {
     EncryptionKeyManager keyManager,
     MediaRepository repo,
     List<MediaItem> items,
-    List<int> kek,
   ) {
     int completed = 0;
     int failed = 0;
