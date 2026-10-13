@@ -116,6 +116,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
         });
         unawaited(_syncVideo());
       },
+    );
   }
 
   @override

@@ -16,6 +16,7 @@ import '../../data/services/encryption_key_manager.dart';
 import '../../data/services/vault_backup_service.dart';
 import '../../data/repositories/media_repository.dart';
 import '../../domain/enums.dart';
+import '../../domain/models/media_item.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
 import '../../core/utils/app_logger.dart';
