@@ -310,6 +310,10 @@ class AppLocalizations {
     return '已清理 $count 项';
   }
 
+  String get purgeItemTitle => '永久删除？';
+
+  String get purgeItemBody => '此操作不可撤销，确定要永久删除吗？';
+
   String get sortNewestFirst => '最新优先';
 
   String get sortOldestFirst => '最早优先';

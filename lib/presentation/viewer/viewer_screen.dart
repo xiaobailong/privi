@@ -373,6 +373,48 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     });
   }
 
+  Future<void> _deleteCurrent() async {
+    final item = _current;
+    await ref.read(mediaRepositoryProvider).softDelete(item.id);
+    if (!mounted) return;
+    _exitViewer();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.movedToRecycleBinCount(1))),
+    );
+  }
+
+  Future<void> _purgeCurrent() async {
+    final item = _current;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.l10n.purgeItemTitle),
+        content: Text(context.l10n.purgeItemBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(context.l10n.deleteForever),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    await ref.read(mediaRepositoryProvider).purge(item.id);
+    if (!mounted) return;
+    _exitViewer();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.deletedForeverCount(1))),
+    );
+  }
+
   Future<void> _showItem(int index) async {
     if (index < 0 || index >= widget.items.length || index == _index) return;
     if (!mounted) return;
@@ -752,6 +794,16 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
                 Text(
                   '${_index + 1}/${widget.items.length}',
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                IconButton(
+                  tooltip: context.l10n.moveToRecycleBin,
+                  icon: const Icon(Icons.delete_outline, color: Colors.white70),
+                  onPressed: () => unawaited(_deleteCurrent()),
+                ),
+                IconButton(
+                  tooltip: context.l10n.deleteForever,
+                  icon: const Icon(Icons.delete_forever, color: Colors.white70),
+                  onPressed: () => unawaited(_purgeCurrent()),
                 ),
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.white70),

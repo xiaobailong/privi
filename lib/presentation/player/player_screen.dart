@@ -742,56 +742,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     });
   }
 
-  Future<void> _deleteCurrent() async {
-    final item = ref.read(playerControllerProvider).current;
-    if (item == null) return;
-    await ref.read(mediaRepositoryProvider).softDelete(item.id);
-    if (!mounted) return;
-    final hasMore = ref.read(playerControllerProvider.notifier).removeCurrent();
-    if (!mounted) return;
-    if (!hasMore) {
-      _exitPlayer();
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.l10n.movedToRecycleBinCount(1))),
-    );
-  }
-
-  Future<void> _purgeCurrent() async {
-    final item = ref.read(playerControllerProvider).current;
-    if (item == null) return;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(context.l10n.deleteForever),
-        content: Text(context.l10n.emptyRecycleBinBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(context.l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(context.l10n.deleteForever),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true || !mounted) return;
-    await ref.read(mediaRepositoryProvider).purge(item.id);
-    if (!mounted) return;
-    final hasMore = ref.read(playerControllerProvider.notifier).removeCurrent();
-    if (!mounted) return;
-    if (!hasMore) {
-      _exitPlayer();
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.l10n.deletedForeverCount(1))),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final ui = ref.watch(playerControllerProvider);
@@ -1036,17 +986,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                     style: const TextStyle(color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                IconButton(
-                  tooltip: context.l10n.moveToRecycleBin,
-                  icon: const Icon(Icons.delete_outline, color: Colors.white),
-                  onPressed: () => unawaited(_deleteCurrent()),
-                ),
-                IconButton(
-                  tooltip: context.l10n.deleteForever,
-                  icon:
-                      const Icon(Icons.delete_forever, color: Colors.white),
-                  onPressed: () => unawaited(_purgeCurrent()),
                 ),
               ],
             ),
