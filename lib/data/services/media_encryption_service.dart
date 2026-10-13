@@ -151,6 +151,46 @@ class MediaEncryptionService {
     );
   }
 
+  /// Encrypt [filePath] in-place using a pre-generated [dek] and [nonce].
+  ///
+  /// Callers that pre-save the encrypted DEK before encryption (PIT-044) can
+  /// use this to avoid the crash window where the file is encrypted on disk
+  /// but the DEK has not been persisted yet.
+  ///
+  /// Checks [looksEncrypted] first to prevent double encryption.
+  Future<Map<String, dynamic>> encryptFileWithDek({
+    required String filePath,
+    required Uint8List dek,
+    required Uint8List nonce,
+  }) async {
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      throw FileSystemException('File not found', filePath);
+    }
+    if (looksEncrypted(file)) {
+      throw StateError(
+          'File already appears encrypted: $filePath.  Skipping to avoid '
+          'double encryption.');
+    }
+
+    final result = await _native.encryptFile(
+      filePath: filePath,
+      dek: dek,
+      nonce: nonce,
+    );
+
+    final ok = result['ok'] as bool? ?? false;
+    if (!ok) {
+      final err = result['error'] as String? ?? 'Unknown native crypto error';
+      throw Exception('Native encryption failed: $err');
+    }
+
+    AppLogger.d('MediaEncryptionService',
+        'Encrypted with pre-saved DEK: $filePath (${result['originalSize']} → ${result['encryptedSize']} bytes)');
+
+    return result;
+  }
+
   // ────────────────────── File decryption (native) ──────────────────────
 
   /// Decrypt [filePath] to [destPath] using hardware-accelerated native crypto.

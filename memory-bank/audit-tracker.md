@@ -71,12 +71,8 @@
 
 ## 已知未修复问题
 
-| 编号 | 描述 | 风险等级 |
-|------|------|---------|
-| PIT-044 | encryptFile→updateEncryptedDek crash窗口DEK丢失 | 极低概率/高影响 |
-| PIT-045 | enterAppAfterSetup PBKDF2竞态KEK为空 | 极低概率 |
-| PIT-046 | unlock先解锁后派生1-2s KEK空窗期 | 低UX影响 |
+*（无）*
 
 ---
 
-最后更新: 2026-10-13 R7（第七轮审计 — Native Kotlin 全遍历）
+最后更新: 2026-10-13 R7（第七轮审计 — 3 个已知问题全部修复）

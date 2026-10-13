@@ -200,12 +200,13 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return;
     if (unlockNow) {
       _cancelAutoLockTimer();
+      await _deriveAndStoreEncryptionKey(security, pattern);
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: LockStatus.unlocked,
         lockKind: SecurityService.kindPattern,
         clearError: true,
       );
-      _deriveAndStoreEncryptionKey(security, pattern);
     } else {
       // Credential exists; keep setup UI alive for optional biometric prompt.
       state = state.copyWith(
@@ -226,13 +227,30 @@ class LockController extends Notifier<VaultLockState> {
       status: LockStatus.unlocked,
       clearError: true,
     );
-    // setupPattern/setupPin already derived and persisted the KEK;
-    // load it into memory now.
+    // setupPattern/setupPin already started PBKDF2 in background;
+    // it may not have finished writing the persisted KEK yet (PIT-045).
+    // Retry a few times with short delays.
     final keyManager = ref.read(encryptionKeyManagerProvider);
-    final persisted = await keyManager.retrievePersistedKek();
+    final persisted = await _retrievePersistedKekWithRetry(keyManager);
     if (persisted != null) {
       await keyManager.setKey(persisted);
     }
+  }
+
+  /// Retry [EncryptionKeyManager.retrievePersistedKek] up to ~3 s while
+  /// PBKDF2 derivation started by setupPattern/setupPin completes.
+  Future<Uint8List?> _retrievePersistedKekWithRetry(
+    EncryptionKeyManager keyManager,
+  ) async {
+    for (var i = 0; i < 10; i++) {
+      final value = await keyManager.retrievePersistedKek();
+      if (value != null) return value;
+      if (!ref.mounted) return null;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    AppLogger.w('LockController',
+        'enterAppAfterSetup: persisted KEK still null after retries');
+    return null;
   }
 
   /// Legacy PIN setup (still available if needed).
@@ -242,13 +260,14 @@ class LockController extends Notifier<VaultLockState> {
     if (!ref.mounted) return;
     if (unlockNow) {
       _cancelAutoLockTimer();
+      await _deriveAndStoreEncryptionKey(security, pin);
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: LockStatus.unlocked,
         lockKind: SecurityService.kindPin,
         pinLength: pin.length,
         clearError: true,
       );
-      _deriveAndStoreEncryptionKey(security, pin);
     } else {
       state = state.copyWith(
         lockKind: SecurityService.kindPin,
@@ -267,12 +286,15 @@ class LockController extends Notifier<VaultLockState> {
     if (ok) {
       _cancelLockoutTimer();
       _cancelAutoLockTimer();
+      // PIT-046: derive KEK before marking unlocked so the vault is
+      // actually ready when the UI transition completes.
+      await _deriveAndStoreEncryptionKey(security, pattern);
+      if (!ref.mounted) return true;
       state = state.copyWith(
         status: LockStatus.unlocked,
         clearError: true,
         lockKind: SecurityService.kindPattern,
       );
-      _deriveAndStoreEncryptionKey(security, pattern);
       return true;
     }
     await _showCredentialFailure(VaultLockErrorCode.wrongPattern);
@@ -286,13 +308,14 @@ class LockController extends Notifier<VaultLockState> {
     if (ok) {
       _cancelLockoutTimer();
       _cancelAutoLockTimer();
+      await _deriveAndStoreEncryptionKey(security, pin);
+      if (!ref.mounted) return true;
       state = state.copyWith(
         status: LockStatus.unlocked,
         clearError: true,
         pinLength: pin.length,
         lockKind: SecurityService.kindPin,
       );
-      _deriveAndStoreEncryptionKey(security, pin);
       return true;
     }
     await _showCredentialFailure(VaultLockErrorCode.wrongPin);
@@ -614,14 +637,16 @@ class LockController extends Notifier<VaultLockState> {
 
   int _kekGen = 0;
 
-  void _deriveAndStoreEncryptionKey(SecurityService security, String secret) {
+  Future<void> _deriveAndStoreEncryptionKey(
+    SecurityService security,
+    String secret,
+  ) async {
     final gen = ++_kekGen;
-    security.deriveEncryptionKey(secret).then((kek) async {
-      if (gen != _kekGen) return;
-      if (kek != null && ref.mounted) {
-        await ref.read(encryptionKeyManagerProvider).setKey(kek);
-      }
-    });
+    final kek = await security.deriveEncryptionKey(secret);
+    if (gen != _kekGen) return;
+    if (kek != null && ref.mounted) {
+      await ref.read(encryptionKeyManagerProvider).setKey(kek);
+    }
   }
 
   void clearError() {

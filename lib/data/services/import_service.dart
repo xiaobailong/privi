@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
@@ -387,20 +388,33 @@ class ImportService implements VaultWorkflow {
 
     for (final record in recorded) {
       try {
-        final result = await encryptionService.encryptFile(
-          filePath: record.item.privatePath,
-          kek: kek,
-        );
-        // Update the media record with the encrypted DEK
+        // PIT-044: generate DEK → encrypt with KEK → save to DB → encrypt file.
+        // Saving the DEK before file encryption eliminates the crash window
+        // where the file is encrypted on disk but the DEK is permanently lost.
+        // If native encryption fails, the saved DEK is rolled back.
+        final dek = encryptionService.generateDek();
+        final nonce = encryptionService.generateNonce();
+        final encryptedDekBase64 =
+            await encryptionService.encryptDek(dek: dek, kek: kek);
+
         await _mediaRepository.updateEncryptedDek(
           record.item.id,
-          result.encryptedDekBase64,
+          encryptedDekBase64,
+        );
+
+        await encryptionService.encryptFileWithDek(
+          filePath: record.item.privatePath,
+          dek: dek,
+          nonce: Uint8List.fromList(nonce),
         );
       } catch (e, stack) {
         AppLogger.e(
           'ImportService',
           '_encryptRecordedFiles failed for ${record.item.id}: $e\n$stack',
         );
+        // PIT-044: rollback — clear the saved DEK so maintenance can retry
+        // on next launch.
+        await _mediaRepository.updateEncryptedDek(record.item.id, null);
       }
     }
   }
