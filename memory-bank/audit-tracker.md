@@ -42,6 +42,23 @@
 | `presentation/viewer/viewer_screen.dart` | 🔧 | R4 | 并发去重修复(PIT-041); 失败状态修复(PIT-037) |
 | `presentation/settings/settings_screen.dart` | 🔧 | R4 | 死参数移除(PIT-042) |
 
+## Native Kotlin 层
+
+| 文件 | 状态 | 最后审计轮次 | 备注 |
+|------|------|-------------|------|
+| `CryptoHandler.kt` | ✅ | R7 | AES-256-GCM H/W加速；encrypt原子rename+备份回滚；decrypt验证auth tag |
+| `VaultFileHandler.kt` | ✅ | R7 | hideToVault原子move→stream copy→拷贝后删原始(失败仅重复)；unhide对称安全 |
+| `MediaStoreIndexHandler.kt` | ✅ | R7 | hide标记IS_PENDING→删索引(文件已移走时)；scan恢复索引+日期修复 |
+| `ThumbnailHandler.kt` | ✅ | R7 | 纯读->写新文件；不修改原始媒体 |
+| `MediaMetadataHandler.kt` | ✅ | R7 | 纯读EXIF/MediaStore；无副作用 |
+| `MainActivity.kt` | ✅ | R7 | MethodChannel委托+IO线程池+crash日志；无直接数据操作 |
+| `ExternalPlayerHandler.kt` | ✅ | R7 | 外部播放器Intent启动器；读操作 |
+| `PlayerHandler.kt` | ✅ | R7 | 播放器接口；无文件操作 |
+| `VlcPlayerHandler.kt` | ✅ | R7 | VLC播放；读操作 |
+| `VideoPlayerHandler.kt` | ✅ | R7 | ExoPlayer播放；读操作 |
+| `VideoTimestampNormalizer.kt` | ✅ | R7 | 时间戳工具 |
+| `VideoPlaybackDiagnostics.kt` | ✅ | R7 | 诊断日志 |
+
 ## 未审计区域（不影响数据完整性）
 
 | 区域 | 原因 |
@@ -50,7 +67,6 @@
 | `lib/core/*` | 工具/主题/常量 |
 | `lib/l10n/*` | 国际化字符串 |
 | `lib/domain/models/*` | 数据模型定义 |
-| `android/app/src/main/kotlin/*` | Native Kotlin，需单独审查 |
 | `lib/data/services/platform/*` (adapters) | 薄适配器，无逻辑 |
 
 ## 已知未修复问题
@@ -63,4 +79,4 @@
 
 ---
 
-最后更新: 2026-10-13 R6（第六轮审计）
+最后更新: 2026-10-13 R7（第七轮审计 — Native Kotlin 全遍历）
