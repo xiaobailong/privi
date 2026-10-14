@@ -16,8 +16,8 @@
 #    in android/app/build.gradle.kts (major*10000 + minor*100 + patch).
 #
 #  USAGE
-#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1
-#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bump_version.ps1 -Path pubspec.yaml
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tools\bump_version.ps1
+#    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tools\bump_version.ps1 -Path pubspec.yaml
 #
 #  OUTPUT (stdout, single line)
 #    OK=<old>-><new>   file updated, exit code 0

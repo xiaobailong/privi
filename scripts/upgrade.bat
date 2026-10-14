@@ -13,7 +13,7 @@ set "PUB_HOSTED_URL=https://pub.flutter-io.cn"
 set "FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn"
 set "PATH=%JAVA_HOME%\bin;%FLUTTER_HOME%\bin;%ANDROID_HOME%\platform-tools;%PATH%"
 
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo ============================================
 echo  Privi 依赖升级 - %date% %time%

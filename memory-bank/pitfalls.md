@@ -1234,6 +1234,63 @@
 - 相关: `PIT-008`（一律重定向再读）、`PIT-009`（长任务放独立窗口）
 - 首次记录: 2026-10-14（读用户提供的手机日志时踩到）
 
+## PIT-070 排查设备问题后不清理日志 ⇒ 下次拿到的是新旧混杂日志
+- 触发条件: 通过 ADB 从设备拉取 `密册_log_*.txt` 分析了问题，但拉完没删设备上的日志文件
+- 错误现象: 下次用户复现新问题时，`adb pull` 下来的是**新旧日志叠加**的同一个文件；
+  你得先辨认哪段是上一次的、哪段是新的，容易把旧错误当新问题
+- 正确做法:
+  排查完就立刻清理设备日志，保持设备端"空白"状态：
+  ```
+  & "D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe" shell "rm -f /storage/emulated/0/Download/密册/logs/密册_log_*.txt"
+  ```
+  **ADB 调试速查卡**：
+  - ADB 路径: `D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe`
+  - PowerShell 调用: `& "完整路径\adb.exe" <子命令>`（路径含空格必须用 call 运算符 `&`）
+  - 查看设备: `adb devices`
+  - app 包名: `com.privi.app`
+  - 设备日志路径: `/storage/emulated/0/Download/密册/logs/密册_log_YYYY-MM-DD.txt`
+  - 拉取日志: `adb pull "/storage/emulated/0/Download/密册/logs/密册_log_YYYY-MM-DD.txt" "D:\WorkSpace\test\privi\tmp\device_log.txt"`
+  - 清理日志: `adb shell "rm -f /storage/emulated/0/Download/密册/logs/密册_log_*.txt"`
+  - 清空 logcat: `adb logcat -c`
+  - 备选日志路径（app 私有目录）: `/data/user/0/com.privi.app/app_flutter/密册/logs/`
+- 反例（别这么写）: 拉完日志不删、隔天又拉同一个文件下来，对着旧日志排查用户刚报道的新问题
+- 自检: `adb shell "ls -la /storage/emulated/0/Download/密册/logs/"` → 期望为空（或只有几秒前刚生成的新文件）
+- 首次记录: 2026-10-14（取消隐藏 Cross-device link 排查）
+
+## PIT-071 本机 ADB 路径与环境速查
+- 触发条件: 需要连手机调试（拉日志、装 APK、抓 logcat），但 `adb` 不在 PATH 里
+- 错误现象: PowerShell 里直接敲 `adb devices` → `CommandNotFoundException`
+- 正确做法:
+  - ADB 全路径: `D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe`
+  - PowerShell 调用必须用 call 运算符 `&`（路径含空格）:
+    ```
+    & "D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe" <子命令>
+    ```
+  - 速查:
+    - 查看设备: `adb devices`
+    - app 包名: `com.privi.app`
+    - 清空 logcat: `adb logcat -c`
+- 反例（别这么写）: 直接敲 `adb`、用 `"路径\adb.exe" devices`（PowerShell 会把整段当字符串字面量）
+- 自检: `& "D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe" devices` → 输出设备列表
+- 首次记录: 2026-10-14
+
+## PIT-072 App 日志走文件系统，不走 `adb logcat` 的 flutter 标签
+- 触发条件: 排查 app 运行时错误，习惯性跑 `adb logcat -s flutter` 或 `adb logcat | grep com.privi.app`
+- 错误现象: logcat 里几乎看不到 app 的业务日志（只有系统级 crash 和 MediaProvider 统计行）；
+  用 logcat 去 grep 是白费力气，拿不到任何有效信息
+- 正确做法:
+  App 日志由 `AppLogger` 写入文件系统，路径为设备上的 `密册_log_YYYY-MM-DD.txt`：
+  - 主路径: `/storage/emulated/0/Download/密册/logs/密册_log_YYYY-MM-DD.txt`
+  - 备选（权限不足时）: `/data/user/0/com.privi.app/app_flutter/密册/logs/密册_log_YYYY-MM-DD.txt`
+  - 拉取命令:
+    ```
+    & "D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe" pull "/storage/emulated/0/Download/密册/logs/密册_log_2026-10-14.txt" "D:\WorkSpace\test\privi\tmp\device_log.txt"
+    ```
+  - 拉取后按 `PIT-070` 清理设备端日志
+- 反例（别这么写）: `adb logcat -v time | findstr "com.privi.app"` — 只能抓到几条系统行，看不到业务错误
+- 自检: `adb shell "ls -la /storage/emulated/0/Download/密册/logs/"` → 能看到当天的日志文件
+- 首次记录: 2026-10-14（取消隐藏 Cross-device link 排查）
+
 ## PIT-069 校验"我的新增行是否符合 `dart format`"：用副本对比，别直接写回老文件
 - 触发条件: 在**本来就不符合当前 formatter 的老文件**（`PIT-062`）里插入新代码后，
   `dart format --output=none --set-exit-if-changed <file>` 报 `Changed`，无法判断是自己写脏还是老文件本来就脏
@@ -1253,4 +1310,3 @@
 - 自检: hunk 行号里**不含**自己新增的行区间 ⇒ 自己的代码是干净的（本次结果：l10n 只有 1 处自己写脏，已单行化修复）
 - 相关: `PIT-062`、`PIT-066`、`PIT-014`（`dart.exe` 全路径）
 - 首次记录: 2026-10-14（落地「加解密修复」时的静态自测）
-

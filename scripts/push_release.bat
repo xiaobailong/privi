@@ -6,9 +6,9 @@ title Privi Release Push
 
 set "GH_EXE="
 
-cd /d "%~dp0"
+cd /d "%~dp0.."
 if %ERRORLEVEL% neq 0 (
-    set "ERR_MSG=无法切换到项目目录: %~dp0"
+    set "ERR_MSG=无法切换到项目目录: %~dp0.."
     goto :die
 )
 
@@ -150,8 +150,8 @@ REM ---- SHA-256 ----
 echo.
 echo 计算 SHA-256...
 set "APK_SHA="
-if exist "%~dp0scripts\build_hash.ps1" (
-    for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
+if exist "%~dp0tools\build_hash.ps1" (
+    for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
 )
 if not defined APK_SHA (
     for /f "usebackq delims=" %%h in (`powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '!APK_DEST!').Hash.ToLower()"`) do set "APK_SHA=%%h"
@@ -167,8 +167,8 @@ REM ---- Release 说明文件 ----
 set "RELEASE_TITLE=密册 v!NEW_VER!"
 set "NOTES_FILE=build\release_notes_!NEW_VER!.md"
 
-if exist "%~dp0release_notes.md" (
-    copy /y "%~dp0release_notes.md" "!NOTES_FILE!" >nul 2>&1
+if exist "%~dp0..\release_notes.md" (
+    copy /y "%~dp0..\release_notes.md" "!NOTES_FILE!" >nul 2>&1
 ) else (
     > "!NOTES_FILE!" echo # 密册 v!NEW_VER!
 )

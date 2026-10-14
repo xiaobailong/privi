@@ -183,6 +183,9 @@
 | 想给某个文件补/去掉加密记录（单文件，而不是批量设置项） | `ISSUE-044`、`ADR-045` |
 | `type <日志> \| more` 把终端占住、后续命令被掐断 | `PIT-068` |
 | `git diff --no-index --stat` 重定向后读到的文件是空的 | `PIT-069` |
+| ADB 拉设备日志后不清理 ⇒ 下次新旧混杂 / ADB 路径/日志路径速查 | `PIT-070` |
+| `adb` 不在 PATH / PowerShell 里不知道怎么调 | `PIT-071`（ADB 全路径 + call 运算符） |
+| `adb logcat` 抓不到 app 日志 / 排查时拿不到业务错误 | `PIT-072`（日志在文件系统，不走 logcat） |
 
 
 

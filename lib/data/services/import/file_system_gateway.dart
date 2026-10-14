@@ -35,8 +35,17 @@ class IoFileSystemGateway implements FileSystemGateway {
 
   @override
   Future<String> rename(String sourcePath, String destinationPath) async {
-    final result = await File(sourcePath).rename(destinationPath);
-    return result.path;
+    try {
+      final result = await File(sourcePath).rename(destinationPath);
+      return result.path;
+    } on FileSystemException catch (e) {
+      if (e.osError?.errorCode == 18) {
+        final result = await File(sourcePath).copy(destinationPath);
+        await File(sourcePath).delete();
+        return result.path;
+      }
+      rethrow;
+    }
   }
 
   @override

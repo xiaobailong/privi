@@ -14,11 +14,11 @@ set "ANDROID_HOME=D:\Tools\DevTools\Android\Sdk"
 set "ANDROID_SDK_ROOT=D:\Tools\DevTools\Android\Sdk"
 set "PUB_HOSTED_URL=https://pub.flutter-io.cn"
 set "FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn"
-set "GRADLE_USER_HOME=%~dp0.gradle_home"
+set "GRADLE_USER_HOME=%~dp0..\.gradle_home"
 set "PATH=%JAVA_HOME%\bin;%FLUTTER_HOME%\bin;%ANDROID_HOME%\platform-tools;%PATH%"
 
 REM ---- 切换到项目根目录 ----
-cd /d "%~dp0"
+cd /d "%~dp0.."
 if %ERRORLEVEL% neq 0 (
     echo [错误] 无法切换到项目目录
     pause

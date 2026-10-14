@@ -12,11 +12,13 @@ if /i "%EXT%"==".sh" (
 )
 
 if /i "%EXT%"==".bat" (
+    chcp 65001 >nul 2>&1
     call "%FILE%"
     exit /b %ERRORLEVEL%
 )
 
 if /i "%EXT%"==".cmd" (
+    chcp 65001 >nul 2>&1
     call "%FILE%"
     exit /b %ERRORLEVEL%
 )
