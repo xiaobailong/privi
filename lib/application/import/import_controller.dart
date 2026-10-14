@@ -199,6 +199,10 @@ class ImportController extends Notifier<ImportUiState> {
     List<MediaItem> items, {
     bool sessionAlreadyStarted = false,
   }) async {
+    AppLogger.i('ImportController',
+        'runReveal entry total=${items.length} '
+        'firstId=${items.isNotEmpty ? items.first.id : "none"} '
+        'firstSrc=${items.isNotEmpty ? items.first.privatePath : "none"}');
     if (!sessionAlreadyStarted) {
       beginSession(phase: ImportPhase.unhiding);
     } else if (!state.running) {

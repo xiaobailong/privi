@@ -48,9 +48,17 @@ class VaultRevealRunner {
     required bool clearGalleryCache,
     required ImportSession session,
   }) async {
+    AppLogger.i('VaultRevealRunner',
+        'reveal entry id=${item.id} name=${item.originalName} '
+        'src=${item.privatePath}');
     if (session.isCancelled) return false;
     final visiblePath = await _resolveTarget(item);
-    if (visiblePath == null || session.isCancelled) return false;
+    if (visiblePath == null || session.isCancelled) {
+      AppLogger.w('VaultRevealRunner',
+          'reveal aborted id=${item.id}: resolve=${visiblePath != null} '
+          'cancelled=${session.isCancelled}');
+      return false;
+    }
 
     // Never move ciphertext to the gallery: if the KEK/DEK cannot be loaded the
     // reveal must fail *before* the file leaves the vault (the DB row and its
@@ -125,6 +133,9 @@ class VaultRevealRunner {
     ImportErrorCode? lastErrorCode;
     String? currentName;
     final total = items.length;
+    AppLogger.i('VaultRevealRunner',
+        'run entry total=$total firstId=${total > 0 ? items.first.id : "none"} '
+        'firstSrc=${total > 0 ? items.first.privatePath : "none"}');
 
     void emit({bool cancelled = false}) {
       onProgress?.call(
@@ -257,6 +268,9 @@ class VaultRevealRunner {
       final results = movable.isEmpty
           ? const <MediaRenameResult>[]
           : await _batchResults(movable);
+      AppLogger.d('VaultRevealRunner',
+          'chunk processed: blocked=${blockedIds.length} '
+          'movable=${movable.length} results=${results.length}');
       final byId = <String, MediaRenameResult>{};
       for (final result in results) {
         final id = result.clientId;
@@ -300,8 +314,15 @@ class VaultRevealRunner {
         emit(cancelled: session.isCancelled);
       }
 
+      AppLogger.i('VaultRevealRunner',
+          'chunk summary: okIds=${chunkOkIds.length} '
+          'chunkTotal=${chunk.length} cumulative imported=$imported '
+          'failed=$failed');
+
       if (chunkOkIds.isNotEmpty) {
         final deletedIds = await _deleteRows(chunkOkIds);
+        AppLogger.d('VaultRevealRunner',
+            'DB cleanup: requested=${chunkOkIds.length} deleted=${deletedIds.length}');
         final deleteFailures = chunkOkIds.length - deletedIds.length;
         if (deleteFailures > 0) {
           imported -= deleteFailures;
@@ -326,6 +347,10 @@ class VaultRevealRunner {
     await _deleteThumbs(thumbsToDelete);
     if (imported > 0) await _clearGalleryCache();
 
+    AppLogger.i('VaultRevealRunner',
+        'run exit total=$total imported=$imported failed=$failed '
+        'lastError=$lastError');
+
     final done = ImportProgress(
       done: total,
       total: total,
@@ -340,7 +365,12 @@ class VaultRevealRunner {
   }
 
   Future<String?> _resolveTarget(MediaItem item) async {
-    if (!await _files.exists(item.privatePath)) return null;
+    if (!await _files.exists(item.privatePath)) {
+      AppLogger.w('VaultRevealRunner',
+          '_resolveTarget id=${item.id}: source file missing '
+          'privatePath=${item.privatePath}');
+      return null;
+    }
     var visiblePath = HideNaming.resolveUnhidePath(
       privatePath: item.privatePath,
       originalPath: item.originalPath,
@@ -371,14 +401,20 @@ class VaultRevealRunner {
       final extension = p.extension(visiblePath);
       visiblePath = p.join(directory, '${base}_restored$extension');
     }
+    AppLogger.d('VaultRevealRunner',
+        '_resolveTarget id=${item.id} src=${item.privatePath} '
+        'dest=$visiblePath');
     return visiblePath;
   }
 
   Future<List<MediaRenameResult>> _batchResults(
     List<_PreparedReveal> chunk,
   ) async {
+    AppLogger.d('VaultRevealRunner',
+        '_batchResults chunkSize=${chunk.length} '
+        'firstSrc=${chunk.isNotEmpty ? chunk.first.item.privatePath : "none"}');
     try {
-      return await _withTimeout(
+      final results = await _withTimeout(
         _renamer.unhideFromVaultBatch([
           for (final job in chunk)
             MediaUnhideRequest(
@@ -393,6 +429,12 @@ class VaultRevealRunner {
         timeout: Duration(seconds: 15 + chunk.length * 4),
         label: 'unhide batch timed out (${chunk.length} items)',
       );
+      final okCount = results.where((r) => r.ok).length;
+      final failCount = results.length - okCount;
+      AppLogger.d('VaultRevealRunner',
+          '_batchResults returned ${results.length} results: '
+          'ok=$okCount fail=$failCount');
+      return results;
     } catch (error, stackTrace) {
       AppLogger.e(
           'VaultRevealRunner', 'unhide batch failed: $error\n$stackTrace');

@@ -417,6 +417,7 @@ class VaultFileHandler(
     }
 
     fun unhideFromVaultBatch(rawItems: List<*>): List<Map<String, Any?>> {
+        android.util.Log.i("PrivateHeart", "unhideFromVaultBatch count=${rawItems.size}")
         val out = ArrayList<Map<String, Any?>>(rawItems.size)
         for (entry in rawItems) {
             val map = entry as? Map<*, *>
