@@ -1184,3 +1184,73 @@
   随机名文件数应被统计到；备份包解开后条目名仍带扩展名
 - 首次记录: 2026-10-13（`ISSUE-040`）
 
+
+## PIT-066 想校验「某文件在 HEAD 是否本来就格式不干净」时，别用 `Set-Content` / `>` 导出副本
+- 触发条件: `dart format --set-exit-if-changed` 报 "Changed"，要判断"是我改脏的，还是本来就不干净"
+- 错误现象: PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 **UTF-8 BOM**、
+  `>` 重定向更是写 UTF-16LE ⇒ 副本必然被判 "Changed"，看起来像"HEAD 本来就不干净" ⇒ **自己改脏了也查不出来**
+  （本轮差点据此误判 `vault_reveal_runner.dart`）
+- 正确做法: 直接对**工作区文件**跑真写回的 `dart format`，再用 `git diff` 看牵连范围：
+  ```
+  dart.exe format lib\a.dart lib\b.dart
+  git --no-pager diff --numstat        :: 插入/删除行数应与自己的改动量相当
+  git --no-pager diff -- lib\a.dart    :: 只应多出 "No newline at end of file" 与个别折行
+  ```
+  （`dart.exe` 全路径见 `PIT-014`；`dart format` 保留文件本身的 CRLF/LF，不会整体换行尾）
+- 反例（别这么写）: `git show HEAD:$f | Set-Content -Encoding UTF8 tmp\head.dart; dart format --set-exit-if-changed tmp\head.dart`
+- 自检: `git diff` 里有没有与本次改动无关的整段重排（`PIT-062` 那个老毛病）；最后再跑一次
+  `dart format --output=none --set-exit-if-changed` 应为 `0 changed`
+- 首次记录: 2026-10-14（校验 trae 的补丁时踩到）
+
+
+## PIT-067 用"是否像明文"反推"是不是密文"时，白名单必须覆盖所有可能进库的格式
+- 触发条件: `looksEncrypted()` 这类"头像不像已知明文媒体"的反推判定，被用来决定
+  "要不要加密 / 要不要解密 / DEK 要不要回滚"
+- 错误现象: 白名单外的明文媒体（**BMP `42 4D`、TIFF `49 49 2A 00` / `4D 4D 00 2A`、ICO、WBMP…**）被判成密文 ⇒
+  ① 加密被拒（`File already appears encrypted`）② 回滚判据同样误判 ⇒ **DEK 白留库**（明文 + DEK 状态不一致）
+  ③ 之后 app 内所有解密路径全挂（auth tag 失败），而文件本身完好（导出到相册能正常看）—— 见 `ISSUE-043`
+- 正确做法: 反推式判定要**先明确"哪些格式可能进库"**再写白名单，并按 `PIT-050` 的规矩补签名（≥4 字节、
+  碰撞概率可忽略；`42 4D` 要配合 offset 6 起的 4 字节全 0 联合判断）。拿不准时**保留判定不变**，
+  但一定要把头 8 字节打进日志（`MediaEncryptionService.headerHex`），让现场可判定
+- 反例（别这么写）: 只认 JPEG/PNG/GIF/`ftyp`/RIFF/WebM/MKV 就宣称"其余都是密文"；
+  或为了省事加 2 字节签名（`BM` / `II`）⇒ 误判成明文 ⇒ 二次加密（真丢数据）
+- 自检: 拿一张 BMP 与一张 TIFF 走一遍完整链路（隐藏 → 查看 → 取消隐藏），
+  日志里不应出现 `Kept saved DEK`，也不应出现 `decrypt failed … header=42 4d`
+- 首次记录: 2026-10-14（用户"两张图隐藏后打不开"的定位过程）
+
+## PIT-068 `type <文件> | more` 会把终端占住（分页器等待按键）⇒ 后续命令被掐断
+- 触发条件: 想"看一眼"日志/长文件，随手用 `type <file>` / `type <file> | more` / `more <file>`
+- 错误现象: 终端进入分页器等待空格/回车，工具侧只看到
+  `Command completion could not be observed; the command may still be running`，
+  下一条命令会尝试关掉这个终端 → 前一条被中断、输出也读不到（看起来像"命令挂死"）
+- 正确做法: 读文件用 `read_files`（支持行区间，最稳）；需要命令行处理时把结果**重定向到 `tmp\`**
+  再 `read_files` 读：
+  ```
+  findstr /n /i /c:"关键词" "<文件>" > tmp\hits.txt 2>&1
+  ```
+  需要行数用短 `powershell -NoProfile -Command "(Get-Content -LiteralPath '<f>').Count | Out-File tmp\count.txt"`
+- 反例（别这么写）: `type "C:\...\密册_log_2026-10-14.txt" | more`（本次第一条命令就这么踩的）
+- 自检: 命令返回后终端是否还有提示符、下一条命令能否立刻执行；输出文件是否非空
+- 相关: `PIT-008`（一律重定向再读）、`PIT-009`（长任务放独立窗口）
+- 首次记录: 2026-10-14（读用户提供的手机日志时踩到）
+
+## PIT-069 校验"我的新增行是否符合 `dart format`"：用副本对比，别直接写回老文件
+- 触发条件: 在**本来就不符合当前 formatter 的老文件**（`PIT-062`）里插入新代码后，
+  `dart format --output=none --set-exit-if-changed <file>` 报 `Changed`，无法判断是自己写脏还是老文件本来就脏
+- 错误现象: 直接 `dart format <file>` 会把整文件重排，diff 里几百行无关改动（review 找不到真实改动）；
+  而 `git diff --no-index --stat a b` 在本次会话里**重定向后读到的文件是空的**（原因未定位），拿不到 hunk 位置
+- 正确做法（无损、可定位到行）:
+  ```
+  copy /y lib\路径\文件.dart tmp\cur.dart
+  D:\Tools\DevTools\flutter\bin\cache\dart-sdk\bin\dart.exe format tmp\cur.dart
+  git --no-pager diff --no-index -U0 -- lib\路径\文件.dart tmp\cur.dart > tmp\dd.txt 2>&1
+  findstr /b /c:"@@" tmp\dd.txt
+  ```
+  再和 `git show HEAD:<file> > tmp\head.dart` + `dart format --output=none --set-exit-if-changed tmp\head.dart`
+  对照：**HEAD 也报 Changed ⇒ 该文件本来就有漂移**（只把自己新写的那几行改到 formatter 满意即可，别整文件重排）
+- 反例（别这么写）: 看到 `Changed` 就对老文件跑写入式 `dart format`，把 300 行重排一起交出去（`PIT-062`）；
+  或就此认定"我的代码格式没问题"而不做任何核对
+- 自检: hunk 行号里**不含**自己新增的行区间 ⇒ 自己的代码是干净的（本次结果：l10n 只有 1 处自己写脏，已单行化修复）
+- 相关: `PIT-062`、`PIT-066`、`PIT-014`（`dart.exe` 全路径）
+- 首次记录: 2026-10-14（落地「加解密修复」时的静态自测）
+

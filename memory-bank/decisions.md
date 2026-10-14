@@ -1119,3 +1119,73 @@
 - 相关条目: `ISSUE-039`、`PIT-064`、`ISSUE-038`、`ADR-042`、`PIT-063`、`PIT-051`
 - 首次记录: 2026-10-13
 
+
+## ADR-044 取消隐藏的三条边界：被拦下的项"宁可不搬"、不自动清 DEK、缩略图缓存的作废机制
+- 日期: 2026-10-14 | 状态: 已采纳
+- 背景: 用户报「取消隐藏不能用 / 图片到了相册却显示失败 / 每十几项一个黑缩略图」。
+  同时工作区里已有另一轮（trae）的补丁：`VaultRevealRunner._decryptIfNeeded` 跳过"已明文"的项、
+  `GridThumbnailService` 不再把密文喂给解码器、`ThumbnailCache` 增加 `cacheVersion`。
+  这三处方向都对，但边界要在代码里定死，否则下次改动又会退回去（`ISSUE-041`、`ISSUE-042`）
+- 决策:
+  ① **解密被拦下的项一律不进原生批量请求**（`_batchResults(movable)`）。宁可这轮少搬几项、
+     把原因写进日志，也不允许密文离开保险库 —— `PIT-052` 的损坏不可逆
+  ② `_decryptIfNeeded` 检测到"文件已是明文但 DB 还记着 DEK"时 **只跳过、不删 DEK**：
+     删 DEK 不可逆，而且它可能是别处密文副本（例如备份、或已被误搬进相册的密文）的唯一钥匙；
+     清理交给既有入口「设置 → 修复加密记录」（`ISSUE-039`）
+  ③ 缩略图缓存作废用 `ThumbnailCache.cacheVersion`（`.cache_version` 不匹配就清盘），
+     而不是换 key 前缀或每次启动清空；并且 `_resolveDir` 必须**单飞**（首帧并发 N 次 `_checkVersion`
+     会互相删掉刚写好的缓存文件）
+- 理由: 三条都是"失败时要保守"的取舍 —— 数据损坏不可逆，缓存/日志可以重来
+- 备选与为何不选:
+  - 让 Kotlin 侧在搬运前判密文（在原生里再写一份 `looksEncrypted`）：**不做** —— 签名表会有两份，
+    必然漂移（`PIT-050` 的教训）；判断只在 Dart 侧保留一处真相
+  - 在 reveal 里自动 `updateEncryptedDek(id, null)` 清理残留：会丢掉可能还能救回密文副本的 DEK，见 ②
+  - 用文件 mtime/大小给缓存做指纹：不可靠（再生字节大小可能相同），不如显式版本号
+- 影响 / 约束:
+  - 改 `_batchResults` 调用点时，**请求列表与 `results` 的 index 兜底映射必须用同一个列表**（现在是 `movable`）
+  - 新增任何"跳过某项"的分支都要 `AppLogger.w` + 尽量填 `lastError`，否则现场还是只剩一个数字
+  - `cacheVersion` 是**手动**递增的：改了 `GridThumbnailService` 的 produce 逻辑就要 +1，否则老设备继续看旧字节
+  - 注意 `cacheVersion` 只解决"旧字节"，**解决不了**"produce 返回 null"造成的深色 tile（见 `ISSUE-042`）
+- 相关文件: `lib/data/services/import/vault_reveal_runner.dart`、`lib/data/services/thumbnail_cache.dart`、
+  `lib/application/providers.dart`、`lib/data/services/grid_thumbnail_service.dart`
+- 相关条目: `ISSUE-041`、`ISSUE-042`、`PIT-052`、`ISSUE-029`④、`ISSUE-039`、`PIT-066`
+- 首次记录: 2026-10-14
+
+## ADR-045 「加解密修复」：放进文件选择胶囊 + 就地修 + 多候选 DEK + 崩溃窗口放"密文侧"
+- 日期: 2026-10-14 | 状态: 已采纳
+- 背景: `ISSUE-044` —— 隐藏时"文件已像密文 → 跳过加密"，却把**新生成的 DEK 存进 DB**，
+  之后所有解密路径必然 auth 失败：取消隐藏被 `ADR-044`① 拦下、相册里留下的文件打不开。
+  设置页已有的两个入口都不适用：「解密所有文件」按 DB 行批量跑（文件已不在保险库的行没辙）、
+  「修复加密记录」的判据与 `looksEncrypted` 同源（`ISSUE-043`②：识别不了"其实是明文但格式不认识"）
+- 决策:
+  ① 入口做成**文件选择操作**（可见网格 + 私密网格的选择胶囊各一个「加解密修复」），
+     针对"当前选中的这几个文件"，而不是再加一个批量设置项；
+  ② 每个文件按**证据**分派动作：明文嗅探命中且记录里有 DEK ⇒ 只清记录（一个字节都不碰）；
+     否则按「本行 DEK → 同名/同大小行的 DEK」逐个尝试解密；
+  ③ 试解成功才做「原地原子替换（密文 → `.enc_bak`，明文 → 原路径）→ 清 DEK」；
+     全部失败则**完全保持原样**，并把 `bytes=` / `header=` 写进日志（现场可判定）；
+  ④ 跨行 DEK 候选有硬上限（≤6 个；文件 >512 MiB 时只试本行）——每次尝试都要把整个文件读一遍，
+     不设上限就会变成"看起来卡死"；
+  ⑤ 中间文件沿用自愈能识别的名字（`.enc_tmp-repair-<哈希>` / `<path>.enc_bak`，见 `ISSUE-030`），
+     文件名走哈希而不是拼媒体名（`PIT-061` 的 255 字节上限）；
+  ⑥ 运行期：全局互斥（同时只跑一个修复，`ISSUE-030`）+ holder 常亮（`ADR-037`）+ 无取消按钮
+     （解密 + 替换中途被打断正是 `PIT-064` 的崩溃窗口）
+- 理由: 用户此刻面对的是"一个已可见的文件打不开"，最小修复面就是"这个文件 + 它的记录"；
+  把动作分派交给证据（文件头 + DB 记录）而不是猜，才能一并覆盖"真密文配错钥匙"与"明文被当成密文"两种状态
+- 备选与为何不选:
+  - 让「取消隐藏」在解密失败时自动清 DEK 并把文件搬出去：违反 `ISSUE-029`④ / `ADR-044`（fail-open 数据损坏）
+  - 复用「修复加密记录」的批量扫描：判据同源，正是 `ISSUE-043`② 指出"修不了"的那种情况
+  - 遍历库里**所有** DEK 去撞：大文件 × N 次全量解密，耗时不可控；先只扩到"同名/同大小"这一层
+  - 把修复做成"导出到临时目录再比对"：多一次全量拷贝，且与可见相册不同卷时 rename 非原子（`PIT-034`）
+- 影响 / 约束:
+  - 该动作会**原地改写用户可见的原文件** ⇒ 失败必须回滚、`.enc_bak` 必须留到最后才删；
+    任何"顺手清理"都要先确认文件确实已是明文
+  - 修完要刷新周边状态：可见网格 `MediaStore.scanPath` + `_reload()`、两个网格的缩略图缓存
+    `evictAsset` / `evictVault`、`albumsProvider` / `vaultSizeBytesProvider` 作废
+  - 新增候选策略（例如"按内容摘要匹配"）时，必须同时遵守 ④ 的耗时上限
+- 相关文件: `lib/data/services/media_crypto_repair_service.dart`、`lib/presentation/common/crypto_repair_action.dart`、
+  `lib/presentation/grid/media_grid_screen.dart`、`lib/presentation/visible/visible_media_grid.dart`、
+  `lib/application/providers.dart`
+- 相关条目: `ISSUE-044`、`ISSUE-041`、`ISSUE-043`、`ISSUE-039`、`ISSUE-030`、`ADR-037`、`ADR-044`、`PIT-034`、`PIT-061`、`PIT-064`
+- 首次记录: 2026-10-14
+

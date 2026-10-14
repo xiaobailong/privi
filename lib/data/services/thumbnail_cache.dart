@@ -5,15 +5,10 @@ import 'dart:typed_data';
 /// Unified in-memory + on-disk thumbnail cache shared by the Visible and
 /// Invisible grids.
 ///
-/// A single instance fronts both surfaces so grid rendering is fast and
-/// persistent across restarts, independent of photo_manager/Glide's own cache.
-/// Both grids call [get] with the same size and display widget; only the
-/// [produce] callback differs (photo_manager for Visible, the vault poster/file
-/// for Invisible), so a video's thumbnail behaves identically in either tab.
-///
-/// The vault's canonical poster (`vault/thumbs/<id>.jpg`) remains the source of
-/// truth for the viewer/DB/export — this cache only stores decoded, grid-sized
-/// bytes and regenerates them on demand.
+/// Bump [cacheVersion] whenever the [produce] logic changes in a way that
+/// makes previously-cached bytes invalid (e.g. switching from reading
+/// ciphertext to generating a proper poster).  On first access the disk cache
+/// is automatically cleared when the stored version does not match.
 ///
 /// Entries are keyed by a caller-supplied stable [key] plus the requested
 /// [size], so the same asset can be cached at several dimensions without
@@ -23,6 +18,7 @@ class ThumbnailCache {
     required Future<Directory> Function() cacheDir,
     this.maxEntries = 256,
     this.maxBytes = 96 << 20,
+    this.cacheVersion = 1,
   }) : _cacheDir = cacheDir;
 
   final Future<Directory> Function() _cacheDir;
@@ -33,10 +29,16 @@ class ThumbnailCache {
   /// Soft ceiling on retained decoded bytes (LRU eviction).
   final int maxBytes;
 
+  /// Bump to force a clean-slate disk cache on next launch.
+  final int cacheVersion;
+
+  static const _versionFileName = '.cache_version';
+
   final LinkedHashMap<String, Uint8List> _mem = LinkedHashMap();
   final Map<String, Future<Uint8List?>> _inflight = {};
   int _memBytes = 0;
   Directory? _dir;
+  Future<Directory>? _dirFuture;
 
   static String _slot(String key, int size) => '$key@$size';
 
@@ -150,13 +152,69 @@ class ThumbnailCache {
     return File('${dir.path}${Platform.pathSeparator}${_fileName(key, size)}');
   }
 
-  Future<Directory> _resolveDir() async {
+  /// Resolves (and, once per process, version-checks) the cache directory.
+  ///
+  /// Single-flight on purpose: [get] is called by every visible tile in the
+  /// first frame, and each concurrent call would otherwise run [_checkVersion]
+  /// on its own — every one of them deleting the files a sibling request had
+  /// just written.
+  Future<Directory> _resolveDir() {
     final existing = _dir;
-    if (existing != null) return existing;
+    if (existing != null) return Future.value(existing);
+    final pending = _dirFuture;
+    if (pending != null) return pending;
+    final future = _initDir();
+    _dirFuture = future;
+    return future.whenComplete(() {
+      // Only keep the cached future on success; a transient failure must be
+      // retryable instead of poisoning every later call.
+      if (_dir == null) _dirFuture = null;
+    });
+  }
+
+  Future<Directory> _initDir() async {
     final dir = await _cacheDir();
-    if (!await dir.exists()) await dir.create(recursive: true);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    await _checkVersion(dir);
     _dir = dir;
     return dir;
+  }
+
+  Future<void> _checkVersion(Directory dir) async {
+    final versionFile = File(
+      '${dir.path}${Platform.pathSeparator}$_versionFileName',
+    );
+    var storedVersion = 0;
+    if (await versionFile.exists()) {
+      try {
+        final content = await versionFile.readAsString();
+        storedVersion = int.tryParse(content.trim()) ?? 0;
+      } catch (_) {
+        storedVersion = 0;
+      }
+    }
+    if (storedVersion != cacheVersion) {
+      await _clearDiskCache(dir);
+      try {
+        await versionFile.writeAsString('$cacheVersion', flush: true);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _clearDiskCache(Directory dir) async {
+    try {
+      final entries = dir.listSync(recursive: false);
+      for (final entity in entries) {
+        if (entity is File &&
+            entity.uri.pathSegments.last != _versionFileName) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
   }
 
   void _touch(String slot, Uint8List bytes) {

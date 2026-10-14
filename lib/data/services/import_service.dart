@@ -421,7 +421,7 @@ class ImportService implements VaultWorkflow {
       AppLogger.w(
         'ImportService',
         'vault key (KEK) not loaded — ${recorded.length} imported item(s) '
-        'stay unencrypted until "Encrypt existing files" is run',
+            'stay unencrypted until "Encrypt existing files" is run',
       );
       return recorded.length;
     }
@@ -461,10 +461,17 @@ class ImportService implements VaultWorkflow {
         if (stillPlain) {
           await _mediaRepository.updateEncryptedDek(record.item.id, null);
         } else {
+          // NOTE: `looksEncrypted` is a **plaintext whitelist**, so a media
+          // format it does not know (BMP / TIFF / …) lands here with `stillPlain`
+          // false while the file was never touched.  Logging the header is what
+          // makes that distinguishable later (`ISSUE-043`).
+          final artifact = File(record.item.privatePath);
           AppLogger.w(
             'ImportService',
-            'Kept saved DEK for ${record.item.id}: the file is already '
-            'encrypted even though the encrypt call failed',
+            'Kept saved DEK for ${record.item.id}: the file looks encrypted '
+                'even though the encrypt call failed '
+                '(bytes=${MediaEncryptionService.lengthOrMinusOne(artifact)}, '
+                'header=${MediaEncryptionService.headerHex(artifact)})',
           );
         }
       }

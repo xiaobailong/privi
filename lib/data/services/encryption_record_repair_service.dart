@@ -102,9 +102,12 @@ class EncryptionRecordRepairService {
             stats.staleCleared++;
           } else if (state == EncryptionRecordState.orphanCiphertext) {
             stats.orphanCiphertext++;
+            final file = File(item.privatePath);
             AppLogger.w(
               'EncryptionRecordRepairService',
-              'orphan ciphertext without DEK for ${item.id} — not repairable',
+              'orphan ciphertext without DEK for ${item.id} — not repairable '
+                  '(bytes=${MediaEncryptionService.lengthOrMinusOne(file)}, '
+                  'header=${MediaEncryptionService.headerHex(file)})',
             );
           } else if (state == EncryptionRecordState.missingFile) {
             stats.missingFile++;

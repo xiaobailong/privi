@@ -170,6 +170,21 @@
 | 换了 vault 命名规则后重装恢复"少了一部分文件" | `PIT-065`、`ISSUE-040` |
 | 日志报 `Bad state: Vault backup dialog requires an operation state` | `ISSUE-037`（已定位·未修） |
 | 改完代码 diff 突然几百行、找不到自己的改动（老文件被重排） | `PIT-062` |
+| 取消隐藏失败 / 「图片到了相册却显示失败」/ 相册里冒出打不开的文件 | `ISSUE-041`、`PIT-052`、`ISSUE-029`④ |
+| 取消隐藏只看到「失败 M 项」，日志里查不到任何原因 | `ISSUE-041`（本轮补的 3 处日志点） |
+| 私密网格每十几项一个黑缩略图 / 加密项没有海报 / 缩略图还是旧的 | `ISSUE-042`（未定位）、`ISSUE-029`②、`PIT-049` |
+| `dart format --set-exit-if-changed` 报某文件 Changed，想确认是不是自己改脏的 | `PIT-066` |
+| 取消隐藏为什么"宁可不搬"、为什么不自动清 DEK、缩略图缓存版本号怎么用 | `ADR-044` |
+| 个别图片「隐藏进库后打不开、导出到相册却正常」 | `ISSUE-043`、`PIT-067`、`ISSUE-039` |
+| 日志出现 `Kept saved DEK` / `decrypt failed … header=` | `ISSUE-043`（本轮新增的诊断点） |
+| BMP / TIFF 等非常见格式进库像密文（加密被拒、DEK 白留） | `ISSUE-043`、`PIT-067`、`PIT-050` |
+| 取消隐藏只报「失败」/ 日志 `Authentication failed` + `Kept saved DEK` 同现 | `ISSUE-044`（DEK 与文件内容不匹配）、`ISSUE-041` |
+| 相册里文件打不开，想「选中文件 → 加解密修复」试解 / 修复到底做了什么 | `ISSUE-044`、`ADR-045` |
+| 想给某个文件补/去掉加密记录（单文件，而不是批量设置项） | `ISSUE-044`、`ADR-045` |
+| `type <日志> \| more` 把终端占住、后续命令被掐断 | `PIT-068` |
+| `git diff --no-index --stat` 重定向后读到的文件是空的 | `PIT-069` |
+
+
 
 ## 5. 条目模板（照抄，不要自由发挥）
 

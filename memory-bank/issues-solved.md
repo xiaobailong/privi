@@ -1433,3 +1433,174 @@
   `PIT-065`（换命名要同步"按名字识别"的地方）
 - 首次记录: 2026-10-13（用户需求）
 
+
+## ISSUE-041 「取消隐藏」批量链路：被解密拦下的文件仍被原生批量搬走（密文出库、DB 行保留）+ 失败不落日志
+- 状态: 已修复（2026-10-14）
+- 症状 / 现场: 用户报「取消隐藏不能用了；大多数时候直接显示失败而且图片没有到常规相册；
+  偶尔图片正常到了常规相册却显示失败」。批量取消隐藏后只弹一句「已取消隐藏 N · 失败 M」，
+  设备日志里**一个字也查不到**（这条链路改前完全没有 AppLogger 调用）
+- 复发判据:
+  ① 代码级（5 秒定论）: `git grep -n "_batchResults(chunk)" -- lib/` **有命中** ⇒ 本条未修
+     （必须是 `_batchResults(movable)`，且 index 兜底映射也用 `movable`）
+  ② 现场级（读 app 日志）: `findstr /i "unhide failed reveal skipped skip decrypt" tmp\<日志>.txt`
+     - `reveal skipped <id>: source missing` ⇒ 源文件已不在保险库（见根因 ②）
+     - `unhide failed <id>` ⇒ 原生搬运失败，同一行有 `error=` / `needManageStorage=` / `dest=`（见根因 ③）
+     - `skip decrypt <id>: already plaintext` ⇒ DB 记着 DEK 但文件已明文（`ISSUE-039` 那类残留）
+- 根因（同一条链路 3 处）:
+  ① `VaultRevealRunner.run()` 的 chunk 循环：解密被拒的项只记进 `blockedIds`（结果归因时 `continue` 跳过），
+     但**原生批量搬运仍收到整块 chunk**（`_batchResults(chunk)`）⇒ 这些项的文件是**密文**，照样被
+     `Files.move` 搬进相册；结果处理又跳过它们 ⇒ **相册多一个打不开的文件、DB 行与 DEK 留在库里**，
+     正是 `PIT-052` 那条不可逆损坏路径（设计意图见 `ISSUE-029`④）
+  ② prepare 阶段 `_resolveTarget` 返回 null（源文件不存在）时**静默 `failed++`** —— 不写日志、不设 `lastError`
+  ③ 原生搬运失败分支只更新计数器，不写日志 ⇒ 现场只能看到"失败"两个字
+- 证据: 改前 `lib/data/services/import/vault_reveal_runner.dart:239` 是 `final results = await _batchResults(chunk);`，
+  紧接着 `for (final job in chunk) { if (blockedIds.contains(job.item.id)) continue; ... }`；
+  `android/.../VaultFileHandler.kt:452` 对批量里的每个 entry 无条件调用 `unhideFromVault`（只判断文件在不在，不判内容）
+- 修法（`lib/data/services/import/vault_reveal_runner.dart`，三处）:
+  ① 只把未被拦下的项交给原生，并按同一个列表做兜底映射：
+     ```dart
+     final movable = <_PreparedReveal>[
+       for (final job in chunk) if (!blockedIds.contains(job.item.id)) job,
+     ];
+     final results = movable.isEmpty
+         ? const <MediaRenameResult>[]
+         : await _batchResults(movable);
+     ```
+  ② prepare 失败补 `AppLogger.w('reveal skipped <id>: source missing at <privatePath>')` + `lastError='missing_source'`
+  ③ 原生失败补 `AppLogger.w('unhide failed <id> (<name>): error=… method=… needManageStorage=… dest=…')`
+- 反例 / 易误判:
+  - "反正原生自己会失败" —— **不会**：原生只搬文件，不判密文/明文（`VaultFileHandler.unhideFromVault` 只看存在与长度）
+  - 把"失败"一律当成文件权限问题 —— `reveal skipped`（源文件没了）与 `unhide failed`（搬运失败）是两码事
+- 相关文件: `lib/data/services/import/vault_reveal_runner.dart`、
+  `android/app/src/main/kotlin/com/privi/app/VaultFileHandler.kt`
+- 相关条目: `ISSUE-029`④、`PIT-052`、`ISSUE-039`、`ISSUE-042`、`ADR-044`
+- 首次记录: 2026-10-14（用户报"取消隐藏不能用了"，本轮定位并修复）
+
+## ISSUE-042 私密网格「每隔十几项一个黑缩略图」（**根因未定位**，已列出 3 条候选与判定方法）
+- 状态: 未定位（2026-10-14）
+- 症状 / 现场: 用户报「缩略图还是有点问题，每间隔十几个列表项就有一个黑的」。
+  网格里的"黑" = 深色底：`ThumbnailTile` 在 `_provider == null` 时就是深色 `surfaceAlt`
+  （加载中没有转圈，所以看起来就是一块黑）
+- 复发判据（先分清"占位"还是"解码失败"，两者现象一样）:
+  ① 占位: `git grep -n "_Broken\|_VideoPlaceholder\|surfaceAlt" -- lib/presentation/grid/thumbnail_tile.dart`
+  ② 解码失败: `_provider != null` 但字节不是图片 —— `Image(...)` 没有 `errorBuilder`，同样画成深色
+  ③ 查日志定性: `findstr /i "ThumbnailGenerator thumb" tmp\<日志>.txt`
+     - `thumb <id>: encrypted but vault key not loaded — skipped` ⇒ 候选 ①（KEK 不在内存）
+     - `thumb decrypt <id>: …` ⇒ 候选 ①（KEK/DEK 解不开）
+     - `video thumb: …` / `file thumb: …` ⇒ 候选 ②（取帧/解码失败，例如 >8MB 图片）
+     - 一行都没有 ⇒ 候选 ③（磁盘缓存里本来就是密文字节）
+- 已知证据（**代码事实，尚未与现场对应**）:
+  - `thumbnail_generator.dart:221` `if (await _files.length(playablePath) > 8 * 1024 * 1024) return null;`
+    ⇒ **>8MB 的图片永远生成不出海报**，而图片**没有**任何启动修复（只有视频有 `repairOutdatedVideos`）
+  - `thumbnail_generator.dart:267-271`（KEK 不在内存 ⇒ 加密且无海报的项直接 skip）只在 `AppLogger.d` 留痕
+  - `grid_thumbnail_service.dart:70-72`：`encrypted_dek == NULL` 的"孤儿密文"仍走
+    `readAsBytes(privatePath)` ⇒ 密文喂给解码器（深色）+ **写进磁盘缓存**（第二个污染点，另一个是 `PIT-052`）
+  - `thumbnail_cache.dart` 的 `cacheVersion` 只能作废"旧字节"，**修不了**"produce 返回 null"的深色 tile
+- 下一步验证（按顺序，约 5 分钟）:
+  1) 把手机日志 `.../logs/<app>_log_YYYY-MM-DD.txt` 拷到 `tmp\` 跑 ③ 的 findstr，先定"占位"还是"解码失败"
+  2) 若命中 `vault key not loaded`：用图案/PIN 解锁一次再看同一批 tile 是否恢复 ⇒ 命中 KEK 缺失（`ISSUE-031`/`PIT-049`）
+  3) 若怀疑缓存污染：`cacheVersion` +1 后**杀进程重启**（内存缓存不跨进程，磁盘缓存会）
+  4) 若怀疑 8MB 上限：看这几项详情页的文件体积是否 >8MB
+- 修法: 待定位后再定 —— 本轮**不做**猜测性改动
+- 相关文件: `lib/presentation/grid/thumbnail_tile.dart`、`lib/data/services/grid_thumbnail_service.dart`、
+  `lib/data/services/import/thumbnail_generator.dart`、`lib/data/services/thumbnail_cache.dart`
+- 相关条目: `ISSUE-029`②、`ISSUE-039`、`ISSUE-031`、`PIT-049`、`ADR-044`
+- 首次记录: 2026-10-14
+
+
+
+## ISSUE-043 个别图片"隐藏进库后 app 内打不开、导出到相册却能正常看" = 明文文件 + DB 记着 DEK（状态不一致）
+- 状态: 未修复（待决）—— 本轮只补了可判定的诊断日志，**没有**改判定逻辑（改法要按实际文件格式定）
+- 症状 / 现场: 只有**个别**图片异常（用户实测 2 张）：导出/还原到常规相册能正常打开，
+  但在私密库里：查看器打不开、缩略图是深色块、取消隐藏报失败；同一批隐藏的其他图片全部正常
+- 复发判据:
+  ① 日志判据（本轮新加，5 秒定论）: `findstr /i "Kept saved DEK decrypt failed decrypt-to-bytes" tmp\<日志>.txt`
+     - `Kept saved DEK for <id>: the file looks encrypted … (bytes=…, header=…)` ⇒ 隐藏时"加密被判成已加密 → DEK 白留库"
+     - `decrypt failed for <path> (bytes=…, header=…)` ⇒ 每次查看/取消隐藏时解密失败，**看 header 就能定性**：
+       `42 4d` = BMP、`49 49 2a 00` / `4d 4d 00 2a` = TIFF、`00 00 01 00` = ICO ⇒ **明文被误判成密文**（白名单缺这种格式）
+  ② 状态判据（设置页只读扫描）: 「修复加密记录」若把这两项计入 `consistent` 而不是 `stale`，
+     说明它与加密判定用的是同一个 `looksEncrypted` 误判 ⇒ **修不了**（这点必须知道，别白跑）
+- 根因: `MediaEncryptionService.looksEncrypted()` 是**明文白名单**反推（`_looksLikePlainMedia` 只认
+  JPEG / PNG / GIF8 / `ftyp@4` / RIFF+AVI·WEBP / WebM / MKV）。白名单外的明文媒体（BMP、TIFF、ICO、WBMP…）
+  被判为"密文"，于是：
+  - **隐藏导入**：`encryptFileWithDek` 先抛 `StateError('File already appears encrypted')`
+    （`media_encryption_service.dart:171-175`）⇒ catch 里回滚判据 `stillPlain = !looksEncrypted(...)` 是同一个误判 false
+    ⇒ 走 else **保留已落库的 DEK**（`import_service.dart:440-475`）⇒ **文件是明文、DB 记着 DEK**
+  - 之后 app 内一切"解密"路径全挂（AES-GCM auth tag 失败）：viewer / 播放器 / 幻灯片 / 缩略图海报生成 / 取消隐藏
+  - 取消隐藏旧构建里**照样把明文搬进相册**（`ISSUE-041`）⇒ 相册里能正常看、界面报失败 —— 用户看到的就是这个
+  - 同形状的历史来源（旧 bug 相关）：`MaintenanceService._repairEncryptionArtifacts`
+    把 `<name>.enc_bak`（**明文**备份）还原成主文件时**不清该行的 DEK**（`maintenance_service.dart:142-158`）
+- 证据:
+  - 用户实验：同一批里其他图正常；这 2 张导出到相册能正常看 ⇒ **库内文件内容是完好的明文**（真密文导出后不可能可读）
+  - `_looksLikePlainMedia` 签名清单见 `media_encryption_service.dart:335-373`（无 BMP/TIFF/ICO）
+  - 本轮新加诊断：`MediaEncryptionService.headerHex` / `lengthOrMinusOne` + 三处日志
+    （`decryptFile` 失败、`decryptToTempFileWithDek` 的 DEK 缺失与文件解密失败、`decryptFileToBytes` 失败），
+    另在 `import_service` 的"保留 DEK"分支与 `EncryptionRecordRepairService` 的孤儿分支打印 header + bytes
+- 修法（待定，两条路，**必须先拿到实际文件头/扩展名**）:
+  1. 补白名单（首选，副作用最小）：只加 **≥4 字节且碰撞概率可忽略**的签名 —— TIFF `49 49 2A 00` /
+     `4D 4D 00 2A` 安全；BMP 不能用 2 字节 `42 4D`（`PIT-050`），要 `42 4D` + offset 6 起 4 字节全 0 联合判断
+  2. 若格式确实无法可靠识别（例如 v1 裸密文也像）⇒ 在「修复加密记录」里加**显式**入口：
+     "这些项我确认打不开，按明文处理（清 DEK）"，由用户逐项确认（清 DEK 不可逆，必须由人拍板）
+- 反例 / 易误判:
+  - 把"打不开"一律当成"图片被加密 bug 弄坏了" —— 先看能否导出后正常打开：能打开就是**记录问题**，不是文件损坏
+  - 在 `stillPlain==false` 时**无条件**回滚 DEK（看着像"顺手修好"）：真密文会被孤儿化，属 `PIT-052` 级损坏
+  - 靠 2 字节签名（`BM` / `II`）来"修白名单"：误判成明文 ⇒ **二次加密** ⇒ 真丢数据（`PIT-050`）
+  - 以为「修复加密记录」能修它：扫描判据同源，会算成 `consistent`（见复发判据 ②）
+- 相关文件: `lib/data/services/media_encryption_service.dart`、`lib/data/services/import_service.dart`、
+  `lib/data/services/encryption_record_repair_service.dart`、`lib/data/services/maintenance_service.dart`（`_repairEncryptionArtifacts`）
+- 相关条目: `PIT-050`、`PIT-067`、`ISSUE-039`（同一状态的另一来源）、`ISSUE-030`、`ISSUE-041`、`ISSUE-042`
+- 首次记录: 2026-10-14（用户报"两张图隐藏后打不开、导出到相册正常"）
+
+## ISSUE-044 取消隐藏只报「失败」且日志全是 `Authentication failed`：隐藏时"已像密文→跳过加密"却把**新 DEK 留库**（密钥与文件内容不匹配）→ 新增「加解密修复」选择操作
+- 状态: 已修复（2026-10-14：新增「加解密修复」+ 补齐明文白名单）
+- 症状 / 现场: 用户报「取消隐藏失效；文件被移到常规相册后打不开」。日志
+  （`密册_log_2026-10-14.txt`，176 行，13:05:30–13:06:22）里
+  `[MediaEncryptionService] File decryption failed: Exception: Native decryption failed: Authentication failed: file may be corrupted or tampered with`
+  反复出现，紧跟 `[VaultRevealRunner] decrypt before reveal <id>`；UI 只有「失败 1 项」
+- 复发判据:
+  ① 日志级（5 秒定论）: `findstr /i "Kept saved DEK Authentication failed decrypt before reveal" tmp\<日志>.txt`
+     — 同一 id 既出现 `Kept saved DEK` 又出现 `Authentication failed` ⇒ 本条形态（DEK 与文件内容不匹配）
+  ② 代码级: `git grep -n "mediaCryptoRepairServiceProvider" -- lib/` 有命中 ⇒ 修复动作已落地
+- 根因（两步叠加，都不是"按钮坏了"）:
+  ① `ImportService._encryptRecordedFiles` 的顺序是「生成 DEK → 存 DB → 加密文件」(PIT-044)，而
+     `encryptFileWithDek` 在 `looksEncrypted(file)` 为真时抛
+     `StateError('File already appears encrypted')` ⇒ 隐藏导入时**新 DEK 落库、文件一个字节没动**；
+     catch 里的回滚判据 `stillPlain = !looksEncrypted(...)` 用的是**同一个误判**，于是走 else「保留 DEK」
+     （`import_service.dart:440-476`）
+  ② 之后该文件的所有解密路径（查看器 / 缩略图 / 幻灯片 / 取消隐藏）都拿这把**从未用过**的 DEK 去解，
+     AES-GCM auth tag 必然失败；`VaultRevealRunner._decryptIfNeeded` 抛错 ⇒ `reveal()` 按设计 `return false`
+     （「宁可不搬」，`ISSUE-029`④、`ADR-044`）⇒ 用户只看到"失败"
+  ⇒ 只要文件**在隐藏前就不是明文白名单里的格式**（真密文，或 BMP/TIFF 这类白名单外明文），就会进入这个状态
+- 证据（`密册_log_2026-10-14.txt`）:
+  - 13:06:03.939 `_encryptRecordedFiles failed for feea8dc6…: Bad state: File already appears encrypted: …/.privateheart_vault/我/5e5f0b54…`
+  - 13:06:03.940 `Kept saved DEK for feea8dc6…: the file is already encrypted even though the encrypt call failed`
+  - 13:06:03.982 / 07.896 / 09.355 / 10.721 / 16.682 / 18.262 全部 `Authentication failed`
+    （堆栈显示来自 `decryptToTempFileWithDek`，即"DEK 能解开、文件解不开"）
+  - 13:06:10.799 同一路径 `FileSystemException: File not found` ⇒ 文件已被原生批量搬运带出保险库
+    （用户机上还是 `ISSUE-041` ① 修复前的构建）⇒ 相册里留下未解密的字节，DB 行与 DEK 留在库里
+  - 13:06:18.262 `[ViewerScreen] Decrypt returned null for 7db8cfc8… — DEK or auth tag mismatch`（同一形态的第二个 id）
+  - 日志里 `decryptFile` 失败行**没有** `bytes=/header=` ⇒ 该 APK 早于 `ISSUE-043` 那批诊断改动（构建比工作区旧）
+- 修法（本轮）:
+  ① 新增文件选择操作「加解密修复」：**两个网格**的选择胶囊都加（`visible_media_grid` 可见 + `media_grid_screen` 私密）
+     → `lib/presentation/common/crypto_repair_action.dart`（互斥守卫 + 进度弹窗 + 分项结果汇总）
+     → `lib/data/services/media_crypto_repair_service.dart`，逐个文件：
+     明文嗅探 → 命中且 DB 有 DEK ⇒ **只清失效记录**（不碰文件）；否则按
+     「本行 DEK → 同名/同大小行的 DEK（≤6 个；>512 MiB 的文件只试本行）」逐个试解 →
+     成功则**原地原子替换 + 清 DEK**；全失败则保持原样，并把 `bytes=/header=` 落日志
+  ② 补齐明文白名单（`ISSUE-043` 的推荐路径）：`_looksLikePlainMedia` 增加 TIFF 族（`49 49 2A 00` / `4D 4D 00 2A`）、
+     BMP（`42 4D` + offset 6 起 4 字节全 0，不破 `PIT-050` 的"2 字节禁令"）、ASF/WMV GUID、`FLV\x01`；
+     并把 `looksEncrypted` 传给判定函数的缓冲区截成实读长度（原来是 32 字节零填充）
+  ③ 临时/备份文件用 `.enc_tmp-repair-<哈希>` / `<path>.enc_bak` ⇒ 保险库内崩溃可由
+     `MaintenanceService._repairEncryptionArtifacts` 自愈（`ISSUE-030`）；名字走哈希，不碰 255 字节上限（`PIT-061`）
+- 反例 / 易误判:
+  - 把「取消隐藏失败」当成权限/搬运问题 —— 先看日志有没有 `Authentication failed`；那是**密钥不匹配**
+  - 以为「修复」能把文件搬回来 ⇒ 它**只在原路径原地改写**，不搬文件、不改名
+  - 以为「修复」能救「密文 + 无 DEK」⇒ 没有任何钥匙可试，只会报 `noKey`（与 `ISSUE-039` 的孤儿同类）
+  - 在"明文误判"分支里顺手清 DEK 而不先确认文件头 —— 真密文会被孤儿化（`PIT-052` 级损坏）
+- 相关文件: `lib/data/services/media_crypto_repair_service.dart`（新增）、
+  `lib/presentation/common/crypto_repair_action.dart`（新增）、`lib/data/services/media_encryption_service.dart`、
+  `lib/presentation/grid/media_grid_screen.dart`、`lib/presentation/visible/visible_media_grid.dart`、
+  `lib/application/providers.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `ISSUE-041`（失败项仍被搬走）、`ISSUE-043`（同一状态的白名单来源）、`ISSUE-029`④、`ADR-044`、
+  `ADR-045`（本动作的设计取舍）、`PIT-044`、`PIT-051`、`PIT-064`
+- 首次记录: 2026-10-14（用户提供日志 + 需求「加解密修复」）

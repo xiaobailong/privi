@@ -24,6 +24,7 @@ import '../data/services/import_service.dart';
 import '../data/services/intent_service.dart';
 import '../data/services/key_backup_service.dart';
 import '../data/services/maintenance_service.dart';
+import '../data/services/media_crypto_repair_service.dart';
 import '../data/services/media_encryption_service.dart';
 import '../data/services/media_rename_service.dart';
 import '../data/services/media_store_service.dart';
@@ -170,6 +171,17 @@ final encryptionRecordRepairServiceProvider =
   );
 });
 
+/// Per-selection "加解密修复" — tries to decrypt / un-record the items the user
+/// selected in either grid (`MediaCryptoRepairService`).
+final mediaCryptoRepairServiceProvider =
+    Provider<MediaCryptoRepairService>((ref) {
+  return MediaCryptoRepairService(
+    encryption: ref.watch(mediaEncryptionServiceProvider),
+    keyManager: ref.watch(encryptionKeyManagerProvider),
+    repository: ref.watch(mediaRepositoryProvider),
+  );
+});
+
 final privacyShieldProvider = Provider<PrivacyShield>((ref) {
   return AndroidPrivacyShieldAdapter();
 });
@@ -217,6 +229,7 @@ final thumbnailCacheProvider = Provider<ThumbnailCache>((ref) {
       final tmp = await getTemporaryDirectory();
       return Directory(p.join(tmp.path, 'grid_thumbs'));
     },
+    cacheVersion: 2,
   );
   ref.onDispose(cache.clearMemory);
   return cache;

@@ -56,7 +56,18 @@ class GridThumbnailService {
       }
       return null;
     }
-    // Un-postered image (e.g. capped large file) — fall back to the original.
+    final encrypted = item.encryptedDek;
+    if (encrypted != null && encrypted.isNotEmpty) {
+      // Encrypted image without a poster — decrypt + generate instead of
+      // reading ciphertext that would decode to a black tile.
+      final generated = await _ensureVaultPoster(item);
+      if (generated != null && generated.isNotEmpty) {
+        final file = File(generated);
+        if (await file.exists()) return file.readAsBytes();
+      }
+      return null;
+    }
+    // Un-postered plaintext image — fall back to the original.
     final original = File(item.privatePath);
     if (await original.exists()) return original.readAsBytes();
     return null;

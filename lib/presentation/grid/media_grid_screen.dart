@@ -21,6 +21,7 @@ import '../../data/services/import/import_models.dart';
 import '../../domain/enums.dart';
 import '../../domain/models/album.dart';
 import '../../domain/models/media_item.dart';
+import '../common/crypto_repair_action.dart';
 import '../common/empty_state.dart';
 import '../common/floating_action_capsule.dart';
 import '../common/grid_app_menu.dart';
@@ -640,6 +641,43 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
     }
   }
 
+  /// Per-selection「加解密修复」.
+  ///
+  /// Recovers the shape that makes 取消隐藏 report a bare failure: the row's DEK
+  /// no longer matches the bytes on disk (`MediaCryptoRepairService`), so the
+  /// decrypt-before-reveal guard refuses to move the file out of the vault.
+  Future<void> _repairCryptoSelected() async {
+    final ids = ref.read(selectionControllerProvider).toList();
+    if (ids.isEmpty) return;
+    final all = ref.read(albumMediaProvider(widget.albumId)).asData?.value;
+    final selected = <MediaItem>[
+      for (final id in ids)
+        if (all != null)
+          for (final item in all)
+            if (item.id == id) item,
+    ];
+    if (selected.isEmpty) return;
+
+    final report = await runCryptoRepair(
+      context,
+      ref,
+      paths: [for (final item in selected) item.privatePath],
+    );
+    if (!mounted) return;
+
+    // Anything that ended up plaintext has a different poster now.
+    final plaintext = report?.plaintextPaths.toSet() ?? const <String>{};
+    if (plaintext.isNotEmpty) {
+      final thumbs = ref.read(gridThumbnailServiceProvider);
+      for (final item in selected) {
+        if (plaintext.contains(item.privatePath)) {
+          await thumbs.evictVault(item.id);
+        }
+      }
+    }
+    ref.read(selectionControllerProvider.notifier).clear();
+  }
+
   Future<void> _pickHeartLevels() async {
     final box = _heartsChipKey.currentContext?.findRenderObject() as RenderBox?;
     final overlay =
@@ -1186,6 +1224,11 @@ class _MediaGridScreenState extends ConsumerState<MediaGridScreen> {
                                     icon: Icons.visibility,
                                     label: context.l10n.unhide,
                                     onTap: _unhideSelected,
+                                  ),
+                                  FloatingActionItem(
+                                    icon: Icons.lock_reset,
+                                    label: context.l10n.repairCrypto,
+                                    onTap: _repairCryptoSelected,
                                   ),
                                   FloatingActionItem(
                                     icon: Icons.favorite,

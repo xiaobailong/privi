@@ -73,7 +73,11 @@ class MediaEncryptionService {
       secretKey: cryptography.SecretKey(kek),
       nonce: nonce,
     );
-    final combined = <int>[...nonce, ...secretBox.cipherText, ...secretBox.mac.bytes];
+    final combined = <int>[
+      ...nonce,
+      ...secretBox.cipherText,
+      ...secretBox.mac.bytes
+    ];
     return base64Encode(Uint8List.fromList(combined));
   }
 
@@ -194,6 +198,45 @@ class MediaEncryptionService {
 
   // ────────────────────── File decryption (native) ──────────────────────
 
+  // ────────────────────── Diagnostics ──────────────────────
+
+  /// First [count] bytes of [file] as spaced lowercase hex, for diagnostics.
+  ///
+  /// A decrypt failure is ambiguous: the file may be a real ciphertext whose DEK
+  /// is wrong, **or** a plaintext image in a format [_looksLikePlainMedia] does
+  /// not know (BMP / TIFF / …) that was mis-flagged as ciphertext — that shape
+  /// leaves the app unable to view a file the gallery opens fine (`ISSUE-043`).
+  /// Printing the header settles which one it is from the log alone.
+  /// Never throws.
+  static String headerHex(File file, {int count = 8}) {
+    try {
+      if (!file.existsSync()) return '-';
+      final raf = file.openSync(mode: FileMode.read);
+      try {
+        final buf = Uint8List(count);
+        final read = raf.readIntoSync(buf);
+        if (read <= 0) return '-';
+        return buf
+            .sublist(0, read)
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {
+      return '-';
+    }
+  }
+
+  /// Size of [file] in bytes, or -1 when it cannot be read.
+  static int lengthOrMinusOne(File file) {
+    try {
+      return file.existsSync() ? file.lengthSync() : -1;
+    } catch (_) {
+      return -1;
+    }
+  }
+
   /// Decrypt [filePath] to [destPath] using hardware-accelerated native crypto.
   ///
   /// Verifies AES-GCM auth tag.  Throws on failure.
@@ -216,6 +259,12 @@ class MediaEncryptionService {
     final ok = result['ok'] as bool? ?? false;
     if (!ok) {
       final err = result['error'] as String? ?? 'Unknown native crypto error';
+      AppLogger.e(
+        'MediaEncryptionService',
+        'decrypt failed for $filePath '
+            '(bytes=${lengthOrMinusOne(file)}, '
+            'header=${headerHex(file)}): $err',
+      );
       throw Exception('Native decryption failed: $err');
     }
 
@@ -263,13 +312,23 @@ class MediaEncryptionService {
     if (dek == null) {
       AppLogger.e('MediaEncryptionService',
           'DEK decryption failed — wrong KEK or corrupted DEK');
+      AppLogger.w(
+        'MediaEncryptionService',
+        'DEK unavailable — cannot tell ciphertext from plaintext for $filePath '
+            '(bytes=${lengthOrMinusOne(File(filePath))}, '
+            'header=${headerHex(File(filePath))})',
+      );
       return null;
     }
     try {
       return await decryptToTempFile(filePath: filePath, dek: dek);
     } catch (e, stack) {
       AppLogger.e(
-          'MediaEncryptionService', 'File decryption failed: $e\n$stack');
+        'MediaEncryptionService',
+        'File decryption failed for $filePath '
+            '(bytes=${lengthOrMinusOne(File(filePath))}, '
+            'header=${headerHex(File(filePath))}): $e\n$stack',
+      );
       return null;
     }
   }
@@ -290,6 +349,12 @@ class MediaEncryptionService {
     final ok = result['ok'] as bool? ?? false;
     if (!ok) {
       final err = result['error'] as String? ?? 'Unknown native crypto error';
+      AppLogger.e(
+        'MediaEncryptionService',
+        'decrypt-to-bytes failed for $filePath '
+            '(bytes=${lengthOrMinusOne(File(filePath))}, '
+            'header=${headerHex(File(filePath))}): $err',
+      );
       throw Exception('Native decryption failed: $err');
     }
 
@@ -301,9 +366,9 @@ class MediaEncryptionService {
   /// Heuristic: does [file] look already encrypted?
   ///
   /// Checks the file header against known plaintext media signatures
-  /// (JPEG, PNG, MP4, WebM, MKV).  If none match, the file is likely
-  /// encrypted.  Not 100 % reliable but safe enough to prevent double
-  /// encryption.
+  /// (JPEG, PNG, GIF, MP4/MOV `ftyp`, RIFF AVI/WebP, WebM, MKV, TIFF family,
+  /// BMP, ASF/WMV, FLV).  If none match, the file is likely encrypted.  Not
+  /// 100 % reliable but safe enough to prevent double encryption.
   bool looksEncrypted(File file) {
     if (!file.existsSync()) return false;
     final length = file.lengthSync();
@@ -317,13 +382,38 @@ class MediaEncryptionService {
         final read = raf.readIntoSync(bytes);
         raf.closeSync();
         if (read < _nonceLength + 16) return false;
-        return !_looksLikePlainMedia(bytes);
+        return !_looksLikePlainMedia(bytes.sublist(0, read));
       } catch (_) {
-        try { raf.closeSync(); } catch (_) {}
+        try {
+          raf.closeSync();
+        } catch (_) {}
         return true; // unreadable → treat as encrypted
       }
     } catch (_) {
       return true;
+    }
+  }
+
+  /// True when [file] starts with a known **plaintext** media signature.
+  ///
+  /// The inverse of [looksEncrypted], exposed for the selection repair action:
+  /// when decryption fails on such a file the bytes are plaintext that had been
+  /// mis-recorded as ciphertext, so the *record* has to be cleared instead of
+  /// trying to decrypt the file (`ISSUE-043`).
+  bool looksLikePlaintextMedia(File file) {
+    try {
+      if (!file.existsSync()) return false;
+      final raf = file.openSync(mode: FileMode.read);
+      try {
+        final buffer = Uint8List(32);
+        final read = raf.readIntoSync(buffer);
+        if (read < 4) return false;
+        return _looksLikePlainMedia(buffer.sublist(0, read));
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {
+      return false;
     }
   }
 
@@ -332,12 +422,18 @@ class MediaEncryptionService {
   /// Signatures are matched at ≥4 bytes so a random AES-GCM ciphertext cannot
   /// be mistaken for plaintext (a false "plaintext" verdict would re-encrypt an
   /// already-encrypted file).
+  ///
+  /// Formats outside a whitelist used to be treated as ciphertext, which left a
+  /// plaintext file with a saved DEK and blocked every decrypt path
+  /// (`ISSUE-043` — BMP / TIFF and friends).  They are covered here instead.
   static bool _looksLikePlainMedia(Uint8List bytes) {
-    final header = bytes.sublist(0, 8);
+    // Zero-pad short buffers so a 4-byte signature file does not crash here.
+    final header = Uint8List.fromList([
+      for (var i = 0; i < 8; i++) i < bytes.length ? bytes[i] : 0,
+    ]);
     // JPEG always starts with SOI marker FF D8 FF; the fourth byte varies
     // (E0=JFIF, E1=EXIF, E2=ICC, DB=quant, etc.).  Match only the first 3.
-    final commonJpeg =
-        Uint8List.fromList([0xFF, 0xD8, 0xFF]);
+    final commonJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF]);
     final commonPng =
         Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
     final commonGif = Uint8List.fromList([0x47, 0x49, 0x46, 0x38]); // 'GIF8'
@@ -353,6 +449,14 @@ class MediaEncryptionService {
     final commonWebm =
         Uint8List.fromList([0x1A, 0x45, 0xDF, 0xA3, 0x93, 0x42, 0x82, 0x88]);
     final commonMkv = Uint8List.fromList([0x1A, 0x45, 0xDF, 0xA3]);
+    // TIFF family ('II*\0' little endian / 'MM\0*' big endian): TIFF, CR2,
+    // NEF, DNG … are all TIFF-based, so one pair of signatures covers them.
+    final commonTiffLe = Uint8List.fromList([0x49, 0x49, 0x2A, 0x00]);
+    final commonTiffBe = Uint8List.fromList([0x4D, 0x4D, 0x00, 0x2A]);
+    // ASF container (WMV / WMA) GUID prefix.
+    final commonAsf =
+        Uint8List.fromList([0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11]);
+    final commonFlv = Uint8List.fromList([0x46, 0x4C, 0x56, 0x01]); // 'FLV\x01'
 
     if (_bytesMatch(header, commonJpeg)) return true;
     if (_bytesMatch(header, commonPng)) return true;
@@ -368,6 +472,25 @@ class MediaEncryptionService {
     }
     if (_bytesMatch(header, commonWebm)) return true;
     if (_bytesMatch(header, commonMkv)) return true;
+    if (bytes.length >= 4) {
+      if (_bytesMatch(bytes, commonTiffLe)) return true;
+      if (_bytesMatch(bytes, commonTiffBe)) return true;
+      if (_bytesMatch(bytes, commonFlv)) return true;
+    }
+    if (_bytesMatch(header, commonAsf)) return true;
+    // BMP is 'BM' in the first 2 bytes — far too weak on its own (`PIT-050`,
+    // a random 2-byte collision would "prove" plaintext and re-encrypt a
+    // ciphertext).  The 4-byte reserved field at offset 6 is always zero, so
+    // the match needs 6 constrained bytes and stays statistically safe.
+    if (bytes.length >= 10 &&
+        bytes[0] == 0x42 && // 'B'
+        bytes[1] == 0x4D && // 'M'
+        bytes[6] == 0x00 &&
+        bytes[7] == 0x00 &&
+        bytes[8] == 0x00 &&
+        bytes[9] == 0x00) {
+      return true;
+    }
 
     return false;
   }

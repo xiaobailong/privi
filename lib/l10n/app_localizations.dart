@@ -775,6 +775,42 @@ class AppLocalizations {
 
   String get repairEncryptionFailed => '修复失败，请重试。';
 
+  // ── Crypto repair for a **selection** (Visible / Invisible grid capsule) ──
+
+  /// Selection-capsule action: try to make the selected files consistent with
+  /// their encryption records (see `MediaCryptoRepairService`).
+  String get repairCrypto => '加解密修复';
+
+  String get repairCryptoRunning => '正在修复加密状态…';
+
+  String repairCryptoProgress(int current, int total, String name) =>
+      '第 $current / $total 项：$name';
+
+  String get repairCryptoNothingSelected => '请先选择要修复的文件。';
+
+  String get repairCryptoPathsUnresolved =>
+      '没能定位到所选文件的真实路径，无法修复（可改用「私密」里同一文件重试）。';
+
+  String get repairCryptoLocked => '保险库已锁定：请先解锁密册再修复密文文件。';
+
+  String repairCryptoDecrypted(int count) => '已解密 $count 个文件，现在可以正常查看。';
+
+  String repairCryptoRecordCleared(int count) =>
+      '已清除 $count 条失效加密记录（文件本身是明文，之前被误判成密文）。';
+
+  String repairCryptoKeyMismatch(int count) =>
+      '$count 个文件没能解密：记录里的密钥与文件内容不匹配（该文件很可能被另一把密钥加密过）。'
+      '文件保持原样，未做任何修改。';
+
+  String repairCryptoNoKey(int count) => '$count 个文件是密文但没有密钥记录：无法解密，请从备份恢复或删除。';
+
+  String repairCryptoMissing(int count) =>
+      '$count 个文件在保险库里已不存在（可能已被移到可见相册：请在那里选中它再修复一次）。';
+
+  String repairCryptoFailed(int count) => '$count 个文件修复失败，详情见应用日志。';
+
+  String get repairCryptoAlreadyPlain => '所选文件是明文且没有加密记录，无需修复。';
+
   String encryptingProgress(int current, int total) {
     return '正在加密，第 $current 项（共 $total 项）…';
   }

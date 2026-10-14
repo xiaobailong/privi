@@ -17,10 +17,12 @@ import '../../core/constants.dart';
 import '../../core/l10n.dart';
 import '../../core/media_thumbnail_spec.dart';
 import '../../core/theme/vault_colors.dart';
+import '../../core/utils/app_logger.dart';
 import '../../core/utils/media_chronology.dart';
 import '../../core/utils/media_query_utils.dart';
 import '../../data/services/import/import_models.dart';
 import '../../domain/enums.dart';
+import '../common/crypto_repair_action.dart';
 import '../common/floating_action_capsule.dart';
 import '../common/grid_app_menu.dart';
 import '../common/media_grid_scaffold.dart';
@@ -633,6 +635,70 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     return context.l10n.couldNotHideMedia;
   }
 
+  /// Per-selection「加解密修复」for files that live in a normal album.
+  ///
+  /// A hide that failed to encrypt (the file "already appears encrypted") leaves
+  /// the ciphertext in the album while the row keeps a DEK that never matched
+  /// it, so opening the file fails.  Repair runs in place on the album file:
+  /// resolve the real path (same resolver the hide flow uses — never a cache
+  /// export), then hand it to `MediaCryptoRepairService`.
+  Future<void> _repairCryptoSelected() async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final gallery = ref.read(galleryServiceProvider);
+
+    List<ImportSource> sources;
+    try {
+      sources = await gallery.resolveForHide(
+        ids,
+        sourceFolderName: widget.title,
+      );
+    } catch (error, stackTrace) {
+      AppLogger.e('VisibleMediaGrid',
+          'resolve paths for crypto repair: $error\n$stackTrace');
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(context.l10n.repairCryptoPathsUnresolved)),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (sources.isEmpty) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(context.l10n.repairCryptoPathsUnresolved)),
+      );
+      return;
+    }
+
+    final report = await runCryptoRepair(
+      context,
+      ref,
+      paths: [for (final source in sources) source.path],
+    );
+    if (!mounted) return;
+
+    if (report != null) {
+      // A decrypted file keeps its path but MediaStore still holds the entry it
+      // indexed from the ciphertext, and both grids cached a dark poster.
+      final mediaStore = ref.read(mediaStoreServiceProvider);
+      final thumbs = ref.read(gridThumbnailServiceProvider);
+      for (final path in report.plaintextPaths) {
+        await mediaStore.scanPath(path);
+      }
+      for (final id in ids) {
+        await thumbs.evictAsset(id);
+      }
+      if (report.decrypted > 0) {
+        try {
+          await _reload();
+        } catch (_) {}
+      }
+    }
+    _exitSelect();
+  }
+
   Future<void> _shareSelected() async {
     final ids = _selected.toList();
     if (ids.isEmpty) return;
@@ -935,6 +1001,11 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
                                     icon: Icons.visibility_off,
                                     label: context.l10n.hide,
                                     onTap: _hideSelected,
+                                  ),
+                                  FloatingActionItem(
+                                    icon: Icons.lock_reset,
+                                    label: context.l10n.repairCrypto,
+                                    onTap: _repairCryptoSelected,
                                   ),
                                   FloatingActionItem(
                                     icon: Icons.delete_outline,

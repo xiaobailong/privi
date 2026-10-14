@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' as io;
 
 import 'package:path/path.dart' as p;
 
@@ -178,7 +179,17 @@ class VaultRevealRunner {
       try {
         final dest = await _resolveTarget(item);
         if (dest == null) {
+          // Source missing / unreadable: previously this failed *silently*
+          // (only a count in the UI), which made "nothing reaches the album"
+          // impossible to diagnose (`ISSUE-041`).
+          AppLogger.w(
+            'VaultRevealRunner',
+            'reveal skipped ${item.id}: source missing at '
+                '${item.privatePath}',
+          );
           failed++;
+          lastError = 'missing_source';
+          lastErrorCode = ImportErrorCode.transferFailed;
           completed++;
           emit();
           continue;
@@ -235,16 +246,26 @@ class VaultRevealRunner {
 
       emit();
 
-      final results = await _batchResults(chunk);
+      // Blocked items still hold **ciphertext** in the vault (decryption was
+      // refused). They must never be handed to the native unhide — that would
+      // move the ciphertext into the gallery while the DB row (and its DEK)
+      // stays behind (`PIT-052`).
+      final movable = <_PreparedReveal>[
+        for (final job in chunk)
+          if (!blockedIds.contains(job.item.id)) job,
+      ];
+      final results = movable.isEmpty
+          ? const <MediaRenameResult>[]
+          : await _batchResults(movable);
       final byId = <String, MediaRenameResult>{};
       for (final result in results) {
         final id = result.clientId;
         if (id != null) byId[id] = result;
       }
       for (var index = 0;
-          index < chunk.length && index < results.length;
+          index < movable.length && index < results.length;
           index++) {
-        byId.putIfAbsent(chunk[index].item.id, () => results[index]);
+        byId.putIfAbsent(movable[index].item.id, () => results[index]);
       }
 
       final chunkOkIds = <String>[];
@@ -264,6 +285,16 @@ class VaultRevealRunner {
           failed++;
           lastError = native.error ?? 'transfer_failed';
           lastErrorCode = _errorCode(native);
+          // Without this line a failed unhide leaves no trace at all in the
+          // device log — only a failure count in the UI (`ISSUE-041`).
+          AppLogger.w(
+            'VaultRevealRunner',
+            'unhide failed ${job.item.id} (${job.item.originalName}): '
+                'error=${native.error ?? 'transfer_failed'} '
+                'method=${native.method} '
+                'needManageStorage=${native.needManageStorage} '
+                'dest=${job.destinationPath}',
+          );
         }
         completed++;
         emit(cancelled: session.isCancelled);
@@ -486,6 +517,29 @@ class VaultRevealRunner {
           'encryption services are unavailable');
     }
 
+    // A previous reveal may already have decrypted this file while the DB row
+    // kept its DEK (the native move failed afterwards).  Decrypting plaintext
+    // again fails the AEAD tag check and would block the item forever, so such
+    // items are revealed as-is.  The stale DEK is deliberately **not** cleared
+    // here (it may be the only key left for a ciphertext copy elsewhere) —
+    // 设置 → 修复加密记录 is the documented place that clears it (`ISSUE-039`).
+    final source = io.File(item.privatePath);
+    if (!await source.exists()) {
+      // Nothing to decrypt: let the native unhide report `missing_src` instead
+      // of pretending this was a plaintext file.
+      AppLogger.w('VaultRevealRunner',
+          'decrypt skipped ${item.id}: file missing at ${item.privatePath}');
+      return;
+    }
+    if (!encryptionService.looksEncrypted(source)) {
+      AppLogger.w(
+        'VaultRevealRunner',
+        'skip decrypt ${item.id}: already plaintext (row still records a DEK; '
+            'run 修复加密记录 to clean it up)',
+      );
+      return;
+    }
+
     final kek = keyManager.getKey();
     if (kek == null) {
       throw StateError('Encrypted item ${item.id} cannot be revealed: vault '
@@ -532,7 +586,9 @@ class VaultRevealRunner {
         await _files.delete(tempPath);
         rethrow;
       }
-      try { await _files.delete(bakPath); } catch (_) {}
+      try {
+        await _files.delete(bakPath);
+      } catch (_) {}
       AppLogger.d('VaultRevealRunner', 'Decrypted: ${item.privatePath}');
     } catch (e, stack) {
       AppLogger.e('VaultRevealRunner',

@@ -633,14 +633,33 @@ REM  返回值: GH_HAS_REPO_SCOPE=1 表示有 repo scope，0 表示无
 REM  仅在 GH_EXE 定义且已登录后调用
 REM ============================================
 :check_gh_scopes
+REM 写入临时文件一次性完成登录状态 + token scope 检查
+REM 返回: GH_LOGGED_IN=1, GH_HAS_REPO_SCOPE=0/1
+set "GH_LOGGED_IN=0"
 set "GH_HAS_REPO_SCOPE=0"
 if not defined GH_EXE goto :eof
-for /f "tokens=*" %%l in ('call "%GH_EXE%" auth status 2^>^&1 ^| findstr /i "Token.scopes"') do set "TOKEN_LINE=%%l"
+set "GH_AUTH_FILE=%TEMP%\privi_gh_auth.txt"
+"%GH_EXE%" auth status > "%GH_AUTH_FILE%" 2>&1
+set "GH_AUTH_RC=!ERRORLEVEL!"
+
+REM 检测登录状态：exit code 0 或文件包含 "Logged in"
+if !GH_AUTH_RC! equ 0 set "GH_LOGGED_IN=1"
+for /f "tokens=*" %%l in ('findstr /i "Logged.in" "%GH_AUTH_FILE%" 2^>nul') do set "GH_LOGGED_IN=1"
+if "!GH_LOGGED_IN!"=="0" (
+    del "%GH_AUTH_FILE%" 2>nul
+    set "GH_AUTH_FILE="
+    goto :eof
+)
+
+REM 检测 token scope
+for /f "tokens=*" %%l in ('findstr /i "Token.scopes" "%GH_AUTH_FILE%" 2^>nul') do set "TOKEN_LINE=%%l"
 if defined TOKEN_LINE (
     echo "!TOKEN_LINE!" | findstr /i "repo" >nul 2>&1
     if !ERRORLEVEL! equ 0 set "GH_HAS_REPO_SCOPE=1"
 )
+del "%GH_AUTH_FILE%" 2>nul
 set "TOKEN_LINE="
+set "GH_AUTH_FILE="
 goto :eof
 
 REM ============================================
@@ -723,14 +742,12 @@ if not defined GH_EXE (
 )
 echo       gh: !GH_EXE!
 
-call "%GH_EXE%" auth status >nul 2>&1
-if !ERRORLEVEL! neq 0 (
+call :check_gh_scopes
+if "!GH_LOGGED_IN!"=="0" (
     echo       [跳过] gh 未登录，无法自动发布。先登录一次:
     echo              gh auth login
     goto :eof
 )
-
-call :check_gh_scopes
 if "!GH_HAS_REPO_SCOPE!"=="0" (
     echo       [跳过] gh token 缺少 repo scope，无法操作 Release
     echo        授权方法: gh auth refresh -h github.com -s repo
