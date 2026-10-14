@@ -19,11 +19,8 @@ Thumbs.db
 *.iws
 .idea/
 
-# VS Code (keep shared settings, ignore user/workspace state)
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-!.vscode/launch.json
+# VS Code
+!.vscode/
 
 # Flutter/Dart/Pub
 **/doc/api/
