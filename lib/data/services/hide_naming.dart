@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:path/path.dart' as p;
 
 import '../../core/constants.dart';
@@ -10,6 +12,28 @@ import '../../core/constants.dart';
 abstract final class HideNaming {
   static const videoMarker = '.vid.pg';
   static const imageMarker = '.img.pg';
+
+  static final RegExp _encryptedNamePattern = RegExp(r'^[0-9a-f]{32}$');
+
+  /// Random, extension-less name for filename-encrypted media (`ADR-042`).
+  ///
+  /// 32 lowercase hex chars: **no dot**, so programs that scan by extension
+  /// cannot recognise the file, and far below the 255-byte per-name limit
+  /// (`ISSUE-034`).  This is the single source of truth — the import path
+  /// (`VaultStorageService.hiddenDestPath`) and the migration
+  /// (`FilenameEncryptionService`) both use it, so the format cannot drift.
+  static String encryptedFileName() {
+    final random = Random.secure();
+    final buffer = StringBuffer();
+    for (var i = 0; i < 16; i++) {
+      buffer.write(random.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
+  /// True when [name] was produced by [encryptedFileName].
+  static bool isEncryptedFileName(String name) =>
+      _encryptedNamePattern.hasMatch(name);
 
   static bool isLegacyMarkerPath(String path) {
     final base = p.basenameWithoutExtension(path);

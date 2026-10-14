@@ -74,22 +74,27 @@
 - 可选 `FLAG_SECURE` 防截图录屏，或应用预览遮挡
 - 可配离开后自动锁定时间
 - **AES-256-GCM 文件加密**（仿华为保密柜双层密钥架构）：
-  - 导入私密仓库的媒体文件自动加密；设置页可批量加密已有未加密文件
+  - 导入私密仓库的媒体文件自动加密；设置页可批量加密已有未加密文件、批量解密所有文件
   - KEK（密钥加密密钥）由用户密码经 PBKDF2 派生 → 加密保护 DEK（数据密钥，存数据库）→ DEK 加密媒体文件
-  - Android 硬件加速（AES-NI / ARMv8 crypto extensions），1MB 分块流式加解密
-  - 密钥仅存内存，锁屏时立即清除；KEK 持久化到 FlutterSecureStorage（Android Keystore 硬件保护）
+  - Android 硬件加速（AES-NI / ARMv8 crypto extensions），1 MiB 分块流式加解密，多队列并发批量处理
+  - 密钥仅存内存，锁屏时立即清除；KEK 持久化到 `FlutterSecureStorage`（Android Keystore 硬件保护），双后端容错
   - 临时文件 + 原子 rename，加解密中途崩溃不损坏原始文件
   - 向后兼容：无 `encrypted_dek` 的旧文件视为明文，正常浏览
+- **密钥备份与恢复**：导出密钥包（含 `encryptionSalt` + KEK），支持重装/换机后导入恢复密钥解密已有文件
+- **文件名加密**：将已加密文件的文件名改为随机字符串，隐藏原始文件名与扩展名，防止"按扩展名扫描"的程序认出文件类型（支持批量加密/恢复文件名）
+- **加密记录修复**：扫描并修复数据库加密标记与磁盘文件不一致的行（清除残留的失败加密记录）
 
 ### 导入与备份
 
 - 系统分享 Intent 导入、批量隐藏
 - 保险库完整导出 / 恢复（数据库 + 文件 + manifest 校验）
+- **密钥备份**：导出密钥包（`<pkg>_vault_key_backup.json`），含加密盐 + KEK，重装后可导入恢复密钥
 - 重装后重新索引隐藏目录媒体
 
 ### 维护工具
 
 - 孤文件扫描、EXIF 日期修复、媒体类型自动修正
+- 加密记录修复：扫描数据库加密标记与磁盘文件状态不一致的行，清除失败/残留的加密记录
 - 日志诊断：自动写入 `/Download/密册/logs/`，按天分卷，7 天自动清理
 - VDIAG 一行式视频诊断（容器/编码/解码器/首帧/丢帧），支持开关
 
@@ -113,6 +118,72 @@
 - `firstFrameRendered=false`、`renderedFrames=0` → 一帧未上屏（典型"拖进度条才有图"）
 - `vDecoder=... (software)` + 丢帧暴涨 → 软解跟不上
 - `VDIAG[stall-4s/8s/12s]` → 自愈动作记录，正常播放不应出现
+
+---
+
+## 数据与文件路径
+
+### 数据库
+
+| 路径 | 说明 |
+|------|------|
+| `<app_documents>/privi.sqlite` | SQLite 数据库（Drift，schema v9），存储媒体索引、相册、合集、播放记录、加密 DEK 等全部元数据 |
+
+> `<app_documents>` 为 Android `getApplicationDocumentsDirectory()` 返回的路径，通常为 `/data/data/com.privi.app/app_flutter/`。
+
+### 文件存储
+
+| 路径 | 说明 |
+|------|------|
+| `<app_documents>/vault/` | 应用私有仓库（`thumbs/` 缩略图、`share_staging/` 导入暂存、`media/` 媒体暂存、`staging/` 导出暂存） |
+| `/storage/emulated/0/.privateheart_vault/` | 共享存储隐藏根目录（隐藏的媒体文件存放于此，含 `.nomedia` 防系统媒体扫描；同一卷下 rename 即隐藏，无需拷贝） |
+
+### 密钥存储
+
+| 路径 | 说明 |
+|------|------|
+| Android Keystore（`FlutterSecureStorage`） | KEK 持久化存储，硬件保护，双后端写入防读取失败（ISSUE-031） |
+| `<app_documents>/vault/backup/` | 密钥备份包导出目录 |
+
+### 日志
+
+| 路径 | 说明 |
+|------|------|
+| `/storage/emulated/0/Download/密册/logs/` | 日志目录，按天分卷（`密册_log_YYYY-MM-DD.txt`），7 天自动清理 |
+
+---
+
+## 加解密架构
+
+### 双层密钥体系（仿华为保密柜）
+
+```
+用户密码/图案 ──PBKDF2──► KEK（密钥加密密钥）──加密──► DEK（数据密钥，存数据库）
+                                                              │
+                                                     AES-256-GCM │
+                                                              ▼
+                                                         媒体文件密文
+```
+
+- **KEK（Key Encryption Key）**：256 位，由用户密码/图案经 PBKDF2 派生，持久化到 `FlutterSecureStorage`（Android Keystore 硬件保护）。仅存内存，锁屏时立即清除
+- **DEK（Data Encryption Key）**：每个文件独立的 256 位随机密钥，由 KEK 加密后以 Base64 存数据库 `encrypted_dek` 字段
+- **文件加密**：DEK 经 AES-256-GCM 加密/解密媒体文件，使用 Android `javax.crypto.Cipher` 硬件加速（AES-NI / ARMv8 crypto extensions），1 MiB 分块流式处理
+- **文件格式（PRV2）**：`[nonce:12][ciphertext:N][auth_tag:16]`
+- **原子写入**：加解密先写临时文件，完成后原子 rename 替换，中途崩溃不损坏原始文件
+- **密钥管理**：修改密码/图案后自动旋转所有 DEK（用新 KEK 重新加密）；锁屏清除内存 KEK，解锁后从 SecureStorage 加载
+
+### 加解密服务
+
+| 服务 | 源码 | 职责 |
+|------|------|------|
+| `MediaEncryptionService` | `lib/data/services/media_encryption_service.dart` | 单文件加解密核心：DEK 生成、DEK 加解密（Dart cryptography 库）、文件加解密调度 |
+| `NativeCryptoService` | `lib/data/services/native_crypto_service.dart` | 通过 MethodChannel 桥接 Android `CryptoHandler.kt`（`javax.crypto.Cipher`） |
+| `BatchEncryptionService` | `lib/data/services/batch_encryption_service.dart` | 批量加密已有明文文件（设置页「加密已有文件」），多队列并发，支持暂停/恢复 |
+| `BatchDecryptionService` | `lib/data/services/batch_decryption_service.dart` | 批量解密恢复明文（设置页「解密所有文件」），DEK 先解密后清除，崩溃安全 |
+| `FilenameEncryptionService` | `lib/data/services/filename_encryption_service.dart` | 文件名加密/恢复：将文件名改为随机字符串，隐藏原始文件名与扩展名 |
+| `EncryptionKeyManager` | `lib/data/services/encryption_key_manager.dart` | KEK 生命周期管理（派生、持久化、加载、清除），双 SecureStorage 后端容错 |
+| `KeyBackupService` | `lib/data/services/key_backup_service.dart` | 密钥包导出/导入（含 `encryptionSalt` + KEK），支持重装后恢复密钥解密已有文件 |
+| `EncryptionRecordRepairService` | `lib/data/services/encryption_record_repair_service.dart` | 修复加密记录不一致（DB 标记已加密但文件为明文等），设置页「清除失败加密记录」 |
 
 ---
 
@@ -199,11 +270,14 @@ adb install -r -d privi-<version>.apk # 允许版本号降级
 ### 项目结构
 
 ```
-├── app/src/main/kotlin/  # Android 原生代码（ExoPlayer、隐私保护等）
+├── app/src/main/kotlin/  # Android 原生代码（CryptoHandler 硬件加解密、ExoPlayer、隐私保护等）
 ├── lib/
 │   ├── application/      # 业务逻辑控制器（Riverpod）
-│   ├── core/             # 工具、主题、常量
-│   ├── data/             # 数据层（Drift DB、仓库、服务）
+│   ├── core/             # 工具、主题、常量、路径定义（VaultPaths）
+│   ├── data/
+│   │   ├── db/           # Drift 数据库（schema v9：媒体索引、DEK 等）
+│   │   ├── repositories/ # 仓库层
+│   │   └── services/     # 服务层（加解密、导入导出、备份、维护）
 │   ├── domain/           # 领域模型
 │   ├── l10n/             # 多语言资源
 │   └── presentation/     # UI 页面和组件

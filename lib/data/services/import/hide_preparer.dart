@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../../repositories/album_repository.dart';
 import '../../repositories/media_repository.dart';
 import '../hide_naming.dart';
+import '../encryption_key_manager.dart';
 import '../media_kinds.dart';
 import '../media_store_service.dart';
 import '../vault_storage_service.dart';
@@ -65,6 +66,7 @@ class HidePreparer {
     required MediaStoreService mediaStore,
     required FileSystemGateway fileSystem,
     required AssetGateway assetGateway,
+    EncryptionKeyManager? encryptionKeyManager,
     Uuid? uuid,
   })  : _storage = storage,
         _media = mediaRepository,
@@ -72,6 +74,7 @@ class HidePreparer {
         _mediaStore = mediaStore,
         _files = fileSystem,
         _assets = assetGateway,
+        _encryptionKeyManager = encryptionKeyManager,
         _uuid = uuid ?? const Uuid();
 
   final VaultStorageService _storage;
@@ -80,8 +83,23 @@ class HidePreparer {
   final MediaStoreService _mediaStore;
   final FileSystemGateway _files;
   final AssetGateway _assets;
+
+  /// Decides whether the file name is encrypted on import (`ADR-042`).
+  final EncryptionKeyManager? _encryptionKeyManager;
+
   final Uuid _uuid;
   final Map<String, String> _folderAlbumCache = {};
+
+  /// True when the media being prepared will be encrypted right away — then its
+  /// file name is encrypted, too.
+  ///
+  /// The test is "is the vault key loaded **now**".  Preparation and the
+  /// encryption pass that follows run in the same unlocked session, so the
+  /// answer matches; importing while the vault is locked keeps a readable name
+  /// next to the plaintext, which is exactly what "encrypt existing files" (and
+  /// its "encrypt file names" option) expects to find later.
+  bool get _shouldEncryptFileName =>
+      _encryptionKeyManager?.getKey() != null;
 
   void beginBatch() => _folderAlbumCache.clear();
 
@@ -129,6 +147,9 @@ class HidePreparer {
       id: id,
       originalName: originalName,
       sourceFolder: folderName,
+      // Encrypt the name only when we know the file will be encrypted right
+      // away, so a locked-vault import keeps a readable name (ADR-042).
+      encryptFileName: _shouldEncryptFileName,
     );
     final albumId =
         targetUserAlbumId ?? await _resolveMirrorAlbumId(folderName);

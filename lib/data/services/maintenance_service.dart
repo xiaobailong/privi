@@ -608,7 +608,12 @@ class MaintenanceService {
   }
 
   static bool _looksLikeMedia(String name) =>
-      MediaKinds.isKnown(name) || HideNaming.isLegacyMarkerPath(name);
+      MediaKinds.isKnown(name) ||
+      HideNaming.isLegacyMarkerPath(name) ||
+      // Filename-encrypted media has a random, extension-less name (ADR-042):
+      // extension sniffing cannot recognise it, and without this a reinstall
+      // repair would leave those files behind in the vault forever.
+      HideNaming.isEncryptedFileName(name);
 
   /// True for videos by container extension (or legacy `.vid.pg` marker).
   static bool _isVideoName(String path) =>

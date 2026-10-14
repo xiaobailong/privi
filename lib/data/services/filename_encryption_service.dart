@@ -1,11 +1,11 @@
 import 'dart:io';
-import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
 import '../../core/utils/app_logger.dart';
 import '../../domain/models/media_item.dart';
 import '../repositories/media_repository.dart';
+import 'hide_naming.dart';
 
 /// Per-item result of one "encrypt this file name" attempt.
 enum FilenameRenameOutcome {
@@ -85,26 +85,21 @@ class FilenameEncryptionService {
 
   final MediaRepository _repository;
 
-  static final RegExp _encryptedNamePattern = RegExp(r'^[0-9a-f]{32}$');
-  static final Random _random = Random.secure();
-
-  /// Queue-count bounds, same reasoning as [BatchEncryptionService] (the work is
+  /// Queue-count bounds, same reasoning as `BatchEncryptionService` (the work is
   /// a rename + a DB write, so it is cheap but IO-bound).
   static const int minQueues = 4;
   static const int maxQueues = 16;
 
   /// True when [fileName] already is a random hex name (32 lowercase hex chars).
+  ///
+  /// Delegates to [HideNaming.isEncryptedFileName] so the import path and this
+  /// migration always agree on the format (`ADR-042`).
   static bool isEncryptedName(String fileName) =>
-      _encryptedNamePattern.hasMatch(fileName);
+      HideNaming.isEncryptedFileName(fileName);
 
-  /// 32 hex chars (128 random bits), no extension.
-  static String generateName() {
-    final buffer = StringBuffer();
-    for (var i = 0; i < 16; i++) {
-      buffer.write(_random.nextInt(256).toRadixString(16).padLeft(2, '0'));
-    }
-    return buffer.toString();
-  }
+  /// 32 hex chars (128 random bits), no extension — see
+  /// [HideNaming.encryptedFileName].
+  static String generateName() => HideNaming.encryptedFileName();
 
   /// The items of [encryptedItems] whose file name is still readable.
   static List<MediaItem> pendingItems(List<MediaItem> encryptedItems) =>

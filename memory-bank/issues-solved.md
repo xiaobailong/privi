@@ -1402,3 +1402,34 @@
   `ISSUE-030`（并发写同一文件）、`PIT-034`（原子替换）、`ISSUE-032`（解密内存上限）
 - 首次记录: 2026-10-13（用户需求）
 
+
+## ISSUE-040 导入私密相册即"加密文件名"（ADR-042 阶段 2 落地）
+- 状态: 已实现（待真机复核）
+- 需求 / 现场: 导入时不只加密内容，还要**同时加密文件名** —— 否则"密文 + 原扩展名"仍会被
+  按扩展名扫描的程序认出这是媒体。
+- 判据（5 秒定论）: 导入若干文件后看保险库目录：文件名应是 **32 位 hex、无扩展名**；
+  DB 里 `private_path` 指向随机名、`original_name` 仍是原名（查看/播放/还原不受影响）。
+  静态判据: `git grep -n "encryptedFileName" -- lib/` 应命中 `hide_naming.dart` /
+  `vault_storage_service.dart` / `filename_encryption_service.dart`；
+  `git grep -n "isEncryptedFileName" -- lib/data/services/maintenance_service.dart` 必须有命中。
+- 实现:
+  ① 命名**唯一来源**：`HideNaming.encryptedFileName()` / `isEncryptedFileName()`（32 hex、无点、无扩展名）；
+     `FilenameEncryptionService.isEncryptedName/generateName` 改为委托它，避免两套格式漂移。
+  ② `VaultStorageService.hiddenDestPath(..., encryptFileName: bool)`：true → 随机名（含 5 次碰撞重试，
+     避免同卷 rename 覆盖同名文件）；false → 保持 `<id8>_<原名>`。
+  ③ `HidePreparer` 注入 `EncryptionKeyManager`，判据 = **准备时 KEK 是否已在内存**：
+     已解锁导入 → 随机名（随后必定加密）；保险库锁定导入 → 保留可读名（明文状态保持可读更合理，
+     之后在「加密已有文件」勾「加密文件名」即可补做，`ISSUE-038`）。
+  ④ 配套改动（换命名必须同步，否则静默漏文件，见 `PIT-065`）：
+     - `maintenance_service._looksLikeMedia`：把"32 位随机名"也算媒体候选 ⇒ 否则**重装恢复会漏掉**这些文件；
+     - `vault_backup_export`：包内文件名原用 `p.extension(privatePath)`，随机名没有扩展名 ⇒ 退回
+       `originalName` 的扩展名（恢复只认 manifest，不影响正确性，只为包内条目可读）。
+- 已知限制: 随机名孤儿（重装后没有 DB 行）无法判断图片/视频（`_isVideoName` 依赖扩展名）⇒ 恢复时按图片处理；
+  若以后需要，可在恢复前用文件头嗅探定类型。
+- 相关文件: `lib/data/services/hide_naming.dart`、`lib/data/services/vault_storage_service.dart`、
+  `lib/data/services/import/hide_preparer.dart`、`lib/data/services/import_service.dart`、
+  `lib/data/services/maintenance_service.dart`、`lib/data/services/vault_backup_export.dart`
+- 相关条目: `ADR-042`（阶段 2）、`ISSUE-038`（历史文件的迁移/补做）、`ISSUE-034`（长名上限，随机名根除）、
+  `PIT-065`（换命名要同步"按名字识别"的地方）
+- 首次记录: 2026-10-13（用户需求）
+

@@ -113,10 +113,20 @@ class VaultStorageService {
   }
 
   /// Destination path for a hide move under the .nomedia vault.
+  ///
+  /// [encryptFileName] picks a random, extension-less name (`ADR-042`) instead
+  /// of `<id8>_<originalName>`.  Callers pass `true` when the file is about to
+  /// be encrypted, so the name never leaks the media type or the original
+  /// title; the readable name lives in the database
+  /// (`media_items.original_name`), which display, playback and restore use.
+  ///
+  /// Note: this is the Android shared-directory path.  `privateMediaFileFor`
+  /// (iOS app-private storage) still uses readable names.
   Future<String> hiddenDestPath({
     required String id,
     required String originalName,
     required String? sourceFolder,
+    bool encryptFileName = false,
   }) async {
     final root = await ensureHiddenRoot();
     final folder = HideNaming.sanitizeFolder(sourceFolder);
@@ -125,6 +135,16 @@ class VaultStorageService {
       await dir.create(recursive: true);
       final nm = File(p.join(dir.path, VaultPaths.nomedia));
       if (!await nm.exists()) await nm.create();
+    }
+    if (encryptFileName) {
+      // Retry on the (astronomically unlikely) name clash: renaming onto an
+      // existing file would silently replace it.
+      for (var attempt = 0; attempt < 5; attempt++) {
+        final candidate = p.join(dir.path, HideNaming.encryptedFileName());
+        if (!await File(candidate).exists()) return candidate;
+      }
+      AppLogger.w('VaultStorageService',
+          'no free random name in ${dir.path}; falling back to a readable one');
     }
     final safeName = p.basename(originalName).replaceAll(RegExp(r'[\\/]'), '_');
     // Prefix id to avoid collisions when restoring multiple same names.

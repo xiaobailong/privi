@@ -69,6 +69,8 @@ class ImportService implements VaultWorkflow {
           mediaStore: _mediaStore,
           fileSystem: _fileSystem,
           assetGateway: _assetGateway,
+          // Lets the preparer encrypt the file name on import (ADR-042).
+          encryptionKeyManager: encryptionKeyManager,
           uuid: uuid,
         );
     _transferRunner = transferRunner ??

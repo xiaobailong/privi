@@ -1163,3 +1163,24 @@
   要么能被维护功能一键修回；日志出现 `kept stale DEK … (repairable)` 属**预期**（不是故障）
 - 首次记录: 2026-10-13（`ISSUE-039`）
 
+
+## PIT-065 换"保险库文件名规则"时，必须同步所有"按文件名识别媒体"的地方
+- 触发条件: 把 vault 内文件命名从 `<id8>_<原名>.<ext>` 换成随机无扩展名（`ADR-042` 阶段 2 / `ISSUE-040`），
+  或任何会去掉扩展名的改名动作
+- 错误现象（漏改的后果都是"静默漏文件"）:
+  - `maintenance_service._looksLikeMedia` 仍按扩展名筛选 ⇒ **随机名文件永远不被重装恢复**，
+    一直躺在 vault 里占空间（表现为"重装后少了一部分文件"）；
+  - `vault_backup_export` 用 `p.extension(privatePath)` 组包内文件名 ⇒ 备份里出现一堆无扩展名的 `<uuid>`（人工不可读）；
+  - `_isVideoName` 之类按扩展名分视频/图片 ⇒ 随机名一律当图片（孤儿恢复场景表现为视频打不开/无缩略图）
+- 正确做法:
+  - 命名格式只留**一个来源**（本仓库：`HideNaming.encryptedFileName()` / `isEncryptedFileName()`），
+    导入、迁移、恢复、备份都调它；
+  - 改命名后逐个复核：`p.extension(`、`basenameWithoutExtension`、`MediaKinds.isKnown/isVideoName`、
+    以及 `_looksLikeMedia` 这类"没有 DB 行时的猜测"；
+  - 判断类型优先用 **DB 的 `mime_type` / `is_video`**；没有 DB 行时退化为内容嗅探，或明确报告"未知"而不是猜
+- 反例（别这么写）: 只改导入路径的命名就发布；补一个"按扩展名判断"的分支当兜底；
+  在恢复/导出里硬编码 `.jpg` / `.mp4` 猜测
+- 自检: 改完命名后做一次「重装恢复」演练（或看 `recoverVaultFiles` 的日志计数）——
+  随机名文件数应被统计到；备份包解开后条目名仍带扩展名
+- 首次记录: 2026-10-13（`ISSUE-040`）
+

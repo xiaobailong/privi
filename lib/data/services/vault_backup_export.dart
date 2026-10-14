@@ -190,7 +190,13 @@ final class _VaultBackupExporter {
         row.originalName,
       );
       final id = _validatedBackupId(row.id, 'media id');
-      final fileName = '$id${p.extension(row.privatePath)}';
+      // Filename-encrypted media has no extension (ADR-042): fall back to the
+      // stored original name so the archive entry stays recognisable.  Restore
+      // uses the manifest, never this name.
+      final extension = p.extension(row.privatePath);
+      final fileName = extension.isNotEmpty
+          ? '$id$extension'
+          : '$id${p.extension(row.originalName)}';
       _validateBackupName(fileName);
       if (!names.add(fileName)) {
         throw VaultBackupException(
