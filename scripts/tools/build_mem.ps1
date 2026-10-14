@@ -154,7 +154,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($JavaHome)) { $JavaHome = $env:JAVA_HOME }
     if ([string]::IsNullOrWhiteSpace($LogFile)) {
         $root = $ProjectRoot
-        if ([string]::IsNullOrWhiteSpace($root) -and $PSScriptRoot) { $root = Split-Path -Parent $PSScriptRoot }   # scripts\ -> project root
+        if ([string]::IsNullOrWhiteSpace($root) -and $PSScriptRoot) { $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }   # scripts\tools\ -> scripts\ -> project root
         if ([string]::IsNullOrWhiteSpace($root)) { $root = (Get-Location).Path }
         $LogFile = Join-Path $root 'build\mem_report.log'
     }

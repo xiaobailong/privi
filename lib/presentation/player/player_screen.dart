@@ -87,6 +87,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   VideoFitMode _fitMode = VideoFitMode.fit;
   double _playbackSpeed = 1;
   bool _muted = false;
+  bool _looping = false;
   bool? _lastImmersive;
   bool? _lastKeepScreenOn;
   String? _orientationLockedItemId;
@@ -199,6 +200,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (video != null) unawaited(video.setVolume(muted ? 0 : 1));
   }
 
+  void _setLooping(bool looping) {
+    setState(() => _looping = looping);
+    final video = _nVideo;
+    if (video != null) unawaited(video.setLooping(looping));
+  }
+
   /// 原生侧**刚起播**就报"播完"（起播竞态，见 `ISSUE-023`）：不算播完。
   ///
   /// 重建播放器并从当前位置继续（本屏的播放状态归播放列表控制器，所以只走
@@ -278,7 +285,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     NativeVideoController controller, {
     required bool playing,
   }) async {
-    await controller.setLooping(false);
+    await controller.setLooping(_looping);
     await controller.setVolume(_muted ? 0 : 1);
     if (playing) {
       await controller.play();
@@ -1219,6 +1226,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             value: value,
             landscape: landscape,
             fitMode: _fitMode,
+            looping: _looping,
             hasPrevious: playlist?.hasPrev == true,
             hasNext: playlist?.hasNext == true,
             onPrevious: () =>
@@ -1231,6 +1239,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             onToggleOrientation: () => unawaited(_toggleOrientation(context)),
             onChooseFit: () => unawaited(_chooseFit()),
             onOpenSettings: () => unawaited(_openSettings(ui)),
+            onToggleLooping: () => _setLooping(!_looping),
           );
         },
       ),

@@ -490,8 +490,6 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
       onPlaybackSpeedChanged: _setPlaybackSpeed,
       muted: _muted,
       onMutedChanged: _setMuted,
-      looping: _looping,
-      onLoopingChanged: _setLooping,
     );
   }
 
@@ -724,6 +722,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
           value: value,
           landscape: landscape,
           fitMode: _fitMode,
+          looping: _looping,
           hasPrevious: _hasPrevious,
           hasNext: _hasNext,
           onPrevious: () => unawaited(_showItem(_index - 1)),
@@ -733,6 +732,7 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
           onToggleOrientation: () => unawaited(_toggleOrientation(context)),
           onChooseFit: () => unawaited(_chooseFit()),
           onOpenSettings: () => unawaited(_openSettings()),
+          onToggleLooping: () => _setLooping(!_looping),
         ),
       ),
     );

@@ -674,8 +674,6 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       onPlaybackSpeedChanged: _setPlaybackSpeed,
       muted: _muted,
       onMutedChanged: _setMuted,
-      looping: _looping,
-      onLoopingChanged: _setLooping,
       onOpenExternal:
           externalSupported ? () => unawaited(_openExternal()) : null,
       rating: _current.rating,
@@ -1020,6 +1018,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
             value: value,
             landscape: landscape,
             fitMode: _fitMode,
+            looping: _looping,
             hasPrevious: _hasPrevious,
             hasNext: _hasNext,
             onPrevious: () => unawaited(_showItem(_index - 1)),
@@ -1029,6 +1028,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
             onToggleOrientation: () => unawaited(_toggleOrientation(context)),
             onChooseFit: () => unawaited(_chooseFit()),
             onOpenSettings: () => unawaited(_openSettings()),
+            onToggleLooping: () => _setLooping(!_looping),
           );
         },
       ),

@@ -186,6 +186,7 @@ class NativeVideoBottomControls extends StatefulWidget {
     required this.value,
     required this.landscape,
     required this.fitMode,
+    required this.looping,
     required this.hasPrevious,
     required this.hasNext,
     required this.onPrevious,
@@ -195,11 +196,13 @@ class NativeVideoBottomControls extends StatefulWidget {
     required this.onToggleOrientation,
     required this.onChooseFit,
     required this.onOpenSettings,
+    required this.onToggleLooping,
   });
 
   final NativeVideoValue value;
   final bool landscape;
   final VideoFitMode fitMode;
+  final bool looping;
   final bool hasPrevious;
   final bool hasNext;
   final VoidCallback onPrevious;
@@ -209,6 +212,7 @@ class NativeVideoBottomControls extends StatefulWidget {
   final VoidCallback onToggleOrientation;
   final VoidCallback onChooseFit;
   final VoidCallback onOpenSettings;
+  final VoidCallback onToggleLooping;
 
   @override
   State<NativeVideoBottomControls> createState() =>
@@ -339,6 +343,15 @@ class _NativeVideoBottomControlsState extends State<NativeVideoBottomControls> {
                   ),
                   _iconButton(
                     context,
+                    icon: Icons.repeat,
+                    tooltip: context.l10n.loopVideo,
+                    color: widget.looping
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.white,
+                    onPressed: widget.onToggleLooping,
+                  ),
+                  _iconButton(
+                    context,
                     icon: Icons.settings_outlined,
                     tooltip: context.l10n.playerSettings,
                     onPressed: widget.onOpenSettings,
@@ -369,6 +382,8 @@ class _NativeVideoBottomControlsState extends State<NativeVideoBottomControls> {
     required String tooltip,
     required VoidCallback? onPressed,
     double size = 26,
+    Color color = Colors.white,
+    Color disabledColor = Colors.white24,
   }) {
     return Expanded(
       child: SizedBox(
@@ -376,8 +391,8 @@ class _NativeVideoBottomControlsState extends State<NativeVideoBottomControls> {
         child: IconButton(
           icon: Icon(icon, size: size),
           tooltip: tooltip,
-          color: Colors.white,
-          disabledColor: Colors.white24,
+          color: color,
+          disabledColor: disabledColor,
           onPressed: onPressed,
         ),
       ),
@@ -449,8 +464,6 @@ Future<void> showVideoSettingsSheet(
   required ValueChanged<double> onPlaybackSpeedChanged,
   required bool muted,
   required ValueChanged<bool> onMutedChanged,
-  bool? looping,
-  ValueChanged<bool>? onLoopingChanged,
   bool? shuffle,
   ValueChanged<bool>? onShuffleChanged,
   VoidCallback? onOpenExternal,
@@ -469,8 +482,6 @@ Future<void> showVideoSettingsSheet(
       onPlaybackSpeedChanged: onPlaybackSpeedChanged,
       muted: muted,
       onMutedChanged: onMutedChanged,
-      looping: looping,
-      onLoopingChanged: onLoopingChanged,
       shuffle: shuffle,
       onShuffleChanged: onShuffleChanged,
       onOpenExternal: onOpenExternal,
@@ -488,8 +499,6 @@ class _VideoSettingsSheet extends StatefulWidget {
     required this.onPlaybackSpeedChanged,
     required this.muted,
     required this.onMutedChanged,
-    this.looping,
-    this.onLoopingChanged,
     this.shuffle,
     this.onShuffleChanged,
     this.onOpenExternal,
@@ -503,8 +512,6 @@ class _VideoSettingsSheet extends StatefulWidget {
   final ValueChanged<double> onPlaybackSpeedChanged;
   final bool muted;
   final ValueChanged<bool> onMutedChanged;
-  final bool? looping;
-  final ValueChanged<bool>? onLoopingChanged;
   final bool? shuffle;
   final ValueChanged<bool>? onShuffleChanged;
   final VoidCallback? onOpenExternal;
@@ -519,7 +526,6 @@ class _VideoSettingsSheetState extends State<_VideoSettingsSheet> {
   late int _seekSeconds = widget.seekSeconds;
   late double _playbackSpeed = widget.playbackSpeed;
   late bool _muted = widget.muted;
-  late bool? _looping = widget.looping;
   late bool? _shuffle = widget.shuffle;
   late int? _rating = widget.rating;
 
@@ -619,16 +625,6 @@ class _VideoSettingsSheetState extends State<_VideoSettingsSheet> {
                   widget.onMutedChanged(value);
                 },
               ),
-              if (_looping != null && widget.onLoopingChanged != null)
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(context.l10n.loopVideo),
-                  value: _looping!,
-                  onChanged: (value) {
-                    setState(() => _looping = value);
-                    widget.onLoopingChanged!(value);
-                  },
-                ),
               if (_shuffle != null && widget.onShuffleChanged != null)
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
