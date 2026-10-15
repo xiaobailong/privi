@@ -10,10 +10,14 @@
 #  not affected, which is why this helper exists.
 #
 #  VERSION SCHEME (see memory-bank ADR-026)
-#    pubspec.yaml holds a plain three-part version - `version: 1.0.59` - with no
-#    `+<build>` suffix any more, so every build bumps the last number:
-#    1.0.59 -> 1.0.60. The Android versionCode is derived from that version name
-#    in android/app/build.gradle.kts (major*10000 + minor*100 + patch).
+#    pubspec.yaml holds a plain three-part version - `version: 1.0.99` - with no
+#    `+<build>` suffix any more. Every build bumps the patch; when a segment hits
+#    100 it carries to the next higher one:
+#    1.0.99  -> 1.1.0
+#    1.99.99 -> 2.0.0
+#    99.99.99 -> 100.0.0
+#    The Android versionCode is derived from that version name in
+#    android/app/build.gradle.kts (major*10000 + minor*100 + patch).
 #
 #  USAGE
 #    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tools\bump_version.ps1
@@ -49,8 +53,24 @@ try {
         exit 4
     }
 
-    $old = '' + [int]$m.Groups[1].Value + '.' + [int]$m.Groups[2].Value + '.' + [int]$m.Groups[3].Value
-    $new = '' + [int]$m.Groups[1].Value + '.' + [int]$m.Groups[2].Value + '.' + ([int]$m.Groups[3].Value + 1)
+    $major = [int]$m.Groups[1].Value
+    $minor = [int]$m.Groups[2].Value
+    $patch = [int]$m.Groups[3].Value
+
+    $old = "$major.$minor.$patch"
+
+    $patch += 1
+    if ($patch -ge 100) {
+        $patch = 0
+        $minor += 1
+    }
+    if ($minor -ge 100) {
+        $minor = 0
+        $major += 1
+    }
+    # major is the highest position but IS allowed to cross 100.
+
+    $new = "$major.$minor.$patch"
     $newLine = 'version: ' + $new
 
     # Never trust the replace: read the version back from the new line.
