@@ -186,6 +186,18 @@
 | ADB 拉设备日志后不清理 ⇒ 下次新旧混杂 / ADB 路径/日志路径速查 | `PIT-070` |
 | `adb` 不在 PATH / PowerShell 里不知道怎么调 | `PIT-071`（ADB 全路径 + call 运算符） |
 | `adb logcat` 抓不到 app 日志 / 排查时拿不到业务错误 | `PIT-072`（日志在文件系统，不走 logcat） |
+| 构建打印 `√ Built …app-release.apk` 却报「构建失败！Flutter exit code=-196608」 | `ISSUE-045`、`PIT-073`、`PIT-074` |
+| 构建成功但根目录没生成 `privi-<版本>.apk` / 没发布 Release | `ISSUE-045`、`ISSUE-007` |
+| 日志 [4/7] 段出现 `to the -File parameter does not exist` | `ISSUE-045`、`PIT-073` |
+| 批处理 `shift` 之后 `%~dp0` 指到当前目录（工具脚本找不到） | `PIT-073`、`ISSUE-045` |
+| `( )` 块内 `%ERRORLEVEL%` 取到旧值（假成功 / 假失败） | `PIT-007`、`ISSUE-045` |
+| 构建日志冒出 `'xxx' is not recognized …` 碎片（注释行被切半） | `PIT-075`、`ADR-046` |
+| `build.bat` 什么时候用 `SCRIPT_DIR` / `!ERRORLEVEL!` / 硬失败 | `ADR-046` |
+| 视频底栏「循环播放」点了没反应（viewer / 可见库预览单视频不循环） | `ISSUE-046`、`ADR-031` |
+| VLC 引擎进度条一打开就满格、不随播放变化（`VDIAG[dart-position-stall]` 且 position=duration） | `ISSUE-047`、`ISSUE-009`、`ISSUE-023`（区分） |
+| 同一文件 exo 引擎正常、vlc 引擎进度条卡住（两引擎位置口径不一致） | `ISSUE-047` |
+| 循环/打开视频后画面不刷新、一直显示沙漏（转圈）图标，点一下才出现 | `ISSUE-048`、`PIT-033` |
+| 有缩略图/播放区的视频"沙漏不消失"、日志里没有 `Native value changed` | `ISSUE-048` |
 
 
 

@@ -196,6 +196,16 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
   /// during playback.
   static const int _kSeekAxisProbeNudgeMs = 300;
 
+  /// 超过这个前导偏移（1 小时）就**不做**实测 seek。
+  ///
+  /// `_probeSeekAxis()` 的 nudge 用的是 **content 坐标**，而 32 位 PTS 回绕那种
+  /// 前导偏移是十几个小时（`ISSUE-009` 实测 ≈ 47,720,499 ms）—— 两者差几个数量级，
+  /// 实测会把 input seek 到"文件起点之前"：回读值随机（起点 / 刚设进去的 nudge 值），
+  /// 既可能打断刚起播的画面，又会把坐标系误判成 content ⇒ 之后每次拖动进度条都
+  /// 按错坐标系落点（见 `ISSUE-048` 的日志）。原生 `getPosition()` 报的就是时间轴
+  /// 位置，`seekTo` 与它同坐标系 ⇒ 这种文件直接认定 timeline 轴，不实测。
+  static const int _kProbeOffsetCeilingMs = 60 * 60 * 1000;
+
   /// Media-timeline position that maps onto content position 0, or 0 when the
   /// clip has no leading offset.
   int get timelineOffsetMs => _timelineOffsetMs;
@@ -557,6 +567,15 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     if (_seekAxisProbed || _disposed || _timelineOffsetMs <= 0) return;
     _seekAxisProbed = true;
     final offset = _timelineOffsetMs;
+    // 前导偏移远大于片长时不做实测 seek：见 [_kProbeOffsetCeilingMs]。
+    if (offset > _kProbeOffsetCeilingMs) {
+      AppLogger.i(
+        'VideoPlayer.diag',
+        'VDIAG[seek-axis] offset=${offset}ms is far beyond the clip: assuming '
+            'the timeline axis without a probe seek, textureId=$textureId',
+      );
+      return;
+    }
     final raw = await _rawPositionMs();
     if (raw == null || _disposed) return;
     final contentNow = raw - offset <= 0 ? 0 : raw - offset;
@@ -772,8 +791,21 @@ class NativeVideoController extends ValueNotifier<NativeVideoValue> {
     });
   }
 
+  /// 循环播放**不在原生层实现**。
+  ///
+  /// libVLC 的 input 播完就彻底结束，没有「从头再来」的开关；ExoPlayer 侧也没
+  /// 接 `setLooping`。三个播放界面的「单视频循环」一律由界面在 `onCompleted`
+  /// 里自己落：重建原生播放器并从 0 起播（`ADR-031` 的「重建式重播」）。
+  ///
+  /// 这里保留空实现（只写一条日志）是为了让界面的统一调用点不报错；**不要**
+  /// 把循环寄希望于它 —— `viewer_screen` / `gallery_preview_screen` 正是因此
+  /// 漏了 `_looping` 分支、点了循环按钮毫无反应（见 `ISSUE-046`）。
   Future<void> setLooping(bool looping) async {
-    // Not directly supported by our simple player; ignore for now
+    AppLogger.d(
+      'VideoPlayer',
+      'setLooping($looping): looping is owned by the UI, the native input has '
+          'no loop flag, textureId=$textureId',
+    );
   }
 
   @override

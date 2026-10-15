@@ -267,6 +267,19 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
   /// 播放列表页（`PlayerScreen`，从「播放」入口进的那个）仍然连播，不受这里影响。
   void _onNativeVideoEnded(String itemId) {
     if (!mounted) return;
+    // 回调是异步来的：中途用户可能已经滑到别的 asset，别给别人的 id 记账。
+    if (_current.id != itemId) return;
+    if (_looping) {
+      // 控制栏的「循环播放」不是原生开关（`setLooping` 是空实现），单视频循环
+      // 只能在这里落：播完立刻重建播放器、从 0 起播（与 `PlayerScreen` 同一策略，
+      // 见 `ADR-031` / `ISSUE-046`）。
+      AppLogger.i(
+        'GalleryPreviewScreen',
+        'Looping enabled: replaying from the beginning: $itemId',
+      );
+      unawaited(_replayFromPosition(Duration.zero));
+      return;
+    }
     AppLogger.i(
       'GalleryPreviewScreen',
       'Video ended, staying on this item (no auto-advance): $itemId',
@@ -625,15 +638,27 @@ class _GalleryPreviewScreenState extends ConsumerState<GalleryPreviewScreen>
         ),
       );
     }
-    if (_current.isVideo && video != null && video.value.isInitialized) {
-      return GestureDetector(
-        onTap: _toggleChrome,
-        // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、查看器共用同一实现）。
-        child: VideoSwipeSeekLayer(
-          controller: video,
-          itemId: _current.id,
-          onSeek: _seekTo,
-          child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+    if (_current.isVideo && video != null) {
+      // `initialized` 是**异步事件**（比 `_loadCurrentBody` 里那次 setState 晚到），
+      // 在 build 里读 `value` 快照会让转圈图标一直不消失、直到用户点一下屏幕
+      // （`_toggleChrome` → setState）才出现画面 ⇒ 必须订阅 value（见 `ISSUE-048`）。
+      // `child:` 让 Texture 子树在位置刷新时不重建。
+      return ValueListenableBuilder<NativeVideoValue>(
+        valueListenable: video,
+        builder: (context, value, child) => value.isInitialized
+            ? child!
+            : const Center(
+                child: CircularProgressIndicator(color: Colors.white54),
+              ),
+        child: GestureDetector(
+          onTap: _toggleChrome,
+          // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、查看器共用同一实现）。
+          child: VideoSwipeSeekLayer(
+            controller: video,
+            itemId: _current.id,
+            onSeek: _seekTo,
+            child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+          ),
         ),
       );
     }

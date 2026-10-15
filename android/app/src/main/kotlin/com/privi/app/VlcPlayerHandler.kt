@@ -642,7 +642,7 @@ class VlcPlayerHandler(
                 ))
             }
             MediaPlayer.Event.TimeChanged -> {
-                val newPos = clampPosition(mp.time)
+                val newPos = sanitizePosition(mp.time)
                 if (newPos != lastPositionMs) {
                     lastPositionMs = newPos
                 }
@@ -673,11 +673,17 @@ class VlcPlayerHandler(
     }
 
     /**
-     * durationMs 未知时（仍是 0）不要按它裁剪，否则 position 会被永久压成 0。
+     * 只保证非负，**不**按 `durationMs` 裁剪上界。
+     *
+     * 上界裁剪会把「媒体时间轴越界的位置」压成 `durationMs`，而 Dart 侧
+     * `_contentPositionMs()` 正是靠 `raw > duration` 来识别带前导偏移的文件
+     * （见 `ISSUE-009`）、记下 `timelineOffset`、并据此决定 `seekTo` 的坐标系。
+     * 在这里压平之后，Dart 每个采样都恰好等于 duration：进度条从打开起就满格、
+     * 不随播放变化（`VDIAG[dart-position-stall]`，见 `ISSUE-047`）。
+     * ExoPlayer 侧的 `VideoPlayerHandler.getPosition()` 从不裁剪，口径以它为准。
      */
-    private fun clampPosition(positionMs: Long): Long =
-        if (durationMs > 0) positionMs.coerceIn(0L, durationMs)
-        else positionMs.coerceAtLeast(0L)
+    private fun sanitizePosition(positionMs: Long): Long =
+        positionMs.coerceAtLeast(0L)
 
     private fun logSourceFile(filePath: String) {
         try {
@@ -728,10 +734,13 @@ class VlcPlayerHandler(
             logW("seekTo ignored: no player for textureId=$textureId")
             return
         }
-        val clamped = clampPosition(positionMs)
-        mp.time = clamped
-        lastPositionMs = clamped
-        pendingSeekMs = clamped
+        // 同样**不**做上界裁剪：Dart 传进来的可能是「时间轴坐标」（含前导偏移，
+        // 数值天然大于 duration），压到 duration 会让每次拖动都跳到结尾
+        // （见 `ISSUE-047`）。越界交给 libVLC 自己处理。
+        val target = sanitizePosition(positionMs)
+        mp.time = target
+        lastPositionMs = target
+        pendingSeekMs = target
         logD("seekTo: textureId=$textureId, positionMs=$positionMs")
     }
 
@@ -772,7 +781,9 @@ class VlcPlayerHandler(
     override fun getPosition(): Long {
         if (isEnded) return lastPositionMs
         val mp = mediaPlayer ?: return 0L
-        return clampPosition(mp.time)
+        // 不裁剪上界：Dart 侧要靠「越过 duration 的原始值」识别时间轴偏移
+        // （见 [sanitizePosition] / `ISSUE-047`）。
+        return sanitizePosition(mp.time)
     }
 
     override fun getDuration(): Long {

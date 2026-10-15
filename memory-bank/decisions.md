@@ -681,7 +681,11 @@
     （b）拖到中间再按播放应从中途继续；（c）进度条不应弹回结尾；
     日志应出现 `Replaying finished video from <N>ms (recreating native player)` +
     新的 `Creating native player` / `onPlaying`。
-- 首次记录: 2026-10-10
+  - **「循环播放」也属于本条**（追加 2026-10-14，见 `ISSUE-046`）：`NativeVideoController.setLooping()`
+    是空实现（原生 libVLC / ExoPlayer 都没有循环开关），单视频循环只能在**三个界面各自的 `onCompleted`**
+    里用「重建 + 从 0 起播」实现 —— 新增播放界面时**必须**照抄这段分支，
+    只改一个界面就会出现"点了循环按钮毫无反应"（日志里只有 `Video ended, staying on this item`）。
+- 首次记录: 2026-10-10 ／ 追加约束: 2026-10-14（`ISSUE-046`：循环播放同属本条）
 
 ## ADR-032 单击打开的视频播完**停在最后一帧**，不自动切下一个（只有「播放」入口的播放列表页连播）
 - 日期: 2026-10-10 | 状态: 已采纳
@@ -1187,5 +1191,31 @@
   `lib/presentation/grid/media_grid_screen.dart`、`lib/presentation/visible/visible_media_grid.dart`、
   `lib/application/providers.dart`
 - 相关条目: `ISSUE-044`、`ISSUE-041`、`ISSUE-043`、`ISSUE-039`、`ISSUE-030`、`ADR-037`、`ADR-044`、`PIT-034`、`PIT-061`、`PIT-064`
+- 首次记录: 2026-10-14
+
+## ADR-046 build.bat 的「确定性路径 + 硬失败 + 退出码透传」三条约定
+- 日期 2026-10-14 | 状态: 已采纳
+- 背景: `ISSUE-045`：tee 包装器 `--log` 重启 + `shift` 让 `%~dp0` 变成"当前目录"，导致 [4/7] 的看门狗脚本路径指错
+  （PowerShell `-File` 返回 `-196608`）；又因块内 `%ERRORLEVEL%` 是解析期取值，这个码一路冒充"flutter 的退出码"
+  ⇒ 明明 `√ Built` 却判"构建失败"，APK 不复制、Release 不发布；同时辅助脚本缺失时是"警告 + 跳过"（`ISSUE-011` 同类静默降级），
+  且脚本对外退出码恒为 0（包装器结尾裸 `exit /b`，内层结果被丢掉）。
+- 决策:
+  ① **路径去魔法**：文件开头（任何 `shift`、任何分支之前）固化 `SCRIPT_DIR` / `PROJECT_ROOT`，
+     全文不再出现裸 `%~dp0`（含 `cd /d "%PROJECT_ROOT%"`、`GRADLE_USER_HOME`、包装器日志路径）；
+  ② **缺脚本 = 硬失败**：5 个辅助 ps1（`build_hash` / `build_pub_get` / `build_wmi_guard` / `build_mem` / `bump_version`）
+     任一缺失 ⇒ 启动自检直接 `[错误]` + `BUILD_FAILED=1` + 终止（不再"找不到就跳过"）；
+     [4/7] 调用前再单独 `if not exist` 兜一层，并把 `-196608` 明确解释出来；
+  ③ **退出码只用 `!ERRORLEVEL!`**：凡在 `( )` 块内读取，一律延迟展开（`PIT-007`）；
+  ④ **结果要透传**：包装器 `finally` 里 `exit $LASTEXITCODE`，脚本退出码必须等于内层结果（0/1）。
+- 理由: 路径与退出码是"判定构建成功/失败"的基础设施；这里宁可失败得响亮，也不能静默降级或误报
+  （误报的代价 = 用户以为没编出来，实际 APK 已生成但没有复制/发布）。
+- 备选与为何不选: ① 保留 `%~dp0` 但禁用 `shift`（要重写全部参数分发，改动面大且满文件 `%~1`）；
+  ② 只把出问题的那一行写死绝对路径（治标，换个 cwd 或下次编辑再踩）；
+  ③ 继续用"警告 + 跳过"处理缺失脚本（历史证明会被忽略，`ISSUE-011`）。
+- 影响 / 约束（后续改动必须注意）:
+  - 新增辅助脚本要同步进 `build.bat` 的自检清单（并放进 `scripts\tools\`）；
+  - 改完 `build.bat` 先跑 `ISSUE-045` 的复发判据 ①②；
+  - **不要在 `build.bat` 运行期间改写它**（cmd 按字节偏移续读，会把新文件的片段当命令执行，见 `PIT-075`）。
+- 相关条目: `ISSUE-045`、`ISSUE-011`、`ISSUE-007`、`PIT-007`、`PIT-073`、`PIT-074`、`PIT-075`、`ADR-027`（构建由用户手工执行）
 - 首次记录: 2026-10-14
 

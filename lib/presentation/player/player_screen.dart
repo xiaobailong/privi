@@ -673,6 +673,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               'playing=${ui.playing}, '
               'next=${pl?.peekNext()?.id ?? 'none'}',
         );
+        if (_looping) {
+          // 循环播放：不推进播放列表，直接从头重建播放器。
+          // 这样进度条会自然回到 0，而不需要手动操作 NativeVideoController。
+          AppLogger.d('PlayerScreen', 'Looping: restarting video from beginning');
+          _replayItemId = item.id;
+          _replayStartMs = 0;
+          unawaited(_disposeNativeVideo());
+          unawaited(_loadVideo(item, true, force: true));
+          return;
+        }
         ref.read(playerControllerProvider.notifier).onItemCompleted();
       };
       // 起播竞态（原生 input 刚起来就报结束）不是真的播完：重建播放器继续，

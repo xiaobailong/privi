@@ -70,6 +70,13 @@
   退出码用 `set "RC=%ERRORLEVEL%"` 再判断，或用 `if errorlevel` 结构
 - 反例: `&` 链里 `%FL%` / `( ... %ERRORLEVEL% ... )` 块内读 `%ERRORLEVEL%`
 - 自检: 变量/退出码判断是否"永远走同一分支"
+- 复核 2026-10-14（同一个坑以"假失败/假成功"的形式又中一次，详见 `ISSUE-045`）:
+  最小复现——`cmd /c exit /b 7` 之后进 `( )` 块，块内 `set "S=%ERRORLEVEL%"` 得到的是 **7**（进块前的值），
+  `set "S=!ERRORLEVEL!"` 才是块内刚跑完那条命令的值；实测：`[块内] STALE=7 FRESH=0`。
+  事故链：`powershell -File <不存在的脚本>` 退出码 **-196608** → `set PUB_EXIT=%ERRORLEVEL%` 取到进块前的 0
+  ⇒ 打出"pub get 完成。"（静默放过）⇒ `echo > file` 不重置 ERRORLEVEL，-196608 一路留到后面块里的
+  `set BUILD_EXIT=%ERRORLEVEL%` ⇒ 被当成 flutter 的退出码 ⇒ `√ Built` 却报"构建失败"。
+  结论：**凡是在 `( )` 块里读退出码，一律 `!ERRORLEVEL!`**（`build.bat` 已全文整改，见 `ISSUE-045`）。
 
 ## PIT-008 本环境终端抓不到命令输出 ⇒ 一律重定向到文件再读；且**一次只发一条命令链**
 - 触发条件: 用终端跑命令并想直接看结果
@@ -256,7 +263,13 @@
 - 反例: 用 `findstr`/`search_codebase` 零命中就下结论「知识库里没有」「仓库里没有」——
   这是**假阴性**，中文关键词尤其危险
 - 自检: 用一个"已知一定存在"的词做正控（例如在你刚写下的行里搜），确认检索手段本身有效
-- 首次记录: 2026-09-22
+- 复核 2026-10-14（本轮实测）: `search_codebase` 这次能在 30s 内返回，但**命中大量 `.gradle_home/.tmp/`
+  里的二进制缓存**（Gradle 下载物里恰好含 `repeat` / `background-repeat` 这类词），真实业务代码结果被淹没 ——
+  即"超时"之外的第二种坑：**假阳性噪声**。搜 Dart/Kotlin 代码时直接用
+  `Get-ChildItem -Path lib -Recurse -Filter *.dart | Select-String -Pattern '<关键词>' -Encoding UTF8`
+  （限定目录 + `-Encoding UTF8`，一次就够，还能直接给出 `文件:行:内容`）；
+  本仓库根下同时存在 `.gradle_home/`、`build/`、`android/.gradle/`，任何"全仓库"检索都要先把它们排除
+- 首次记录: 2026-09-22 ／ 最近复核: 2026-10-14（假阳性噪声：命中的是 `.gradle_home/.tmp/`）
 
 ## PIT-020 `flutter analyze` / `dart analyze` 在本机「看起来卡住」+ 长输出读不到最新内容
 - 触发条件: 想用静态分析校验 Dart 改动，并把输出重定向到文件后再读
@@ -488,7 +501,14 @@
   # ② 先整篇 read_files、再要子区间 ⇒ [outdated - see the latest file content]
   ```
 - 自检: 输出的行号/行首内容与 `git grep -n` 给的行号对得上；报 `Missing type name` 就是踩了 ②
-- 首次记录: 2026-10-10
+- 补充（2026-10-14 实测，比上面更省事的写法）: 直接用 `run_commands` 跑**一条纯 PowerShell**
+  （**不要**再嵌一层 `powershell -Command` —— 那才是 `$l` 被外层展开的根源），自增计数器顺带打印行号，
+  多段用 `-or` 合并条件即可：
+  ```powershell
+  $p='lib\data\services\native_video_controller.dart'; $i=0; Get-Content -Encoding UTF8 $p | ForEach-Object { $i++; if ($i -ge 528 -and $i -le 545) { "{0}: {1}" -f $i, $_ } }
+  ```
+  本次一整个任务（4 个文件、十几个区间）都用它，零失败；`read_files` 只有**第一次**读某文件时才可靠
+- 首次记录: 2026-10-10 ／ 最近复核: 2026-10-14（改用不嵌套的 `run_commands` + 行号计数器，稳定）
 
 ## PIT-031 `File.readAsBytesSync()` 读整个文件只为了判断头部 → OOM（35GB 文件直接崩）
 - 触发条件: 用 `readAsBytesSync()` / `readAsBytes()` 读文件，只为了检查前几个字节的魔数
@@ -1310,3 +1330,49 @@
 - 自检: hunk 行号里**不含**自己新增的行区间 ⇒ 自己的代码是干净的（本次结果：l10n 只有 1 处自己写脏，已单行化修复）
 - 相关: `PIT-062`、`PIT-066`、`PIT-014`（`dart.exe` 全路径）
 - 首次记录: 2026-10-14（落地「加解密修复」时的静态自测）
+
+## PIT-073 `shift` 会改 `%0` ⇒ 之后 `%~dp0` 变成"当前目录"，不再是脚本目录
+- 触发条件: 批处理里 `shift` 过参数（`build.bat` 的 tee 包装器用 `--log` 重启自己 → 内层 `shift`），
+  之后**在顶层**（`goto :label` 到的流程）用 `%~dp0` / `%~f0` 拼路径
+- 错误现象: 路径指到 `<cwd>\...` 而不是脚本目录 ⇒ 找不到同目录的辅助脚本；
+  PowerShell `-File` 报 `does not exist` 并返回 **-196608**（见 `PIT-074`）。
+  实测：脚本在 `...\scripts\`、cwd 也是 `...\scripts\` 时，`cd /d "%~dp0.."` 之后 `%~dp0` 变成 `...\privi\`
+- 正确做法: 文件开头（**任何 `shift`、任何分支之前**）先固化：
+  ```
+  for %%i in ("%~dp0.") do set "SCRIPT_DIR=%%~fi\"
+  for %%i in ("%~dp0..") do set "PROJECT_ROOT=%%~fi"
+  ```
+  之后全文只用 `%SCRIPT_DIR%` / `%PROJECT_ROOT%`（含 `cd /d "%PROJECT_ROOT%"`、日志路径、`GRADLE_USER_HOME`）
+- 反例（别这么写）: `shift` 之后在顶层写 `-File "%~dp0tools\x.ps1"`、`cd /d "%~dp0.."`、`set "X=%~dp0..\build"`
+- 自检（5 秒）: ① `findstr /c:"%~dp0tools" scripts\build.bat` 必须**无输出**；
+  ② 最小复现：probe.bat 里 `shift` 前后各 echo 一次 `[%~dp0]`，`cmd /c "probe.bat --log"` 会看到 shift 后是 cwd；
+  ③ 注意 `call :label` 内部 `%~dp0` **反而正常**（cmd 会把 `%0` 恢复成脚本路径）——所以"子例程里没问题"
+  不能证明顶层也没问题，必须单独看顶层那几行
+- 相关: `ISSUE-045`、`PIT-074`、`ADR-046`
+
+## PIT-074 `powershell -File <不存在的脚本>` 的退出码是 **-196608**（0xFFFD0000）
+- 触发条件: 拼错的路径（或路径被 `shift`/cwd 破坏）传给 `-File`；脚本实际不存在
+- 错误现象: 新起一个 PowerShell 进程，打印 banner + `The argument '<路径>' to the -File parameter does not exist...`，
+  然后**退出码 = -196608**；如果调用方没检查退出码，就会把这个数当成"上一步的退出码"或忽略掉
+- 正确做法: ① 调用前 `if not exist "<ps1>" ( echo [错误] ... & set BUILD_FAILED=1 & goto :end )`；
+  ② 拿到 -196608 就按"防护脚本根本没启动"处理（不要当成普通失败码），并在日志里点明
+- 反例（别这么写）: `powershell -File "%~dp0tools\x.ps1"` 之后直接 `set RC=%ERRORLEVEL%`（块内还会取到旧值，见 `PIT-007`）
+- 自检: `cmd /c "powershell -NoProfile -File <不存在的路径> & echo RC=%ERRORLEVEL%"` ——
+  直接看控制台里的 RC（`cmd /c` 一行里 `%ERRORLEVEL%` 会解析期展开，写进 .bat 或用 `!ERRORLEVEL!` 才准）
+- 相关: `ISSUE-045`、`PIT-073`
+
+## PIT-075 批处理运行期间**不要改写同一个 .bat**；也别在开头堆长中文注释（cmd 可能把整行切成两半当命令执行）
+- 触发条件: ① 一边有批处理在跑（含结尾 `timeout /t 60` 的等待期），一边用工具重写同一个 `.bat`；
+  ② 往 `.bat` 开头新加较长的中文 `REM` 块（UTF-8 **无 BOM**）
+- 错误现象: 日志里冒出 `'xxx' is not recognized as an internal or external command,`——
+  `xxx` 是**某条注释行的后半截**（碎片起点常常正好落在多字节字符中间，渲染成乱码）；
+  批处理本身还能继续跑完（属"噪声"），但极易把人带偏
+- 正确做法: ① 改写 `.bat` 前确认没有同名进程在跑（尤其是带 `timeout` 的收尾阶段）；
+  ② 新增注释尽量短、且**不要把大段中文说明堆在文件开头**（长解释写进 `memory-bank`/`docs`）；
+  ③ 改动后跑一次，用自检确认碎片消失（见下）
+- 反例（别这么写）: 构建还在 `timeout` 等待时用编辑器保存 `build.bat`；在 `.bat` 头部加 10 行中文注释块
+- 自检: `Select-String <日志> -Pattern 'is not recognized|cannot find the file'` **应无匹配**
+  （`build.bat` 改动后自测就是这么验的：把头部注释缩成 1 行后碎片从 2 条降到 0 条）
+- 状态: ② 的**精确根因未定位**（已确认文件本身没有多余换行、无异常控制字符；
+  怀疑与 cmd 解析 UTF-8 无 BOM 批处理时的行偏移有关），先用"缩短头部中文注释"规避
+- 相关: `ISSUE-045`、`ADR-046`

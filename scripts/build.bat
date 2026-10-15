@@ -2,17 +2,21 @@
 chcp 65001 > nul 2>&1
 setlocal enabledelayedexpansion
 
+REM ---- SCRIPT_DIR / PROJECT_ROOT：见 memory-bank/issues-solved.md ISSUE-045 ----
+for %%i in ("%~dp0.") do set "SCRIPT_DIR=%%~fi\"
+for %%i in ("%~dp0..") do set "PROJECT_ROOT=%%~fi"
+
 REM ============================================
 REM  Log tee: restart self via PowerShell so all
 REM  output goes to both console and build_full.log
 REM ============================================
 if "%~1" NEQ "--log" (
-    if not exist "%~dp0..\build" mkdir "%~dp0..\build" 2>nul
+    if not exist "%PROJECT_ROOT%\build" mkdir "%PROJECT_ROOT%\build" 2>nul
     powershell -NoProfile -Command ^
         "$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [Text.Encoding]::UTF8; " ^
         "$utf8NoBom = [Text.UTF8Encoding]::new($false); " ^
-        "$sw = [System.IO.StreamWriter]::new('%~dp0..\build\build_full.log', $false, $utf8NoBom); $sw.AutoFlush = $true; " ^
-        "try { cmd /c '%~f0 --log %*' 2>&1 | ForEach-Object { Write-Host $_; $sw.WriteLine($_) } } finally { $sw.Close() }"
+        "$sw = [System.IO.StreamWriter]::new('%PROJECT_ROOT%\build\build_full.log', $false, $utf8NoBom); $sw.AutoFlush = $true; " ^
+        "try { cmd /c '%~f0 --log %*' 2>&1 | ForEach-Object { Write-Host $_; $sw.WriteLine($_) } } finally { $sw.Close(); exit $LASTEXITCODE }"
     exit /b
 ) else (
     shift
@@ -60,7 +64,7 @@ set "ANDROID_HOME=D:\Tools\DevTools\Android\Sdk"
 set "ANDROID_SDK_ROOT=D:\Tools\DevTools\Android\Sdk"
 set "PUB_HOSTED_URL=https://pub.flutter-io.cn"
 set "FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn"
-set "GRADLE_USER_HOME=%~dp0..\.gradle_home"
+set "GRADLE_USER_HOME=%PROJECT_ROOT%\.gradle_home"
 
 REM ---- 代理检测（Clash 默认端口 7890） ----
 set "PROXY_HOST="
@@ -68,7 +72,7 @@ set "PROXY_PORT="
 set "PROXY_AVAILABLE=0"
 REM 通过 netstat 检查本地代理端口是否在监听
 netstat -ano 2>nul | findstr /r "127\.0\.0\.1:7890.*LISTENING" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
+if !ERRORLEVEL! equ 0 (
     set "PROXY_HOST=127.0.0.1"
     set "PROXY_PORT=7890"
     set "PROXY_AVAILABLE=1"
@@ -81,15 +85,34 @@ if "%PROXY_AVAILABLE%"=="1" (
 set "PATH=%JAVA_HOME%\bin;%FLUTTER_HOME%\bin;%ANDROID_HOME%\platform-tools;%PATH%"
 
 REM ---- 切换到项目根目录 ----
-cd /d "%~dp0.."
-if %ERRORLEVEL% neq 0 (
-    echo [错误] 无法切换到项目目录: %~dp0..
+cd /d "%PROJECT_ROOT%"
+if !ERRORLEVEL! neq 0 (
+    echo [错误] 无法切换到项目目录: %PROJECT_ROOT%
     set BUILD_FAILED=1
     goto :end
 )
 
 REM ---- 确保根路径 build 目录存在 ----
 if not exist "build" mkdir "build" 2>nul
+
+REM ---- 辅助脚本自检 ----
+REM 路径不同步会让所有防护静默失效（ISSUE-011 / ISSUE-045），所以这里硬失败，不允许跳过。
+set "MISSING_TOOLS="
+for %%f in (build_hash.ps1 build_pub_get.ps1 build_wmi_guard.ps1 build_mem.ps1 bump_version.ps1) do (
+    if not exist "%SCRIPT_DIR%tools\%%f" set "MISSING_TOOLS=!MISSING_TOOLS! %%f"
+)
+if defined MISSING_TOOLS (
+    echo.
+    echo ============================================
+    echo  [错误] 缺少辅助脚本:!MISSING_TOOLS!
+    echo        预期目录: %SCRIPT_DIR%tools\
+    echo        这些脚本缺失时 WMI 自检 / 内存回收 / pub get 看门狗会全部静默失效，
+    echo        构建可能无声挂死或把失败当成功，因此直接终止。
+    echo        处理: git checkout -- scripts/tools
+    echo ============================================
+    set "BUILD_FAILED=1"
+    goto :end
+)
 
 REM ---- 路由到具体任务 ----
 if /i "%~1"=="codegen" call :codegen && goto :end
@@ -124,21 +147,21 @@ REM 注意: 本机安全策略会静默拦截含正则/管道的 powershell -Com
 REM       （表现为退出码 786、无输出），因此哈希逻辑放在 scripts\tools\build_hash.ps1 里用 -File 调用。
 :calc_hash_codegen
 set "HASH_CODE_GEN="
-if not exist "%~dp0tools\build_hash.ps1" (
+if not exist "%SCRIPT_DIR%tools\build_hash.ps1" (
     echo [警告] 未找到 scripts\tools\build_hash.ps1，无法计算代码哈希
     goto :eof
 )
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_hash.ps1" -Kind codegen 2^>nul`) do set "HASH_CODE_GEN=%%v"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_hash.ps1" -Kind codegen 2^>nul`) do set "HASH_CODE_GEN=%%v"
 goto :eof
 
 REM 计算 Gradle 配置文件的哈希
 :calc_hash_gradle
 set "HASH_GRADLE="
-if not exist "%~dp0tools\build_hash.ps1" (
+if not exist "%SCRIPT_DIR%tools\build_hash.ps1" (
     echo [警告] 未找到 scripts\tools\build_hash.ps1，无法计算 Gradle 哈希
     goto :eof
 )
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_hash.ps1" -Kind gradle 2^>nul`) do set "HASH_GRADLE=%%v"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_hash.ps1" -Kind gradle 2^>nul`) do set "HASH_GRADLE=%%v"
 goto :eof
 
 REM 读取状态文件，对比哈希，确定从哪一步开始
@@ -231,15 +254,15 @@ set "WMI_GUARDED=1"
 set "WMI_FAILED=0"
 
 echo        [WMI 自检] Dart 读 OS 版本（WMI 无响应会让所有 flutter 命令静默挂死）...
-if not exist "%~dp0tools\build_wmi_guard.ps1" (
+if not exist "%SCRIPT_DIR%tools\build_wmi_guard.ps1" (
     echo        [跳过] 未找到 scripts\tools\build_wmi_guard.ps1
     goto :eof
 )
 
 set "WMI_OUT=%TEMP%\privi_wmi_guard.txt"
 del /q "%WMI_OUT%" 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_wmi_guard.ps1" -FlutterRoot "%FLUTTER_HOME%" > "%WMI_OUT%" 2>&1
-set "WMI_RC=%ERRORLEVEL%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_wmi_guard.ps1" -FlutterRoot "%FLUTTER_HOME%" > "%WMI_OUT%" 2>&1
+set "WMI_RC=!ERRORLEVEL!"
 set "WMI_MSG="
 for /f "usebackq delims=" %%l in ("%WMI_OUT%") do set "WMI_MSG=%%l"
 
@@ -280,7 +303,7 @@ echo  检查构建环境...
 echo ============================================
 
 where java >nul 2>&1
-if %ERRORLEVEL% neq 0 (
+if !ERRORLEVEL! neq 0 (
     echo [警告] 未找到 Java。请安装 JDK 17+
     echo        下载地址: https://jdk.java.net/17/
     set BUILD_FAILED=1
@@ -291,7 +314,7 @@ for /f "tokens=3" %%v in ('java -version 2^>^&1 ^| findstr /i "version"') do (
 )
 
 where flutter >nul 2>&1
-if %ERRORLEVEL% neq 0 (
+if !ERRORLEVEL! neq 0 (
     echo [警告] 未找到 Flutter。
     echo        下载地址: https://docs.flutter.dev/get-started/install/windows
     set BUILD_FAILED=1
@@ -368,15 +391,15 @@ REM ---- 更新 pubspec.yaml：版本最后一段 +1 ----
 REM  必须用 -File 调脚本，不能用 powershell -Command 一行式！
 REM  本机安全策略会拦截命令行里含正则的 -Command 调用：powershell 以退出码
 REM  786 静默退出，pubspec.yaml 不会被修改（历史版本号漂移就是这么来的）。
-if not exist "%~dp0tools\bump_version.ps1" (
-    echo [错误] 缺少版本号更新脚本: %~dp0tools\bump_version.ps1
+if not exist "%SCRIPT_DIR%tools\bump_version.ps1" (
+    echo [错误] 缺少版本号更新脚本: %SCRIPT_DIR%tools\bump_version.ps1
     echo        该脚本被误删过，可从 git 历史恢复:
     echo          git show b71b426:bump_version.ps1 ^> scripts\tools\bump_version.ps1
     set "BUMP_FAILED=1"
     goto :eof
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\bump_version.ps1" -Path "pubspec.yaml"
-set "BUMP_EXIT=%ERRORLEVEL%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\bump_version.ps1" -Path "pubspec.yaml"
+set "BUMP_EXIT=!ERRORLEVEL!"
 
 REM ---- 回读校验：版本号必须真的变了，否则按失败处理 ----
 REM  脚本退出码正常但文件没变 = 闸门失效（历史版本号漂移就是这样漏过去的）。
@@ -430,8 +453,8 @@ echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，�
 echo.
 REM 走 scripts\tools\build_pub_get.ps1 而不是直接 call flutter：直接调用时一旦 dart 卡在启动阶段，
 REM 日志 0 字节、进程永不返回，构建就无声挂死。看门狗保证最坏 300 秒给结论。
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_codegen.log" -IdleTimeoutSec 300
-set PUB_EXIT=%ERRORLEVEL%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_codegen.log" -IdleTimeoutSec 300
+set PUB_EXIT=!ERRORLEVEL!
 if !PUB_EXIT! equ 124 (
     echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
     echo        最可能原因: WMI 无响应 → 重启机器；诊断: scripts\tools\build_wmi_guard.ps1
@@ -464,7 +487,7 @@ if errorlevel 1 (
 
 echo [3/3] build_runner (Drift)...
 call dart run build_runner build 2>&1
-if %ERRORLEVEL% neq 0 (
+if !ERRORLEVEL! neq 0 (
     echo [警告] build_runner 失败！
     set BUILD_FAILED=1
     goto :eof
@@ -539,7 +562,8 @@ for %%p in (%SDK_PLATFORMS%) do (
     ) else (
         call "%SDKMANAGER%" "%%p"
     )
-    if %ERRORLEVEL% neq 0 (
+    REM 块内必须用 !ERRORLEVEL!：整块是一次性解析的，%ERRORLEVEL% 取的是进块前的旧值
+    if !ERRORLEVEL! neq 0 (
         echo [警告] SDK 平台安装失败: %%p
     ) else (
         echo       %%p 安装完成
@@ -574,7 +598,7 @@ REM ============================================
 REM  构建前内存检查：回收残留 JVM + 打印可用内存
 REM ============================================
 :reclaim_memory
-if not exist "%~dp0tools\build_mem.ps1" (
+if not exist "%SCRIPT_DIR%tools\build_mem.ps1" (
     echo [内存] 未找到 scripts\tools\build_mem.ps1，跳过内存检查
     goto :eof
 )
@@ -587,8 +611,8 @@ REM JVM 连 Chunk::new 的 1.5MB 都申请不到，Gradle 守护进程直接消�
 REM scripts\tools\build_mem.ps1 用 kernel32!GlobalMemoryStatusEx 取内存（本机 WMI/jps/Get-Counter
 REM 都会挂死，详见脚本头注释），-StopDaemons 只结束本机 JDK(%JAVA_HOME%) 启动、
 REM 且启动超过 120 秒的 java 进程，不会动 VS Code / Android Studio 的 JVM。
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_mem.ps1" -JavaHome "%JAVA_HOME%" -StopDaemons
-set "MEM_EXIT=%ERRORLEVEL%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_mem.ps1" -JavaHome "%JAVA_HOME%" -StopDaemons
+set "MEM_EXIT=!ERRORLEVEL!"
 if not "%MEM_EXIT%"=="0" (
     echo [内存] 检查未完全成功 ^(exit=%MEM_EXIT%^)，继续构建...
 )
@@ -774,7 +798,7 @@ if defined RELEASE_SLUG set "REL_REPO_ARG=--repo !RELEASE_SLUG!"
 REM ---- SHA-256 校验和资产（与上游 Release 的 privi-<版本>.apk.sha256 同名）----
 REM 哈希逻辑放在 scripts\tools\build_hash.ps1 里用 -File 调用，原因见该脚本头注释。
 set "APK_SHA="
-for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
+for /f "usebackq delims=" %%h in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_hash.ps1" -Kind file -Path "!APK_DEST!" 2^>nul`) do set "APK_SHA=%%h"
 if not defined APK_SHA (
     echo       [跳过] 计算 SHA-256 失败；为保证产物可校验，本次不发布
     goto :eof
@@ -784,8 +808,8 @@ echo       校验和: !APK_SHA!
 
 REM ---- Release 说明：可选的项目根 release_notes.md + 自动追加的元信息 ----
 set "NOTES_FILE=build\release_notes_!NEW_VER!.md"
-if exist "%~dp0..\release_notes.md" (
-    copy /y "%~dp0..\release_notes.md" "!NOTES_FILE!" >nul 2>&1
+if exist "%PROJECT_ROOT%\release_notes.md" (
+    copy /y "%PROJECT_ROOT%\release_notes.md" "!NOTES_FILE!" >nul 2>&1
     echo       说明文件: release_notes.md + 自动元信息
 ) else (
     > "!NOTES_FILE!" echo # 密册 v!NEW_VER!
@@ -904,7 +928,7 @@ set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
 if exist "!APK_SOURCE!" del /q "!APK_SOURCE!" 2>nul
 
 call flutter build apk --release
-set BUILD_EXIT=%ERRORLEVEL%
+set BUILD_EXIT=!ERRORLEVEL!
 
 if !BUILD_EXIT! neq 0 (
     echo ============================================
@@ -982,7 +1006,8 @@ if !RESUME_STEP! lss 3 (
     echo [3/7] flutter clean...
     set "STEP_NAME=[3/7] flutter clean"
     call flutter clean 2>nul
-    if %ERRORLEVEL% neq 0 (
+    REM 块内必须用 !ERRORLEVEL!（整块一次性解析，%ERRORLEVEL% 是进块前的旧值）
+    if !ERRORLEVEL! neq 0 (
         echo [警告] flutter clean 未完全成功，继续...
     )
     echo       完成。
@@ -1003,8 +1028,21 @@ if !RESUME_STEP! lss 4 (
     echo       [看门狗] 日志连续 300 秒无增长即判定卡死并终止，不再无限期挂起
     echo.
     set "STEP_NAME=[4/7] flutter pub get"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_build.log" -IdleTimeoutSec 300
-    set PUB_EXIT=%ERRORLEVEL%
+    if not exist "%SCRIPT_DIR%tools\build_pub_get.ps1" (
+        echo [错误] 缺少 %SCRIPT_DIR%tools\build_pub_get.ps1，pub get 看门狗无法运行
+        set "BUILD_FAILED=1"
+        goto :end
+    )
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tools\build_pub_get.ps1" -Command "flutter pub get --verbose" -Log "build\pub_get_build.log" -IdleTimeoutSec 300
+    REM 块内必须用 !ERRORLEVEL!：%ERRORLEVEL% 是进块前的旧值，会吞掉看门狗的退出码
+    REM （-196608 = PowerShell 的 -File 找不到脚本；详见 ISSUE-045）
+    set "PUB_EXIT=!ERRORLEVEL!"
+    if !PUB_EXIT! equ -196608 (
+        echo [错误] pub get 看门狗未能启动: PowerShell -File 找不到脚本（退出码 -196608）
+        echo        请确认 %SCRIPT_DIR%tools\build_pub_get.ps1 存在
+        set "BUILD_FAILED=1"
+        goto :end
+    )
     if !PUB_EXIT! equ 124 (
         echo [错误] pub get 判定卡死（日志 300 秒无增长），已终止进程树
         echo        最可能原因: WMI 无响应 → 重启机器；诊断: scripts\tools\build_wmi_guard.ps1
@@ -1037,7 +1075,8 @@ if !RESUME_STEP! lss 5 (
     call :reclaim_memory
 
     call flutter build apk --release
-    set BUILD_EXIT=%ERRORLEVEL%
+    REM 块内必须用 !ERRORLEVEL!：%ERRORLEVEL% 是进块前的旧值，会把上一步的退出码误报成 flutter 的
+    set "BUILD_EXIT=!ERRORLEVEL!"
 
     set "APK_SOURCE=build\app\outputs\flutter-apk\app-release.apk"
     if not exist "!APK_SOURCE!" (

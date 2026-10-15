@@ -412,6 +412,19 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
   /// 播放列表页（`PlayerScreen`，从「播放」入口进的那个）仍然连播，不受这里影响。
   void _onVideoEnded(String itemId) {
     if (!mounted) return;
+    // 回调是异步来的：中途用户可能已经滑到别的 item，别给别人的 id 记账。
+    if (_videoId != itemId) return;
+    if (_looping) {
+      // 控制栏的「循环播放」不是原生开关（`setLooping` 是空实现），单视频循环
+      // 只能在这里落：播完立刻重建播放器、从 0 起播（与 `PlayerScreen` 同一策略，
+      // 见 `ADR-031` / `ISSUE-046`）。
+      AppLogger.i(
+        'ViewerScreen',
+        'Looping enabled: replaying from the beginning: $itemId',
+      );
+      unawaited(_replayFromPosition(Duration.zero));
+      return;
+    }
     AppLogger.i(
       'ViewerScreen',
       'Video ended, staying on this item (no auto-advance): $itemId',
@@ -893,48 +906,61 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
       );
     }
     final video = _video;
-    if (!active ||
-        video == null ||
-        _videoId != item.id ||
-        !video.value.isInitialized) {
-      final thumb = item.thumbnailPath;
-      if (thumb != null && File(thumb).existsSync()) {
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _toggleChrome,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Image.file(File(thumb), fit: BoxFit.contain),
-              Icon(
-                active ? Icons.hourglass_top : Icons.play_circle_fill,
-                size: 64,
-                color: Colors.white70,
-              ),
-            ],
-          ),
-        );
-      }
+    if (!active || video == null || _videoId != item.id) {
+      return _videoPlaceholder(item, active);
+    }
+    // `initialized` 是**异步事件**：它比 `_syncVideo()` 里那次 setState 晚几十~几百
+    // 毫秒才到，而"要不要显示画面"如果只在 build 里读一次 `value` 的快照，就再也
+    // 没人重建 ⇒ 循环重播（以及首次打开）会一直停在沙漏图标上，直到用户点一下
+    // 屏幕（`_toggleChrome` → setState）才切到画面（见 `ISSUE-048`）。
+    // `child:` 让 Texture 子树在 250ms 一次的位置刷新时不重建。
+    return ValueListenableBuilder<NativeVideoValue>(
+      valueListenable: video,
+      builder: (context, value, child) =>
+          value.isInitialized ? child! : _videoPlaceholder(item, active),
+      child: GestureDetector(
+        onTap: _toggleChrome,
+        // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、可见库预览共用同一实现）。
+        child: VideoSwipeSeekLayer(
+          controller: video,
+          itemId: item.id,
+          onSeek: _seekTo,
+          child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+        ),
+      ),
+    );
+  }
+
+  /// 「还没有画面」时盖在播放区上的占位：有缩略图就用缩略图 + 沙漏，
+  /// 否则只显示图标（非当前页用「播放」图标）。
+  Widget _videoPlaceholder(MediaItem item, bool active) {
+    final thumb = item.thumbnailPath;
+    if (thumb != null && File(thumb).existsSync()) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _toggleChrome,
-        child: Center(
-          child: Icon(
-            active ? Icons.hourglass_top : Icons.videocam,
-            size: 72,
-            color: Colors.white54,
-          ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.file(File(thumb), fit: BoxFit.contain),
+            Icon(
+              active ? Icons.hourglass_top : Icons.play_circle_fill,
+              size: 64,
+              color: Colors.white70,
+            ),
+          ],
         ),
       );
     }
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: _toggleChrome,
-      // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、可见库预览共用同一实现）。
-      child: VideoSwipeSeekLayer(
-        controller: video,
-        itemId: item.id,
-        onSeek: _seekTo,
-        child: NativeVideoViewport(controller: video, fitMode: _fitMode),
+      child: Center(
+        child: Icon(
+          active ? Icons.hourglass_top : Icons.videocam,
+          size: 72,
+          color: Colors.white54,
+        ),
       ),
     );
   }

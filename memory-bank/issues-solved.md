@@ -1604,3 +1604,194 @@
 - 相关条目: `ISSUE-041`（失败项仍被搬走）、`ISSUE-043`（同一状态的白名单来源）、`ISSUE-029`④、`ADR-044`、
   `ADR-045`（本动作的设计取舍）、`PIT-044`、`PIT-051`、`PIT-064`
 - 首次记录: 2026-10-14（用户提供日志 + 需求「加解密修复」）
+
+## ISSUE-045 【2026-10-14】日志里 `√ Built …app-release.apk` 却报「构建失败！Flutter exit code=-196608」（APK 不复制、Release 不发布）
+- 状态: 已修复
+- 症状 / 现场: `build\build_full.log` 末尾先出现 `√ Built build\app\outputs\flutter-apk\app-release.apk (122.3MB)`，
+  紧接着 `[警告] 构建失败！Flutter exit code=-196608`；`build\build_exit.log` = `BUILD_FAILED=1 … NEW_VER=1.0.97`；
+  根目录**没有** `privi-1.0.97.apk`（步骤 6/7 被跳过，只剩旧的 `privi-1.0.95.apk`）；
+  [4/7] 段里夹着 `The argument 'D:\WorkSpace\test\privi\tools\build_pub_get.ps1' to the -File parameter does not exist`
+- 复发判据（5 秒定论，静态两条；动态一条看日志；**写进 .bat 时 `%` 要写成 `%%`**，见 `PIT-007`）:
+  ① `findstr /n /c:"%~dp0tools" scripts\build.bat` **必须无输出**（工具脚本路径必须走 `%SCRIPT_DIR%`）；
+  ② `findstr /n /c:"set BUILD_EXIT=%ERRORLEVEL%" /c:"set PUB_EXIT=%ERRORLEVEL%" scripts\build.bat` **必须无输出**
+     （块内必须 `!ERRORLEVEL!`）；反向确认：`findstr /n /c:"=!ERRORLEVEL!" scripts\build.bat` 应出现 **10 行**
+     （WMI_RC / BUMP_EXIT / PUB_EXIT / MEM_EXIT / GH_AUTH_RC / REL_EXIT×2 / BUILD_EXIT / PUB_EXIT / BUILD_EXIT）；
+  ③ 构建日志 [4/7] 段必须有 `[pub] 执行: flutter pub get --verbose` + `[pub] 结束: 退出码 0`；
+     只看到 `to the -File parameter does not exist` ⇒ 复发。
+- 根因（三件事叠加，缺一不可）:
+  ① **`shift` 会改 `%0`**：tee 包装器用 `--log` 把自己重启一次，内层执行 `shift` 后 `%0` 变成裸参数 `--log`，
+     此时 `%~dp0` 解析出来是**当前工作目录**（实测，见 `PIT-073`）。于是[4/7]（顶层、`goto :build` 到的流程）
+     里的 `%~dp0tools\build_pub_get.ps1` 变成 `<cwd>\tools\build_pub_get.ps1` → 文件不存在。
+     *为什么同一文件里 `:codegen`/`:preflight`/`:reclaim_memory`/`:increment_version` 没事*：那些是
+     `call :label` 子例程，cmd 会把 `%0` 恢复成脚本路径 ⇒ 只有顶层这一处（第 1006 行）指错。
+  ② Windows PowerShell 5.1 在 `-File` 指向**不存在**的脚本时退出码 = **-196608（0xFFFD0000）**（实测，见 `PIT-074`）。
+  ③ `set PUB_EXIT=%ERRORLEVEL%` / `set BUILD_EXIT=%ERRORLEVEL%` 写在 `( )` 块里 ⇒ 取的是**进块前**的旧值（`PIT-007`）：
+     PUB_EXIT 拿到 0 ⇒ 打出「pub get 完成。」（静默放过看门狗失败）；而 `call :save_state` 里的 `echo > file`
+     不会重置 ERRORLEVEL ⇒ -196608 一直留到 [5/7] 块的 `set BUILD_EXIT=%ERRORLEVEL%` ⇒ 被当成 flutter 的退出码。
+- 证据: `build\build_full.log` 113-119 行（PowerShell banner + `-File ... does not exist` + 随后仍打印「pub get 完成。」）、
+  199-201 行（`Flutter exit code=-196608`）；`build\build_exit.log`（`BUILD_FAILED=1 NEW_VER=1.0.97`）与
+  `build\app\outputs\flutter-apk\app-release.apk` 的 mtime `18:33:42` 同为一次构建（说明 APK 确实产出了）。
+  实测复现（tmp 下）：`shift` 后 `%~dp0` = cwd（`[IN-SUB]` 里反而正常）；`powershell -File <不存在>` → `-196608`；
+  块内 `set S=%ERRORLEVEL%` = 进块前值、`set S=!ERRORLEVEL!` = 当前值。
+- 修法（`scripts\build.bat`）:
+  ① 文件开头（任何 `shift` 之前）固化 `SCRIPT_DIR` / `PROJECT_ROOT`，全文 22 处 `%~dp0…` 改写为这两个变量；
+     `cd /d "%PROJECT_ROOT%"` 不再依赖 cwd（顺带修掉"从仓库根跑会把 cwd 退到上一级"的隐患）；
+  ② 块内退出码一律 `!ERRORLEVEL!`，并统一加引号 `set "X=!ERRORLEVEL!"`；
+  ③ 新增**辅助脚本自检**（5 个 ps1 缺任一 ⇒ `[错误]` + `BUILD_FAILED=1` + 终止，禁止静默跳过）+ [4/7] 调用前
+     `if not exist …` 硬失败 + 显式识别 `-196608` 并给出提示；
+  ④ 包装器 `finally` 里补 `exit $LASTEXITCODE`：以前结尾是裸 `exit /b`，内层结果被丢掉、脚本永远返回 0
+     （用户看到的 `Process finished with exit code 0` 就是这么来的）。
+- 验证（沙箱全流程，不碰真实项目）: 真 `build.bat` + 真 `scripts\tools\*.ps1` + 假 `flutter/dart`（存在 tmp\sandbox），
+  修复前 = 同样的假失败；修复后 = `BUILD_FAILED=0`、脚本退出码 0、[4/7] 出现 `[pub] 结束: 退出码 0`、
+  `APK: privi-1.0.99.apk` 已复制到项目根、`构建成功！`；故意删掉 `build_mem.ps1` ⇒ 自检报 `[错误] 缺少辅助脚本` 且退出码 = 1。
+- 反例 / 易误判: 以为「flutter 真的失败」（它已打印 √ Built，且 APK mtime 就是这次构建的时间）；
+  以为「pub get 成功了」（看门狗根本没启动）；以为 `PIT-007` 只坑 `&` 链（`( )` 块里同样中招）；
+  用 `%ERRORLEVEL%`（要写 `!ERRORLEVEL!`）去读"刚跑完的子进程"退出码。
+- 相关文件: `scripts\build.bat`（第 5-12 行脚本目录固化、第 104-124 行自检、第 1036-1100 行 [4/7]/[5/7]）
+- 相关条目: `PIT-007`（块的解析期展开）、`PIT-073`（shift 改 %0）、`PIT-074`（-196608）、`PIT-075`（运行中改写 bat）、
+  `ISSUE-007`（"目录里有 APK 就算成功"的假绿，本次是反向的假红）、`ISSUE-011`（防护静默跳过）、`ADR-046`
+- 首次记录: 2026-10-14 ／ 最近复核: 2026-10-14（沙箱复跑全绿 + 自检反向用例通过）
+
+## ISSUE-046 【2026-10-14】控制栏「循环播放」点了没反应（viewer / 可见库预览的单视频不循环）
+- 状态: 已修复（待真机复验）
+- 症状 / 现场: 视频播放窗口底栏点「循环播放」（`Icons.repeat`）后图标会变色，但视频播完**仍停在最后一帧**、
+  不从头重播；日志里只有 `Video ended, staying on this item (no auto-advance)`（ViewerScreen）/
+  `GalleryPreviewScreen` 的同款行，**没有任何循环相关日志**
+- 复发判据: 复现后读 app 日志（设备 `Download/密册/logs/密册_log_<date>.txt`）搜
+  `Looping enabled: replaying from the beginning`：
+  - 命中 ⇒ 循环生效（已走「播完重建」）；
+  - 只出现 `Video ended, staying on this item (no auto-advance)` ⇒ 界面又漏了 `_looping` 分支
+- 根因（两层叠加）:
+  ① `NativeVideoController.setLooping()` 是**空实现**（旧代码只有一行注释
+     `// Not directly supported by our simple player; ignore for now`）—— 原生 libVLC / ExoPlayer 都没接循环开关；
+  ② 单视频循环只能由界面在 `onCompleted` 里「重建播放器 + 从 0 起播」实现，而**只有 `PlayerScreen` 写了**这段
+     （`if (_looping) { _replayItemId=…; _replayStartMs=0; 重建播放器 }`），
+     `ViewerScreen._onVideoEnded` / `GalleryPreviewScreen._onNativeVideoEnded` 都只做「停在最后一帧」
+  ⇒ 点按钮只改了 `_looping` 状态与图标颜色，播放行为零变化
+- 证据: `lib/data/services/native_video_controller.dart` 旧 775-777 行（空实现）；
+  `viewer_screen.dart` 旧 413-423、`gallery_preview_screen.dart` 旧 268-278（无 `_looping` 分支）；
+  `player_screen.dart:676-685`（有分支，作对照）；用户日志 `密册_log_2026-10-14.txt` 20:09:01.672 → 20:09:14
+  走的就是 viewer 的非循环路径
+- 修法:
+  1. `viewer_screen.dart` `_onVideoEnded`：补 `if (_videoId != itemId) return;`（回调是异步的，中途可能已切 item）
+     + `if (_looping) { 记日志 'Looping enabled: …'; unawaited(_replayFromPosition(Duration.zero)); return; }`
+  2. `gallery_preview_screen.dart` `_onNativeVideoEnded`：同上（校验用 `_current.id != itemId`）
+  3. `native_video_controller.dart` `setLooping`：保持空实现但**写一条 DEBUG 日志**
+     （`setLooping(...): looping is owned by the UI, the native input has no loop flag`），
+     doc 注释写明「循环归界面层」，免得将来又把它当成"已支持"
+  - 重建走 `_replayFromPosition()`（`_detachVideo()` + `_syncVideo()`，`_pendingStartMs = 0`），与
+    `ISSUE-022` 的「播完后重播」同一条已验证链路，**不引入新的原生行为**（见 `ADR-031`）
+- 反例 / 易误判:
+  - 以为循环该在原生做（给 libVLC 加 playlist / 复播）—— 与 `ADR-031` 冲突，且没在真机验证过
+  - 只修一处界面 —— `viewer` / `gallery_preview` / `player` 三个入口必须同步（`PIT-033` 同类坑）
+  - 把循环分支写进 `_onSpuriousCompletion` —— 起播竞态的"重建继续播"不是循环
+  - 以为 `_looping` 没保存 —— 它本来就只在当前界面会话内有效（与 `_fitMode` 等一致），不是本条根因
+- 相关文件: `lib/presentation/viewer/viewer_screen.dart`、`lib/presentation/visible/gallery_preview_screen.dart`、
+  `lib/data/services/native_video_controller.dart`、`lib/presentation/player/video_player_controls.dart`（按钮与高亮）、
+  `lib/presentation/player/player_screen.dart`（对照实现）
+- 决策: `ADR-031`（循环沿用「重建式重播」）
+- 首次记录: 2026-10-14
+
+## ISSUE-047 【2026-10-14】VLC 引擎下进度条一打开就满格、不随播放变化（原生把越界位置裁成 duration，掐死 Dart 的时间轴归一化）
+- 状态: 已修复（待真机复验）
+- 症状 / 现场: VLC 引擎点开某个视频，**进度条从第一帧起就满格停在结尾**、左端时间恒等于总时长，
+  画面/声音正常，约 23.8 秒后才真正 `STATE_ENDED`；日志反复出现
+  `VDIAG[dart-position-stall] position stuck at 23797ms while isPlaying=true`（23797ms 就是该文件的 duration）
+- 复发判据（读 app 日志，二选一即可定论）:
+  - 命中本条：`VDIAG[dart-position-stall]` 里 `position == duration`、`completed=false`、`timelineOffset=0 ms`，
+    且**全程没有** `seekTo` / `Restoring resume position`；
+  - 不是本条：出现早期 `STATE_ENDED` / `Vout event: voutCount=0` / `VDIAG[spurious-end]` ⇒ 那是 `ISSUE-023`；
+  - 修复生效的正面证据：出现 `VDIAG[timeline-offset] native position …ms is past duration …ms`，进度条从 0 增长
+- 根因: **VLC 引擎把「媒体时间轴越界的位置」裁剪成 duration，而 Dart 的时间轴归一化恰恰要靠越界值**：
+  - 原生（旧）`VlcPlayerHandler.getPosition()` = `clampPosition(mp.time)`，
+    而 `clampPosition = if (durationMs > 0) positionMs.coerceIn(0, durationMs) else …`；
+    `TimeChanged` 与 `seekTo` 走同一函数 ⇒ 上报给 Dart 的每个采样都被压进 `[0, duration]`；
+  - Dart 侧 `_contentPositionMs()`（`ISSUE-009` 的归一化）只在 `raw > duration` 时才 latch `_timelineOffsetMs`；
+  - 该文件带**前导时间轴偏移**（首帧 PTS 落在 duration 附近/之后），原生从起播第一次采样起就只报 duration
+    ⇒ offset 永远 latch 不到 ⇒ `value.position` 恒 = duration ⇒ 进度条满格、不随播放变化、左端时间不动；
+  - **决定性对照**：ExoPlayer 侧 `VideoPlayerHandler.getPosition()` = `player?.currentPosition`（**从不裁剪**）、
+    `seekTo` 也不裁 ⇒ 同一套 Dart 归一化在 exo 引擎正常，只在 vlc 引擎失效
+    ⇒ 是 `VlcPlayerHandler` 与 ExoPlayer 口径不一致（实现偏差），不是文件/解码问题
+- 证据: 用户日志 `密册_log_2026-10-14.txt`（设备 `Download/密册/logs/`，`engine=vlc`，`duration=23797ms`）
+  - 20:08:27（textureId=0）、20:08:36（textureId=1，点重播重建）、20:09:17（textureId=2，重新打开）三次都在
+    起播 ~3.8s 后打 `VDIAG[dart-position-stall] … duration=23797ms position=23797ms size=1920x1080
+    timelineOffset=0 ms seekNeedsTimelineOffset=true (no error text) |
+    native ready=true playing=true position=23797ms duration=23797ms size=1920x1080`；
+  - 三次都**没有** `seekTo(content=…)`、**没有** `Restoring resume position`（20:09:17 那次 `savedMs` 已被
+    `VideoResumeService` 的 95% 规则删除、不续播）⇒ 满格不是 seek 造成的；
+  - 真正播完在 20:09:01.602 `STATE_ENDED`（起播 23.8s 之后）⇒ 起播阶段没有 EndReached ⇒ `isEnded == false`
+    ⇒ 只剩"`clampPosition(mp.time)` 被裁到 duration"这一条路径能解释
+- 修法: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`
+  —— `clampPosition` 改成 `sanitizePosition`（只 `coerceAtLeast(0L)`，**不裁上界**），
+  `getPosition()` / `TimeChanged` / `seekTo` 三处改用它（与 ExoPlayer 口径一致）。
+  `seekTo` 不裁上界是**必须的**：offset latch 后 `_probeSeekAxis()` 会传时间轴坐标（> duration），
+  若仍被裁回 duration，播放位置会直接跳到结尾
+- 待证实（下次真机日志定论）: 日志里只留下"被裁剪后的"位置，**没能直接读到原始 `mp.time`**，
+  所以"文件带前导偏移"是排除法推断。修复后：
+  - 出现 `VDIAG[timeline-offset] … is past duration` ⇒ 推断成立、问题闭环；
+  - 若仍是 `VDIAG[dart-position-stall]`（position 恒 = duration、`timelineOffset=0`）⇒ 说明是 VLC 在该文件上
+    `mp.time` 本身就恒等于 duration（时间读取异常），需另案（先用 exo 引擎对照同一文件）
+- 反例 / 易误判:
+  - 当成 `ISSUE-023`（起播竞态）复发 —— 那条有 `VDIAG[spurious-end]` + `voutCount=0` 早于 `STATE_ENDED`，本条没有
+  - 当成"进度条 UI 没刷新" —— 左端时间标签也恒为总时长，是数据层 `position` 不动
+  - 当成 `VideoResumeService` 续播到结尾 —— 日志里无 `Restoring resume position`，且 95% 规则已删记录
+  - 只改 `getPosition()` 不改 `seekTo` —— 进度条会动，但探针 seek 被打回 duration
+  - 把 `clampPosition` 的裁剪当成"防止异常大值"的护栏 —— 它正是 `ISSUE-009` 归一化唯一的数据来源
+- 相关文件: `android/app/src/main/kotlin/com/privi/app/VlcPlayerHandler.kt`、
+  `lib/data/services/native_video_controller.dart`（`_contentPositionMs` / `_probeSeekAxis` / `_trackPositionProgress`）、
+  `android/app/src/main/kotlin/com/privi/app/VideoPlayerHandler.kt`（对照：不裁剪）
+- 关联: `ISSUE-009`（同一套时间轴归一化）、`ISSUE-022`（`isEnded` 分支保留不动）
+- 真机复核 2026-10-14（1.0.99 用户日志）: **修复生效** —— 日志出现
+  `VDIAG[timeline-offset] native position 47720499ms is past duration 23797ms: treating 47720499ms as the clip
+  start (leading edit / 32-bit PTS wrap)`（≈ `2^32/90000`，正是 `ISSUE-009` 的特征值），
+  进度条恢复 0→duration 正常推进（`dart-position-stall` 不再出现）。
+  同一次日志还暴露两个后续项：①`_probeSeekAxis()` 在这么大的偏移下会实测 seek、并把坐标系误判成 content
+  ⇒ 本轮已修（见 `ISSUE-048` 末段）；②循环重播后画面不刷新（`ISSUE-048`）
+- 首次记录: 2026-10-14
+
+## ISSUE-048 【2026-10-14】循环重播后画面不刷新、一直显示沙漏图标，点一下屏幕才出现（渲染条件只读了 `value` 快照）
+- 状态: 已修复（待真机复验）
+- 症状 / 现场: `ViewerScreen` 开着「循环播放」，每轮播完自动重建，原生侧一切正常
+  （`Creating native player` → `video surface attached` → `Vout voutCount=1` → `STATE_READY` → `onPlaying`
+  都在 ~200ms 内到齐），但**画面不出来**：播放区一直盖着 `Icons.hourglass_top`（有缩略图时是缩略图 + 沙漏），
+  可见库预览则是转圈；用户手点一下屏幕（控制条显隐 → setState）画面立刻出现 ⇒ 数据层没问题，是 UI 没重建
+- 复发判据: 日志里 `Looping enabled: replaying from the beginning` 之后跟着完整的
+  `Creating native player` / `STATE_READY` / `onPlaying`（都正常），**同时**用户看到沙漏；
+  对照 `PlayerScreen`：它有 `Native value changed: item=…, textureId=…, initialized=true` 这行日志
+  （`_onNativeVideoValueChanged` 的 listener），viewer / gallery 从来不打这行 ⇒ 命中
+- 根因: **`initialized` 是异步事件，而"要不要显示画面"只在 build 时读了一次 `value` 快照，之后没有任何东西触发重建**：
+  - `viewer_screen.dart` 旧 `_videoPage()`：`if (… || !video.value.isInitialized) { 沙漏占位 }`（快照）；
+    `_syncVideoBody()` 里那次 setState 在 `await c.play()` 之后，而原生 `STATE_READY` → `initialized`
+    比它晚 ~100ms（日志：`play` 21:36:07.579 → `Initialized [event]` 21:36:07.684）⇒ 那次判定
+    `isInitialized=false`（落到沙漏），事件到了却**没人再 setState**；
+  - `_videoBottomBar` 包在 `ValueListenableBuilder` 里，所以控制栏/进度条正常出现，进一步掩盖了
+    "只有画面不刷新"；用户点屏幕 → `_toggleChrome` → setState → 重新判定 → 画面出现；
+  - `gallery_preview_screen.dart` 的 `_pageContent()` 同款写法（`video.value.isInitialized`），同样中招；
+  - **`player_screen.dart` 早就修过这个坑**（`_onNativeVideoValueChanged` + 注释
+    "Without this listener the second video of a folder autoplay keeps spinning forever"），
+    本轮只是另外两个界面没跟上（`PIT-033` 同类：改一个界面忘了另一个）
+- 修法:
+  - `viewer_screen.dart`：`_videoPage()` 的"沙漏 ↔ 画面"判定改为**订阅** controller ——
+    `ValueListenableBuilder<NativeVideoValue>(valueListenable: video, builder: (c, value, child) =>
+    value.isInitialized ? child! : _videoPlaceholder(item, active), child: <画面子树>)`；
+    `child:` 让 Texture 子树在 250ms 一次的位置刷新时不重建；沙漏/缩略图分支抽成 `_videoPlaceholder()`
+  - `gallery_preview_screen.dart`：`_pageContent()` 同样改成 `ValueListenableBuilder`（未初始化时显示原有转圈）
+  - `PlayerScreen` 的 listener 写法不动（两种都对，本轮只补齐缺的两处）
+- 顺带修的次生缺陷（同一次日志暴露）: `_probeSeekAxis()` 在 32 位 PTS 回绕文件上会**实测 seek**：
+  `VDIAG[timeline-offset] … 47720499ms` → `seekTo: textureId=…, positionMs=300`（content 坐标）→
+  `VDIAG[seek-axis] readback=47720701ms`（第 1 遍）/ `47720499ms`（第 2 遍）/ `300ms`（第 3 遍，**误判成 content 坐标**）
+  —— 回读值三种都出现过，最后那种会让 `_seekNeedsTimelineOffset=false`，之后用户拖进度条全部落错位置。
+  修法：偏移超过 `_kProbeOffsetCeilingMs`（1 小时）时**不做实测**，直接认定 timeline 轴，并打
+  `VDIAG[seek-axis] offset=…ms is far beyond the clip: assuming the timeline axis without a probe seek`
+- 反例 / 易误判:
+  - 当成"原生没出帧/黑屏"（`ISSUE-008`）：本次 `Vout voutCount=1` 正常，是 Flutter 没重建；
+  - 当成"引擎起不来"（`ISSUE-014` 的 15s 看门狗）：看门狗没超时，且点击就能出画面；
+  - 只在 `_syncVideoBody()` 里补一次 `setState`（或在 `initialized` 事件里硬塞回调）——
+    正确做法是让**渲染条件订阅** `NativeVideoController`（它本来就是 `ValueNotifier`），
+    否则以后任何"异步改变渲染条件"的事件都会再犯；
+  - 用 `ValueListenableBuilder` 时忘写 `child:`，每 250ms 的位置刷新都会重建 Texture 子树
+- 相关文件: `lib/presentation/viewer/viewer_screen.dart`、`lib/presentation/visible/gallery_preview_screen.dart`、
+  `lib/presentation/player/player_screen.dart`（既有正确写法，对照）、`lib/data/services/native_video_controller.dart`（`_probeSeekAxis`）
+- 关联: `ISSUE-047`（上一件：VLC 裁剪掐死时间轴归一化；`timeline-offset` 能 latch 正是它修好的）、
+  `ISSUE-046`（循环按钮）、`ISSUE-009`（前导偏移）、`PIT-033`（改一处忘另一处）
+- 首次记录: 2026-10-14

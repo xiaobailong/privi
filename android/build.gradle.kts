@@ -21,18 +21,10 @@ subprojects {
 
 // Align Java/Kotlin JVM targets across plugins (many default to different values).
 // Kotlin JVM target is handled by compileOptions when android.builtInKotlin=true
-// afterEvaluate is needed because plugins often set Java 8 in their own
-// afterEvaluate — configureEach on JavaCompile alone isn't enough.
 subprojects {
-    afterEvaluate {
-        extensions.findByType<JavaPluginExtension>()?.apply {
-            sourceCompatibility = JavaVersion.VERSION_17
-            targetCompatibility = JavaVersion.VERSION_17
-        }
-        tasks.withType<JavaCompile>().configureEach {
-            sourceCompatibility = JavaVersion.VERSION_17.toString()
-            targetCompatibility = JavaVersion.VERSION_17.toString()
-        }
+    tasks.withType<JavaCompile>().configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
     }
 }
 
