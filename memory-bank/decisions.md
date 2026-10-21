@@ -1219,3 +1219,46 @@
 - 相关条目: `ISSUE-045`、`ISSUE-011`、`ISSUE-007`、`PIT-007`、`PIT-073`、`PIT-074`、`PIT-075`、`ADR-027`（构建由用户手工执行）
 - 首次记录: 2026-10-14
 
+
+## ADR-047 密钥包改用 SQLite 数据库（v2）：密钥 + 每文件 DEK + 文件名映射一起走
+- 日期: 2026-10-21 | 状态: 已采纳（待真机复核）
+- 背景: `ADR-041` 的 v1 包是 5 字段 JSON，只解决"`KEK` + salt 丢失"（`ISSUE-036`）。
+  但重装/换机同时丢掉 metadata DB，于是密文文件（随机名，`ADR-042`）既没有原名可显示，
+  也没有 `encrypted_dek` 可解密（`ISSUE-049`）。用户要求把"所有跟加解密相关的信息"一起带走，
+  并明确"格式改成 SQLite 数据库文件以便存更多信息"。
+- 决策:
+  ① 包 = **单个 SQLite 数据库文件**（`privi-key-YYYYMMDD-HHMMSS.db`），格式版本 `2`；
+  ② 三张表：`meta(key,value)`（format/version/createdAt/fileCount/encryptedFileCount/warning）、
+     `key_material(id=1, encryption_salt, kek BLOB, kek_source, created_at)`、
+     `media_keys(media_id, private_path, original_path, original_name, mime_type, is_video,
+     size_bytes, width, height, duration_ms, date_added, date_taken, encrypted_dek, content_digest)`；
+     `PRAGMA user_version = 2` 供外部工具识别；
+  ③ 直接依赖 `package:sqlite3` 读写（`sqlite3_flutter_libs` 已提供原生库，drift 启动时已加载），
+     **不复用** app 的 drift schema（包格式必须独立于内部 schema 迁移）；
+  ④ 导入沿用 v1 的两道闸门（salt 冲突、KEK 实测），再把映射**有选择地**写回：
+     只有本机存在同名文件的条目才建行/补 DEK，其余"跳过"并计数；
+  ⑤ v1 JSON 包保留只读兼容（首字符 `{` 分支），不提供降级导出。
+- 理由:
+  - 一份文件解决"密钥 + 文件名 + DEK"，用户少管一个东西，也避免"导了密钥却忘了导映射"；
+  - SQLite 天然支持多表、索引与演进（以后加相册归属、缩略图清单只需加列/加表，不破坏旧包）；
+  - 只给存在的文件建行，才能避免"导入后满屏打不开的空条目"这种更糟的用户体验。
+- 备选与为何不选:
+  - **继续扩 JSON 字段**：结构演进、按行查询、大库（数千条）都别扭，且没有版本化的 schema；
+  - **zip（manifest + jsonl）**：自造容器格式，要自己写校验/分块，SQLite 现成；
+  - **直接导出 app 的 drift 数据库**：把相册、播放历史等与加解密无关的数据也带走，
+    且包格式被内部 schema 版本绑死（一次迁移就让旧包读不了）；
+  - **把 KEK 用密码二次包裹**：见 `ADR-041` 的取舍（多一个口令与失败点），本次不改变安全边界。
+- 影响 / 约束（后续改动必须注意）:
+  - `key_backup_service.dart` 仍是包格式的**唯一**定义处：改 schema 必须升 `formatVersion`，
+    并在 `_readSqlitePackage` 里保留旧版本读取分支（`version > formatVersion` ⇒ `unsupportedVersion` 拒绝）；
+  - 包内 `encrypted_dek` 是"文件+KEK 之外"的额外敏感物，但安全边界不变：**包 = 明文 KEK**，
+    UI 警告与"离线/加密网盘保存"文案必须保留（导出前确认框已有）；
+  - 导入是**单向**的：不改本机已有的 `original_name`（避免覆盖用户改名），**不覆盖已有 DEK**
+    （文件可能在本包之后被重新加密，旧 DEK 已不匹配字节）；只补"缺失且 `looksEncrypted` 成立"的 DEK；
+  - 改过图案/密码后旧包依旧过期（`ADR-034` 会旋转全部 DEK），仍需重新导出（文案已提示）；
+  - 包格式 v2 与"整库备份/恢复"（`vault_backup_export`）是两件事：后者搬媒体文件，本条只搬密钥与索引。
+- 相关文件: `lib/data/services/key_backup_service.dart`、`lib/data/services/vault_storage_service.dart`、
+  `lib/presentation/settings/settings_screen.dart`、`lib/l10n/app_localizations.dart`、`pubspec.yaml`
+- 相关条目: `ISSUE-049`、`ISSUE-036`、`ADR-041`、`ADR-042`、`ADR-034`
+- 首次记录: 2026-10-21
+

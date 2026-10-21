@@ -134,13 +134,15 @@ final batchEncryptionServiceProvider = Provider<BatchEncryptionService>((ref) {
 });
 
 /// Vault-key export/import ("key package"), used after a reinstall or device
-/// change so the imported key can decrypt files encrypted before it.
+/// change so the imported key can decrypt files encrypted before it.  The
+/// package also carries the filename/DEK map (SQLite, ADR-047).
 final keyBackupServiceProvider = Provider<KeyBackupService>((ref) {
   return KeyBackupService(
     keyManager: ref.watch(encryptionKeyManagerProvider),
     security: ref.watch(securityServiceProvider),
     encryption: ref.watch(mediaEncryptionServiceProvider),
     repository: ref.watch(mediaRepositoryProvider),
+    storage: ref.watch(vaultStorageProvider),
   );
 });
 

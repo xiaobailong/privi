@@ -841,22 +841,32 @@ class AppLocalizations {
   // ── Vault key backup (export / import) ──
 
   String get exportVaultKey => '导出加密密钥';
-  String get exportVaultKeySubtitle => '保存成文件，可放网盘或离线介质防丢';
+  String get exportVaultKeySubtitle => '保存成 SQLite 数据库文件：含密钥、加密记录与文件名映射';
   String get importVaultKey => '导入加密密钥';
-  String get importVaultKeySubtitle => '重装/换机后，用导出的密钥恢复解密能力';
-  String get exportVaultKeyWarning =>
-      '导出的文件保存的是「未加密」的保险库密钥：任何同时拿到该文件与本应用保险库目录的人，都能解密全部文件。\n\n'
+  String get importVaultKeySubtitle => '重装/换机后，用导出的数据库文件恢复解密能力与文件名映射';
+  String get exportVaultKeyWarning => '导出的数据库文件里有「未加密」的保险库密钥，以及每个文件的加密密钥（DEK）'
+      '和文件名映射：任何同时拿到该文件与本应用保险库目录的人，都能解密全部文件。\n\n'
       '请放到加密网盘或离线介质，不要分享给别人。\n\n'
       '⚠️ 改过图案/密码后密钥会变：旧密钥包将失效，请重新导出一次。\n\n继续导出？';
-  String get importVaultKeyWarning => '导入会用文件里的密钥接管本机密钥：\n'
+  String importVaultKeyWarningDetail(int files, int encryptedFiles) =>
+      '该数据库里有本机的保险库密钥、$encryptedFiles 个文件的加密密钥（DEK）'
+      '和 $files 条文件名映射。\n\n'
+      '导入会接管本机密钥，并把「库里已有对应文件」的加密记录与文件名写回本机数据库：\n'
       '• 只在本机还没有自己的加密文件时使用（例如刚重装、刚换机）；\n'
-      '• 若本机已有自己的密钥，导入会被拒绝，以免本机已加密文件全部失效。\n\n继续导入？';
+      '• 若本机已有自己的密钥，导入会被拒绝，以免本机已加密文件全部失效；\n'
+      '• 找不到对应文件的条目会被跳过，不会生成打不开的空条目。\n\n继续导入？';
   String vaultKeyExported(String path) => '密钥已导出：$path';
   String get vaultKeyExportFailed => '导出失败，请重试';
   String get vaultKeyExportLocked => '请先解锁保险库，再导出密钥';
   String get pickVaultKeyTitle => '选择密钥文件';
   String get vaultKeyImported => '密钥导入成功：现在可用该密钥解密已加密的文件';
+  String vaultKeyImportedDetail(int restored, int updated, int skipped) {
+    if (restored + updated + skipped == 0) return vaultKeyImported;
+    return '$vaultKeyImported（恢复 $restored 条 · 更新 $updated 条 · 跳过 $skipped 条）';
+  }
+
   String get vaultKeyImportMalformed => '该文件不是有效的密册密钥包';
+  String get vaultKeyImportUnsupportedVersion => '该密钥包由更新版本的密册导出，当前版本无法读取';
   String get vaultKeyImportSaltConflict => '本机已有自己的密钥材料，已拒绝导入（否则本机已加密文件会全部失效）';
   String get vaultKeyImportKeyMismatch => '该密钥与库中已加密文件不匹配，已拒绝导入';
   String get vaultKeyImportFailed => '导入失败，请重试';

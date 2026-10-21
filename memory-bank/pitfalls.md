@@ -1376,3 +1376,25 @@
 - 状态: ② 的**精确根因未定位**（已确认文件本身没有多余换行、无异常控制字符；
   怀疑与 cmd 解析 UTF-8 无 BOM 批处理时的行偏移有关），先用"缩短头部中文注释"规避
 - 相关: `ISSUE-045`、`ADR-046`
+
+## PIT-076 用管道对比 `dart format --output=show` 会把中文变成乱码 ⇒ 误判一大片"格式差异"
+- 触发条件: 老文件（`PIT-062`）里插了中文代码/注释，想确认"只有我写脏的那几行"，
+  于是 `dart.exe format --output=show <file> | Set-Content -Encoding utf8 tmp\fmt.dart` 再逐行对比
+- 错误现象: PowerShell 5.1 用控制台代码页解码 dart 的 UTF-8 输出 ⇒ 所有含中文/em dash 的行都变成乱码，
+  `Compare-Object` 报出几十条"差异"，全是假阳性（本次实测 65 条里只有 2 条是真的）；
+  若据此整文件 `dart format`，就会把老文件重排一起交出去（`PIT-062`）
+- 正确做法（本次用的两段式）:
+  ```
+  copy /y lib\路径\文件.dart tmp\cur.dart
+  D:\Tools\DevTools\flutter\bin\cache\dart-sdk\bin\dart.exe format tmp\cur.dart
+  ```
+  再用正则**只看 ASCII 行**的差异（中文行必然被管道弄脏，不作判据）：
+  ```powershell
+  $a=Get-Content lib\路径\文件.dart; $b=Get-Content tmp\cur.dart
+  Compare-Object $a $b -SyncWindow 2000 | Where-Object { "$($_.InputObject)" -match '^[\x20-\x7E]*$' }
+  ```
+  仍然命中自己新增的行 ⇒ 手工把那几行改成 formatter 的写法，**不要**对老文件跑写模式 `dart format`
+- 反例（别这么写）: 直接把管道输出当"格式化后的文件"逐行 diff；或看到一堆中文行差异就认定 HEAD 本来就不干净
+- 自检: 只剩自己未改动的老代码行（如 `settings_screen.dart` 的 `_filenames` 折行、l10n 的旧 getter）⇒ 放行
+- 相关: `PIT-062`、`PIT-066`、`PIT-069`（副本对比）、`PIT-014`（`dart.exe` 全路径）
+- 首次记录: 2026-10-21（改造密钥包时的静态自测）

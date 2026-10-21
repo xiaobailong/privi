@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,7 +12,6 @@ import '../../core/l10n.dart';
 import '../../data/repositories/media_repository.dart';
 import '../../data/services/batch_decryption_service.dart';
 import '../../data/services/batch_encryption_service.dart';
-import '../../data/services/encryption_record_repair_service.dart';
 import '../../data/services/filename_encryption_service.dart';
 import '../../data/services/key_backup_service.dart';
 import '../../data/services/maintenance_service.dart';
@@ -543,7 +540,9 @@ class SettingsScreen extends ConsumerWidget {
   ///
   /// Validates **before** asking for confirmation (a rejected package must never
   /// look like a successful import) and lets the service refuse a package that
-  /// would invalidate files already encrypted here.
+  /// would invalidate files already encrypted here.  v2 packages are SQLite
+  /// databases that also carry the filename/DEK map (ADR-047); v1 JSON packages
+  /// still import as key-only.
   Future<void> _importVaultKey(BuildContext context, WidgetRef ref) async {
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -553,11 +552,15 @@ class SettingsScreen extends ConsumerWidget {
     if (path == null || !context.mounted) return;
 
     final service = ref.read(keyBackupServiceProvider);
-    String raw;
+    KeyPackageSummary? summary;
+    var preview = KeyImportOutcome.failed;
     try {
-      raw = await File(path).readAsString();
+      summary = await service.inspectPackage(path);
+      if (summary != null) {
+        preview = await service.validatePackage(path);
+      }
     } catch (e, stackTrace) {
-      AppLogger.e('SettingsScreen', 'read vault key: $e\n$stackTrace');
+      AppLogger.e('SettingsScreen', 'inspect vault key: $e\n$stackTrace');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.vaultKeyImportReadFailed)),
@@ -565,12 +568,15 @@ class SettingsScreen extends ConsumerWidget {
       }
       return;
     }
-
-    final preview = await service.validatePackage(raw);
     if (!context.mounted) return;
-    if (preview != KeyImportOutcome.imported) {
+    if (summary == null || preview != KeyImportOutcome.imported) {
+      final outcome = summary == null ? KeyImportOutcome.malformed : preview;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_keyImportMessage(context, preview))),
+        SnackBar(
+          content: Text(
+            _keyImportMessage(context, KeyImportResult(outcome: outcome)),
+          ),
+        ),
       );
       return;
     }
@@ -579,7 +585,12 @@ class SettingsScreen extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(context.l10n.importVaultKey),
-        content: Text(context.l10n.importVaultKeyWarning),
+        content: Text(
+          context.l10n.importVaultKeyWarningDetail(
+            summary!.fileCount,
+            summary.encryptedFileCount,
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -594,19 +605,25 @@ class SettingsScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
 
-    final outcome = await service.importPackage(raw);
+    final result = await service.importPackage(path);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_keyImportMessage(context, outcome))),
+      SnackBar(content: Text(_keyImportMessage(context, result))),
     );
   }
 
-  String _keyImportMessage(BuildContext context, KeyImportOutcome outcome) {
-    switch (outcome) {
+  String _keyImportMessage(BuildContext context, KeyImportResult result) {
+    switch (result.outcome) {
       case KeyImportOutcome.imported:
-        return context.l10n.vaultKeyImported;
+        return context.l10n.vaultKeyImportedDetail(
+          result.restored,
+          result.updated,
+          result.skipped,
+        );
       case KeyImportOutcome.malformed:
         return context.l10n.vaultKeyImportMalformed;
+      case KeyImportOutcome.unsupportedVersion:
+        return context.l10n.vaultKeyImportUnsupportedVersion;
       case KeyImportOutcome.saltConflict:
         return context.l10n.vaultKeyImportSaltConflict;
       case KeyImportOutcome.keyMismatch:
@@ -616,8 +633,9 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  /// Writes the vault key material (KEK + salt) to a JSON file the user picks a
-  /// directory for, so a reinstall/device change can still decrypt old files.
+  /// Writes the vault key material (KEK + salt) **and** the filename/DEK map to
+  /// a SQLite database in the directory the user picks, so a reinstall/device
+  /// change can still decrypt old files and show their original names.
   Future<void> _exportVaultKey(BuildContext context, WidgetRef ref) async {
     if (ref.read(encryptionKeyManagerProvider).getKey() == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -650,15 +668,12 @@ class SettingsScreen extends ConsumerWidget {
     if (directory == null || !context.mounted) return;
 
     try {
-      final package = await ref.read(keyBackupServiceProvider).buildPackage();
-      final file = File(
-        '$directory/${KeyBackupService.suggestedFileName(DateTime.now())}',
-      );
-      await file.writeAsString(package, flush: true);
-      AppLogger.i('SettingsScreen', 'vault key exported to ${file.path}');
+      final saved =
+          await ref.read(keyBackupServiceProvider).exportToDirectory(directory);
+      AppLogger.i('SettingsScreen', 'vault key exported to $saved');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.vaultKeyExported(file.path))),
+          SnackBar(content: Text(context.l10n.vaultKeyExported(saved))),
         );
       }
     } catch (e, stackTrace) {

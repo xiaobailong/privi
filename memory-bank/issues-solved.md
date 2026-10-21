@@ -1795,3 +1795,43 @@
 - 关联: `ISSUE-047`（上一件：VLC 裁剪掐死时间轴归一化；`timeline-offset` 能 latch 正是它修好的）、
   `ISSUE-046`（循环按钮）、`ISSUE-009`（前导偏移）、`PIT-033`（改一处忘另一处）
 - 首次记录: 2026-10-14
+
+## ISSUE-049 密钥包只带走 salt+KEK：重装后密文"能解密却没名字、没 DEK 记录" ⇒ 导出/导入改为 SQLite 数据库
+- 状态: 已实现（待真机复核）
+- 症状 / 现场（用户需求）: 「导出加密密钥」导出的 v1 JSON 只有
+  `{format, version, createdAt, encryptionSalt, kek}`。重装后即使导入成功也只能拿回 KEK：
+  metadata DB 是空的 ⇒ 文件名是 32 位随机名（`ADR-042`，原名只在 DB 的 `original_name`），
+  且没有 `encrypted_dek`（每文件 DEK 的包裹副本）⇒ 文件在库里"看得见但打不开"、原名不可恢复。
+  用户要求：一次导出/导入**所有与加解密相关的信息（尤其文件名映射）**，并改用 SQLite 便于存更多信息。
+- 复发判据（5 秒定论）: 用任意 SQLite 工具打开导出的包，`sqlite_master` 里必须有
+  `meta` / `key_material` / `media_keys` 三张表；`key_material` 恰好 1 行（`length(kek) = 32`），
+  `media_keys` 行数 = 导出时保险库有效条目数。
+  静态判据: `git grep -n "CREATE TABLE media_keys" -- lib/data/services/key_backup_service.dart` 必须有命中。
+- 根因: v1 包只定义"密钥材料"，把"文件名映射 + 每文件 DEK"留在了 app 的 DB 里；而重装/换机丢掉的正是这份 DB。
+- 证据: 旧 `buildPackage()` 只写 5 个字段（见 `ISSUE-036` 修法 ①）；
+  `media_items.encrypted_dek` / `original_name` 当时没有任何导出通道。
+- 修法:
+  ① 包格式 v2 = 独立 SQLite 数据库（`.db`），schema 见 `key_backup_service.dart` 的 `_schemaSql`
+     （`meta` / `key_material` / `media_keys`，后者带 `private_path`、`original_path`、`original_name`、
+     `encrypted_dek`、`content_digest` 等，决策见 `ADR-047`）；
+  ② 导出 `exportToDirectory()`：`meta` 写 format/version/createdAt/fileCount/encryptedFileCount/warning；
+     `key_material` 写 `encryption_salt` + 原始 KEK（BLOB）+ `kek_source`；
+     `media_keys` 逐行来自 `MediaRepository.listActive()`；
+     `PRAGMA journal_mode = DELETE`（不产生 `-wal/-shm` 附属文件），任何异常都删掉半成品文件再 rethrow；
+  ③ 导入 `importPackage(path)`：`inspectPackage()`（只读，返回 `KeyPackageSummary` 供确认框显示条数）→
+     `validatePackage()`（salt 冲突 / KEK 实测，规则完全沿用 `ADR-041`）→ 写 salt + `setImportedKey()` →
+     `_restoreFileMapping()`：只给**本机确实存在**的文件建行（先按 `private_path`，再按 basename 索引兜底路径变化），
+     已存在的行只做两件事：`private_path` 修正、以及**从未记录** DEK 且本地文件 `looksEncrypted` 时补上 DEK
+     （绝不覆盖已有 DEK —— 文件可能在本包之后被重新加密过）；返回 恢复/更新/跳过 三个计数给 UI；
+  ④ 兼容：首字符 `{` 的 v1 JSON 包继续可导入（仅密钥，无映射）。
+- 反例 / 易误判:
+  - 以为"导入后文件就会出现在库里" ⇒ 只有把保险库文件也拷回原路径/同名，才会建行；找不到文件的条目计为"跳过"；
+  - 以为包里多带 DEK 就"更安全" ⇒ 包内 KEK 本来就是明文，DEK 不改变安全边界（**文件 + 包 = 全开**，警告文案已写明）；
+  - 无条件插入 `media_keys` 全部行 ⇒ 没拷回文件的设备会出现一堆打不开的空条目（本条明确禁止）；
+  - 拿"本机已有加密行"去校验新包：本机为空（刚重装）时必须退回用**包内自己的 DEK** 自检，否则永远 `keyMismatch`。
+- 相关文件: `lib/data/services/key_backup_service.dart`（重写）、
+  `lib/data/services/vault_storage_service.dart`（新增 `mediaRoots()`）、`lib/application/providers.dart`、
+  `lib/presentation/settings/settings_screen.dart`、`lib/l10n/app_localizations.dart`、`pubspec.yaml`（直接依赖 `sqlite3`）
+- 相关条目: `ISSUE-036`（v1 语义与拒绝规则）、`ADR-041`、`ADR-042`（随机文件名）、`ADR-047`（本格式决策）
+- 首次记录: 2026-10-21（用户需求）
+

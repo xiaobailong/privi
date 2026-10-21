@@ -62,6 +62,23 @@ class VaultStorageService {
 
   Future<Directory> get vaultDir async => ensureVault();
 
+  /// Directories that may hold vault media files (recursive scan targets).
+  ///
+  /// Returns both the app-private vault and the shared `.privateheart_vault`
+  /// root so key-package import can re-associate rows with files that survived a
+  /// reinstall (their metadata DB did not).
+  Future<List<Directory>> mediaRoots() async {
+    final roots = <Directory>[await ensureVault()];
+    if (initializeSharedRoot) {
+      try {
+        roots.add(await ensureHiddenRoot());
+      } catch (e) {
+        AppLogger.w('VaultStorageService', 'mediaRoots: ensureHiddenRoot: $e');
+      }
+    }
+    return roots;
+  }
+
   Future<Directory> get shareStagingDir async {
     final vault = await ensureVault();
     final directory = Directory(p.join(vault.path, VaultPaths.shareStagingDir));
