@@ -38,6 +38,9 @@ coverage/
 /privi-*.apk
 /privi-*.apk.sha256
 
+# 百度网盘上传时的临时配置文件（如 privi-*.apk.baiduyun.uploading.cfg）
+*.uploading.cfg
+
 # Cline 工作临时目录：整目录忽略（约定见 .clinerules/tmp-files.md），可随时整目录删除
 /tmp/
 
