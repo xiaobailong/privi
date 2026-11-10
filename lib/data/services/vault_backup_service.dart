@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -18,6 +19,7 @@ import 'encryption_key_manager.dart';
 import 'hide_naming.dart';
 import 'key_backup_service.dart';
 import 'security_service.dart';
+import 'vault_library_registry.dart';
 import 'vault_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 
@@ -31,6 +33,7 @@ part 'vault_backup_restore.dart';
 part 'vault_backup_restore_install.dart';
 part 'vault_backup_restore_preflight.dart';
 part 'vault_backup_support.dart';
+part 'vault_pending_restore.dart';
 
 /// Local export/import durability (D3) - no cloud.
 ///
@@ -101,6 +104,9 @@ class VaultBackupService implements VaultBackupOperations {
 
   final bool _usePrivateMediaStorage;
 
+  /// Remembers imports whose media files have not been copied yet.
+  final _PendingRestoreStore _pending = const _PendingRestoreStore();
+
   String get _platformName => 'android';
 
   @override
@@ -142,8 +148,37 @@ class VaultBackupService implements VaultBackupOperations {
       preferences: _preferences,
       keyBackup: _keyBackup,
       backfill: _backfill,
+      pending: _pending,
     ).run(
       sourceDirectory,
+      session: session,
+      onProgress: onProgress,
+    );
+  }
+
+  /// True when an earlier import still waits for its media files to be copied
+  /// onto this phone (`_PendingRestoreStore`).
+  @override
+  Future<bool> get hasPendingRestore => _pending.hasPending;
+
+  /// Re-imports the archive recorded by [hasPendingRestore].
+  ///
+  /// Rows that were restored before are skipped by id, so nothing is
+  /// duplicated; newly visible files are linked with their DEKs, key ids and
+  /// album memberships, and the marker is cleared once every row has a file.
+  @override
+  Future<VaultBackupResult?> resumePending({
+    VaultBackupSession? session,
+    VaultBackupProgressCallback? onProgress,
+  }) async {
+    final directory = await _pending.sourceDirectory();
+    if (directory == null) return null;
+    AppLogger.i(
+      'VaultBackupRestore',
+      'relinking pending vault data from ${directory.path}',
+    );
+    return importFromDirectory(
+      directory.path,
       session: session,
       onProgress: onProgress,
     );

@@ -101,6 +101,23 @@ final class _VaultBackupRestoreInstaller {
                 restoreOrganizer: manifest.version >= 3,
               )
             : const <String, String>{};
+        // Rows that already point at one of these files but carry no backup
+        // metadata (orphan scan before the relink) are dropped in the same
+        // transaction, so the file ends up with exactly one, decryptable row.
+        final staleRows = <String>[
+          for (final entry in installed)
+            if (entry.plan.staleRowId != null &&
+                entry.plan.staleRowId != entry.plan.id)
+              entry.plan.staleRowId!,
+        ];
+        if (staleRows.isNotEmpty) {
+          AppLogger.w(
+            'VaultBackupRestore',
+            'replacing ${staleRows.length} stale row(s) that share a file with '
+                'the backup',
+          );
+          await media.hardDeleteRowsOnly(staleRows);
+        }
         await media.insertMany(
           installed
               .map((item) => _mediaEntry(item, manifest.version))
@@ -197,7 +214,7 @@ final class _VaultBackupRestoreInstaller {
         // Restored encrypted media keeps the DEK **and the key it belongs to**,
         // so an imported key works without touching this install's default key.
         encryptedDek: item.encryptedDek,
-        encryptionKeyId: dataOnly ? item.encryptionKeyId : null,
+        encryptionKeyId: dataOnly ? plan.encryptionKeyId : null,
         playCount: dataOnly ? (item.playCount ?? 0) : 0,
         lastPlayedAt: dataOnly ? item.lastPlayedAt : null,
       ),

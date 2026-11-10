@@ -12,6 +12,19 @@ abstract interface class VaultBackupOperations {
     VaultBackupSession? session,
     VaultBackupProgressCallback? onProgress,
   });
+
+  /// An earlier data-only import still waits for its media files.
+  ///
+  /// v6 archives never contain media bytes, so importing before copying the
+  /// folder used to drop the rows.  The import now remembers its source
+  /// directory; this flag tells the UI/maintenance that relinking is possible.
+  Future<bool> get hasPendingRestore;
+
+  /// Re-runs the pending import; null when nothing is pending.
+  Future<VaultBackupResult?> resumePending({
+    VaultBackupSession? session,
+    VaultBackupProgressCallback? onProgress,
+  });
 }
 
 typedef VaultBackupProgressCallback = void Function(
@@ -435,6 +448,8 @@ final class _RestoreMediaPlan {
     required this.expectedLength,
     required this.expectedDigest,
     required this.skipExisting,
+    this.encryptionKeyId,
+    this.staleRowId,
     this.missingLocalFile = false,
     this.localPath,
   });
@@ -452,6 +467,20 @@ final class _RestoreMediaPlan {
   final int expectedLength;
   final String expectedDigest;
   final bool skipExisting;
+
+  /// Key that wrapped this row's DEK, resolved for this install.
+  ///
+  /// Older exports left `encryptionKeyId` blank for rows encrypted with the
+  /// exporting phone's default key; [VaultBackupService] then falls back to the
+  /// manifest's `defaultKeyId` instead of letting the launch-time backfill stamp
+  /// this phone's own key (which would make the DEK unopenable).
+  final String? encryptionKeyId;
+
+  /// Row that already points at the same file under a different id.
+  ///
+  /// An orphan scan run before the relink indexed the file without any DEK
+  /// metadata; the restored row replaces it so the file gains its key again.
+  final String? staleRowId;
 
   /// v6: no media file was found in phone storage for this row. The metadata
   /// is kept in the manifest but must not become an empty grid entry.

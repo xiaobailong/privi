@@ -79,6 +79,10 @@ abstract final class VaultPaths {
   static const String shareStagingDir = 'share_staging';
   static const String nomedia = '.nomedia';
 
+  /// App-private marker for a data-only import whose media files were not on
+  /// this phone yet (documents dir, outside [vaultDir] so scans never see it).
+  static const String pendingRestoreDir = 'pending_restore';
+
   /// Shared-storage hide root (dot folder + .nomedia).
   /// Lives on primary external storage so moves are renames, not copies.
   static const String hiddenRootName = '.privateheart_vault';

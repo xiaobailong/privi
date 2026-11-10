@@ -107,6 +107,23 @@ Future<void> main() async {
       } catch (e, stackTrace) {
         AppLogger.e('Main', 'maintenance failed: $e\n$stackTrace');
       }
+      // A data-only import whose media files were copied afterwards links its
+      // rows here, so the user does not have to re-import by hand (ADR-052).
+      try {
+        final backup = container.read(vaultBackupServiceProvider);
+        if (await backup.hasPendingRestore) {
+          final result = await backup.resumePending();
+          container.read(vaultLibraryRegistryProvider).reload();
+          container.invalidate(settingsControllerProvider);
+          AppLogger.i(
+            'Main',
+            'pending vault data relinked: ${result?.itemCount ?? 0} row(s)',
+          );
+        }
+      } catch (e, stackTrace) {
+        AppLogger.e(
+            'Main', 'pending vault data relink failed: $e\n$stackTrace');
+      }
     }());
   });
 

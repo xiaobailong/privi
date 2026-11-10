@@ -1151,6 +1151,11 @@ class AppLocalizations {
 
   String vaultLibraryScanDone(int count) => '扫描完成，已恢复 $count 个文件';
 
+  String vaultLibraryRelinkDone(int count) => '已关联上次导入的数据，恢复 $count 项';
+
+  String get vaultLibraryRelinkPending =>
+      '已关联部分数据；其余数据的媒体文件还没拷贝到本机，拷贝完成后重启应用会自动再次关联';
+
   String get vaultLibraryRemove => '移除';
 
   String get vaultLibraryRemoveTitle => '移除这个保险库？';

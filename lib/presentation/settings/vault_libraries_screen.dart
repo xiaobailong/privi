@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../../application/backup/vault_backup_controller.dart';
 import '../../application/providers.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
@@ -285,6 +286,23 @@ class _VaultLibrariesScreenState extends ConsumerState<VaultLibrariesScreen> {
       // Hide the new library from MediaScanner regardless of which one is the
       // current write target.
       await storage.prepareLibraryDirectory(normalized);
+
+      // A data-only import that ran before this folder was copied can now link
+      // its rows — with DEKs, key ids and album memberships — instead of
+      // rebuilding bare entries that could never be decrypted.
+      final backup = ref.read(vaultBackupServiceProvider);
+      if (await backup.hasPendingRestore) {
+        final result = await ref
+            .read(vaultBackupControllerProvider.notifier)
+            .resumePendingRestore();
+        if (!mounted) return;
+        if (await backup.hasPendingRestore) {
+          _snack(l10n.vaultLibraryRelinkPending);
+        } else {
+          _snack(l10n.vaultLibraryRelinkDone(result?.itemCount ?? 0));
+        }
+        return;
+      }
 
       final scan = await showDialog<bool>(
         context: context,

@@ -1306,6 +1306,27 @@
     ```
     & "D:\Tools\DevTools\Android\Sdk\platform-tools\adb.exe" pull "/storage/emulated/0/Download/密册/logs/密册_log_2026-10-14.txt" "D:\WorkSpace\test\privi\tmp\device_log.txt"
     ```
+
+## PIT-077 用 editor 改文件后整篇变 LF：git 警告 `LF will be replaced by CRLF`
+- 触发条件: 用 editor 工具对 **CRLF 文件**做局部替换/插入（本仓库 `core.autocrlf=true`，工作区约定 CRLF）
+- 错误现象: 该文件整篇变成裸 LF；`git status` 显示 M 但 `git diff` 只有自己的几行（行尾变化被 autocrlf 归一化掉了），
+  同时 git 打印 `warning: in the working copy of '<file>', LF will be replaced by CRLF the next time Git touches it`。
+  实测 2026-11-10：`lib` 下 149 个 `.dart` 里 138 个 CRLF、11 个 LF-only，LF 那批全是当天新建/改写的备份模块文件。
+- 正确做法:
+  ① 排查：`git ls-files --eol <file>`（正常是 `i/lf w/crlf`；`w/lf` = 工作区已是 LF），或数字节里的 `0D 0A`；
+  ② 修（字节级补 CRLF，别用 `Set-Content`，会带 BOM）：
+     ```powershell
+     $b=[IO.File]::ReadAllBytes($p); $o=New-Object System.Collections.Generic.List[byte]
+     for($i=0;$i -lt $b.Length;$i++){ if($b[$i] -eq 10 -and ($i -eq 0 -or $b[$i-1] -ne 13)){$o.Add([byte]13)}; $o.Add($b[$i]) }
+     [IO.File]::WriteAllBytes((Resolve-Path $p), $o.ToArray())
+     ```
+  ③ 只有行尾变化、内容相同的文件，`git checkout -- <file>` 也能让工作区回到 CRLF 并清掉状态噪声
+     （先确认 `git diff --quiet -- <file>` 为 0）。
+- 反例（别这么写）: 看到 `git status` 一片 M 就以为改坏了 —— 先看 `git diff --stat`（行尾变化不进 diff）；
+  也不要顺手 `git add` 全部文件去"清状态"（会混入无关 staging）。
+- 自检: `git ls-files --eol <file>` 全为 `w/crlf`；`dart format --output=none --set-exit-if-changed <file>` 仍 0 changed。
+- 首次记录: 2026-11-10
+
   - 拉取后按 `PIT-070` 清理设备端日志
 - 反例（别这么写）: `adb logcat -v time | findstr "com.privi.app"` — 只能抓到几条系统行，看不到业务错误
 - 自检: `adb shell "ls -la /storage/emulated/0/Download/密册/logs/"` → 能看到当天的日志文件

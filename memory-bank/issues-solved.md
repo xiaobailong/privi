@@ -140,6 +140,35 @@
   构建自动递增的 `pubspec.yaml` 已还原 1.1.0，不提交无对应 APK 的版本号。
   Dart 侧 `build_runner`（272 outputs）与 AOT 编译均已成功，崩溃只在 R8 / Gradle 原生阶段，与业务代码无关。
 
+### 复发记录 2026-11-10 19:31（同日第三次，`-Xmx3G` 已生效、构建前回收过内存）
+- 现场: `scripts\build.bat norelease` 在 `assembleRelease` **139.7s** 崩：
+  `Gradle build daemon disappeared unexpectedly` + `JVM crash log found: android/hs_err_pid22316.log`；
+  `build\build_exit.log` = `BUILD_FAILED=1 WMI_FAILED=0 NEW_VER=1.1.1`。
+- 崩溃日志（`android\hs_err_pid22316.log`）关键行：
+  ```
+  # Native memory allocation (malloc) failed to allocate 1435456 bytes for Chunk::new
+  #  Out of Memory Error (arena.cpp:168), pid=22316
+  # Time: Tue Nov 10 19:30:58 2026 elapsed time: 136.469627 seconds
+  TotalPageFile size 63475M (AvailPageFile size 964M)
+   garbage-first heap   total 1810432K, used 1483847K [0x...00, 0x...00)   # 1.4G / -Xmx3G
+   Metaspace       used 315817K, committed 319488K, reserved 1179648K      # 315M / 1G
+  ```
+  ⇒ **Java 堆与 Metaspace 都远未到上限**，却连 1.4MB 原生内存都申请不到 ⇒ 仍是「整机提交内存耗尽」这一根因，
+  不是堆溢出，也不是代码问题（`arena.cpp` 命中本条目复发判据）。
+- 构建前内存（`build\mem_report.log` 19:28:35）：`MEM OK FreePhysMB=3988 FreeCommitMB=4916 CommitLimitMB=63475`
+  ⇒ 第 **3** 次印证「`MEM OK` 不是安全保证」：开局 4.9G 余量，R8 跑 2 分钟就把 pagefile 吃到只剩 964MB。
+- 成功的那一半（可当编译级验证用）: `[1/3] pub get` 21s 成功、`build_runner` 272 outputs 成功、
+  `Font asset ... tree-shaken` 说明 AOT 已过、Kotlin/Java 编译也过（daemon 日志只有 unchecked 注记），**只崩在 R8**。
+- 现场残留（下次构建前可先清）: 失败后仍有 `java` 进程存活（实测 pid 26948 起于 19:26:16、pid 42700 起于 19:30:06），
+  另 `idea64` 占 2.7GB、`Memory Compression` 2.4GB；`build_mem.ps1` 只会回收 **>120s** 的本机 JDK JVM。
+- 处置（未重试，按规则交给用户手工构建）: ①`scripts\build_mem.ps1 -StopDaemons`（或手工 `Stop-Process` 上面两个 java）；
+  ②调大系统页面文件（当前 commit limit 63475M = 物理 28423M + pagefile ≈35G，R8 峰值要 5G+ 余量）；
+  ③构建时关掉 IDEA/浏览器等大头进程；④最后才考虑 `-Xmx3G→2560m` / `MaxMetaspaceSize 1G→768m` /
+  `org.gradle.workers.max=4`（降预留与并发峰值，属取舍，`gradle.properties` 注释里写过「别轻易调回」）。
+- 版本状态: 构建脚本已把 `pubspec.yaml` 进位到 1.1.1（**已还原为 1.1.0**），根目录仍只有旧 `privi-1.1.0.apk`；
+  不要把这个旧包当成新产物（`ISSUE-007`）。
+- 最近复核: 2026-11-10 19:31（**复发，仍未修复**；同一天 3 次：18:23 / 18:30 / 19:31）
+
 ## ISSUE-005 版本号漂移：`.BUILD_NUM` 涨了但 `pubspec.yaml` 没变
 - 状态: 已修复
 - 症状 / 现场: 打出来的 APK versionCode 是旧的；历史上多次「版本号漂移」
@@ -1785,6 +1814,54 @@
     value.isInitialized ? child! : _videoPlaceholder(item, active), child: <画面子树>)`；
     `child:` 让 Texture 子树在 250ms 一次的位置刷新时不重建；沙漏/缩略图分支抽成 `_videoPlaceholder()`
   - `gallery_preview_screen.dart`：`_pageContent()` 同样改成 `ValueListenableBuilder`（未初始化时显示原有转圈）
+
+## ISSUE-050 【2026-11-10】跨手机迁移「先导入数据、后拷媒体」⇒ 记录全丢、拷贝进来的密文无法解密
+- 状态: 已修复（静态验证通过，真机待复核）
+- 症状 / 现场: A 机「保险库数据」导出 → B 机导入（提示成功）→ 再把 A 的整个媒体文件夹拷到 B、**改了文件夹名**、
+  在「设置 → 存储 → 保险库管理」里加为私密库。结果 B 机私密库是空的；此时若用「扫描孤立隐藏文件」，
+  随机名密文会被当成**图片**建行（无 DEK、`isVideo=false`），点开解密失败/空白，视频也认不出来。
+- 复发判据（5 秒定论）:
+  ① 日志：导入时出现 `VaultPendingRestore ... media row(s) wait for their files`，且
+     B 机 `documents/pending_restore/pending_restore.json` 存在；全部关联成功后该文件消失。
+     **只有 `restored N app setting(s)`、没有上面这条** ⇒ 旧包，本条未修；
+  ② 代码：`git grep -n "hasPendingRestore" -- lib/` 必须命中（接口 / 服务 / 控制器 / 添加库流程 / main 各一处）。
+- 根因（三处叠加）:
+  ① v6 是「数据 only」（`ADR-049`）：preflight 按 basename 在 `mediaRoots()` 里找文件，找不到的行
+     `missingLocalFile=true` → installer 条件不满足直接跳过，**既不写行也不留 manifest** ⇒ 元数据（含 DEK、密钥 id）永久丢失；
+  ② 事后添加的库不会自动重新关联：`VaultLibrariesScreen` 加完目录只问「是否扫描孤立隐藏文件」，
+     而孤儿扫描重建的行**没有 DEK、没有 `original_name`**，随机名无扩展名 ⇒ 一律按图片建行，密文永远打不开；
+  ③ 跨设备时 `media_items.encryption_key_id` 可能为空（A 机是旧版本/旧备份数据）⇒ B 机启动回填用
+     **B 自己的默认密钥**盖章（`encryption_key_link_backfill.dart`），之后既解不开也无法反推原密钥。
+- 证据: `vault_backup_restore_preflight.dart::_preflightDataOnly()` 的 `missingLocalFile: localPath == null`；
+  `vault_backup_restore_install.dart` 的 `if (!plan.skipExisting && !plan.missingLocalFile && localPath != null)`
+  —— 缺文件时既不进 `installed` 也没有替代路径；`vault_backup_manifest.dart` 旧 `fromExport` 直接透传
+  `entry.row.encryptionKeyId`（可空）。
+- 修法:
+  ① 新增 `_PendingRestoreStore`（`lib/data/services/vault_pending_restore.dart`，part of `vault_backup_service.dart`）：
+     导入发现「有行没文件」时把**归档目录路径**写进 `documents/pending_restore/pending_restore.json`；
+     只存路径、**不复制 manifest**（里面有明文 KEK，见 `ADR-052`）；整批关联成功后删除标记；
+  ② `VaultBackupOperations` 增加 `hasPendingRestore` / `resumePending()`：后者用同一个目录**再导入一次**
+     （已存在的行按 id 跳过 ⇒ 天然幂等），DEK、密钥 id、相册归属一起回来；
+  ③ 触发点两个：启动维护末尾（`main.dart`，自动）+「保险库管理 → 添加库」成功后（`vault_libraries_screen.dart`：
+     有标记就直接 relink，不再走孤儿扫描）；
+  ④ 导出时把空白 `encryption_key_id` 补成**导出机当前默认密钥 id**（`_VaultBackupManifestCodec._keyIdForRow`），
+     恢复时再用 manifest 的 `defaultKeyId` 兜底（`_RestoreMediaPlan.encryptionKeyId`），避免被 B 机回填错误盖章；
+  ⑤ 若库里已有同文件、不同 id 的孤儿行（用户先扫过孤儿），relink 在同一事务里先删旧行再插入清单行
+     （`_RestoreMediaPlan.staleRowId` → installer `hardDeleteRowsOnly`），不留「两条记录、一条打不开」；
+  ⑥ 恢复设置时**不覆盖** `vault_libraries_v1` / `vault_active_library_v1`（跨机绝对路径），改为按规范化路径**合并**，
+     否则「先添加目录、再导入数据」（`ADR-051` 推荐顺序）会把刚加的库覆盖掉。
+- 反例 / 易误判:
+  - 以为「导入成功」= 记录都在 —— 缺文件的行是**静默跳过**的（日志只有 `restored N app setting(s)`）；
+  - 以为「加库 + 扫描孤儿」能救 —— 重建的行没有 DEK，密文永远打不开，视频还会被当图片；
+  - 以为「文件夹改名导致路径失效」—— 匹配按 **basename**，随机名与 `<id8>_原名` 都与目录名无关；
+  - 以为「B 机已有密钥会冲突」——`ADR-050` 起导入密钥是额外密钥，真正的坑是 **keyId 空白被本机回填盖章**。
+- 相关文件: `lib/data/services/vault_pending_restore.dart`（新增）、`vault_backup_service.dart`、`vault_backup_restore.dart`、
+  `vault_backup_restore_preflight.dart`、`vault_backup_restore_install.dart`、`vault_backup_manifest.dart`、
+  `vault_backup_models.dart`、`lib/application/backup/vault_backup_controller.dart`、
+  `lib/presentation/settings/vault_libraries_screen.dart`、`lib/main.dart`、`lib/core/constants.dart`（`VaultPaths.pendingRestoreDir`）
+- 相关条目: `ADR-049`、`ADR-050`、`ADR-051`、`ADR-052`、`ISSUE-040`（随机名孤儿无法判断类型）、`PIT-065`
+- 首次记录: 2026-11-10
+
   - `PlayerScreen` 的 listener 写法不动（两种都对，本轮只补齐缺的两处）
 - 顺带修的次生缺陷（同一次日志暴露）: `_probeSeekAxis()` 在 32 位 PTS 回绕文件上会**实测 seek**：
   `VDIAG[timeline-offset] … 47720499ms` → `seekTo: textureId=…, positionMs=300`（content 坐标）→

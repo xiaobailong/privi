@@ -50,7 +50,7 @@ final class _VaultBackupManifestCodec {
             sizeBytes: entry.row.sizeBytes,
             deletedAt: entry.row.deletedAt,
             encryptedDek: entry.row.encryptedDek,
-            encryptionKeyId: entry.row.encryptionKeyId,
+            encryptionKeyId: _keyIdForRow(entry.row, defaultKeyId),
             privatePath: entry.row.privatePath,
             thumbnailPath: entry.row.thumbnailPath,
             playCount: entry.row.playCount,
@@ -167,6 +167,21 @@ final class _VaultBackupManifestCodec {
           'appSettings': manifest.appSettings,
         },
       };
+
+  /// Key id to record for one row.
+  ///
+  /// Rows written before `encryption_key_id` existed (or restored from a
+  /// v1..v5 backup) still belong to the key that was default at export time.
+  /// Naming it here is what lets another phone open the file with the imported
+  /// key: without it the receiving phone's launch-time backfill would stamp its
+  /// own default key and the DEK would never unwrap.
+  static String? _keyIdForRow(MediaItemRow row, String? defaultKeyId) {
+    final dek = row.encryptedDek;
+    if (dek == null || dek.isEmpty) return null;
+    final keyId = row.encryptionKeyId;
+    if (keyId != null && keyId.trim().isNotEmpty) return keyId;
+    return defaultKeyId;
+  }
 
   void validateV5Summary(_BackupManifest manifest) {
     _validator.validateSummary(manifest);

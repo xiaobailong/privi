@@ -89,7 +89,14 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
       state = const VaultBackupUiState();
       return false;
     }
-    unawaited(_run(operation: operation, directory: directory));
+    final selected = directory;
+    unawaited(
+      _run(
+        operation: operation,
+        directory: selected,
+        execute: (session) => _execute(operation, selected, session),
+      ),
+    );
     return true;
   }
 
@@ -98,16 +105,65 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
     required String directory,
   }) {
     _ensureAvailable();
-    return _run(operation: operation, directory: directory);
+    return _run(
+      operation: operation,
+      directory: directory,
+      execute: (session) => _execute(operation, directory, session),
+    );
   }
 
-  Future<void> retry() {
+  /// Relinks a data-only import whose media files were copied after the fact.
+  ///
+  /// The archive records no media bytes (`ADR-049`), so an import that ran
+  /// before the folder was copied has no rows to link. The import remembers its
+  /// archive; this re-runs it once the files are visible and returns the result
+  /// (null when nothing is pending).
+  Future<VaultBackupResult?> resumePendingRestore() async {
+    _ensureAvailable();
+    final service = ref.read(vaultBackupServiceProvider);
+    if (!await service.hasPendingRestore) return null;
+    await _run(
+      operation: VaultBackupOperation.restore,
+      execute: (session) => service.resumePending(
+        session: session,
+        onProgress: (progress) => _updateProgress(session, progress),
+      ),
+    );
+    return state.result;
+  }
+
+  Future<void> retry() async {
     final operation = state.operation;
     final directory = state.directory;
-    if (operation == null || directory == null) {
+    if (operation == null) {
       throw StateError('No vault backup operation is available to retry.');
     }
-    return start(operation: operation, directory: directory);
+    if (directory == null) {
+      // A relink has no directory of its own; retry it the same way.
+      await resumePendingRestore();
+      return;
+    }
+    await start(operation: operation, directory: directory);
+  }
+
+  Future<VaultBackupResult> _execute(
+    VaultBackupOperation operation,
+    String directory,
+    VaultBackupSession session,
+  ) {
+    final service = ref.read(vaultBackupServiceProvider);
+    return switch (operation) {
+      VaultBackupOperation.export => service.exportToDirectory(
+          directory,
+          session: session,
+          onProgress: (progress) => _updateProgress(session, progress),
+        ),
+      VaultBackupOperation.restore => service.importFromDirectory(
+          directory,
+          session: session,
+          onProgress: (progress) => _updateProgress(session, progress),
+        ),
+    };
   }
 
   void cancel() {
@@ -133,7 +189,9 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
 
   Future<void> _run({
     required VaultBackupOperation operation,
-    required String directory,
+    required Future<VaultBackupResult?> Function(VaultBackupSession session)
+        execute,
+    String? directory,
   }) async {
     final session = VaultBackupSession();
     _session = session;
@@ -143,30 +201,19 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
       status: VaultBackupUiStatus.running,
     );
     try {
-      final service = ref.read(vaultBackupServiceProvider);
-      final result = await switch (operation) {
-        VaultBackupOperation.export => service.exportToDirectory(
-            directory,
-            session: session,
-            onProgress: (progress) => _updateProgress(session, progress),
-          ),
-        VaultBackupOperation.restore => service.importFromDirectory(
-            directory,
-            session: session,
-            onProgress: (progress) => _updateProgress(session, progress),
-          ),
-      };
+      final result = await execute(session);
       if (!ref.mounted || !identical(_session, session)) return;
+      final cancelled = result?.cancelled ?? false;
       state = VaultBackupUiState(
         operation: operation,
         directory: directory,
-        status: result.cancelled
+        status: cancelled
             ? VaultBackupUiStatus.cancelled
             : VaultBackupUiStatus.completed,
         progress: state.progress,
         result: result,
       );
-      if (!result.cancelled && operation == VaultBackupOperation.restore) {
+      if (!cancelled && operation == VaultBackupOperation.restore) {
         ref.invalidate(vaultSizeBytesProvider);
         ref.invalidate(albumsProvider);
         // v6 backups restore every app setting; drop the cached state so the

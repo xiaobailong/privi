@@ -14,6 +14,7 @@ final class _VaultBackupRestorer {
     this.preferences,
     this.keyBackup,
     this.backfill,
+    this.pending,
   })  : manifests = const _VaultBackupManifestCodec(),
         preflight = _VaultBackupRestorePreflight(
           db: db,
@@ -51,6 +52,9 @@ final class _VaultBackupRestorer {
   /// Old (v1..v5) backups have no key links; stamp them with this phone's key.
   final EncryptionKeyLinkBackfill? backfill;
 
+  /// Remembers rows whose media file is not on this phone yet.
+  final _PendingRestoreStore? pending;
+
   Future<VaultBackupResult> run(
     String sourceDirectory, {
     VaultBackupSession? session,
@@ -80,6 +84,8 @@ final class _VaultBackupRestorer {
         activeSession,
         onProgress,
       );
+      final missingFiles =
+          await _syncPendingRestore(manifest, plans, sourceDirectory);
       final result = await installer.run(
         manifest,
         plans,
@@ -89,6 +95,11 @@ final class _VaultBackupRestorer {
       await _backfillLegacyLinks();
       await _restoreAppSettings(manifest);
       await _adoptEncryptionSalt(manifest);
+      // Every row has a file now: the relink marker has done its job.  A
+      // partial import keeps it so the next launch can pick up the rest.
+      if (manifest.dataOnly && missingFiles == 0) {
+        await pending?.clear();
+      }
       return result;
     } on _VaultBackupCancelled {
       return const VaultBackupResult(
@@ -154,13 +165,41 @@ final class _VaultBackupRestorer {
     );
   }
 
+  /// Records (or clears) the "media files not copied yet" marker.
+  ///
+  /// A v6 import that cannot see its media files yet must not lose the
+  /// metadata: the marker lets the very same manifest be imported again once
+  /// the folder has been copied — which is exactly the order a phone migration
+  /// follows when the user copies the directory afterwards.
+  ///
+  /// Returns how many rows are still without a file.  The marker is removed by
+  /// [run] only after the whole restore succeeded, so a failed run can retry.
+  Future<int> _syncPendingRestore(
+    _BackupManifest manifest,
+    List<_RestoreMediaPlan> plans,
+    String sourceDirectory,
+  ) async {
+    final store = pending;
+    if (store == null || !manifest.dataOnly) return 0;
+    final missing = plans.where((plan) => plan.missingLocalFile).length;
+    if (missing == 0) return 0;
+    await store.remember(
+      sourceDirectory,
+      missing: missing,
+      total: plans.length,
+    );
+    return missing;
+  }
+
   Future<void> _restoreAppSettings(_BackupManifest manifest) async {
     final prefs = preferences;
     if (prefs == null || manifest.appSettings.isEmpty) return;
     var restored = 0;
     for (final entry in manifest.appSettings.entries) {
       final key = entry.key;
-      if (key.startsWith('flutter.')) continue;
+      // Engine counters plus keys that describe this phone's own absolute
+      // paths — the vault libraries are merged separately (see below).
+      if (key.startsWith('flutter.') || _isDeviceScopedSetting(key)) continue;
       final value = entry.value;
       try {
         switch (value) {
@@ -182,8 +221,86 @@ final class _VaultBackupRestorer {
         AppLogger.w('VaultBackupRestore', 'could not restore setting $key: $e');
       }
     }
+    await _mergeVaultLibraries(manifest.appSettings);
     AppLogger.i(
         'VaultBackupRestore', 'restored $restored app setting(s) from backup');
+  }
+
+  /// Settings that hold **this device's** absolute paths and must not be
+  /// overwritten by another phone's snapshot.
+  static bool _isDeviceScopedSetting(String key) =>
+      key == VaultLibraryRegistry.librariesKey ||
+      key == VaultLibraryRegistry.activeKey;
+
+  /// Merges the backup's vault libraries into the ones this phone already has.
+  ///
+  /// `ADR-051` tells users to add the copied directory **before** importing the
+  /// data, so restoring the key verbatim would wipe that entry (and every other
+  /// library added since). Paths are merged by normalized path and the active
+  /// library is left alone, so this phone keeps writing where the user told it
+  /// to. Entries whose directory is missing here stay in the list — the
+  /// settings screen marks them as unavailable instead of dropping them.
+  Future<void> _mergeVaultLibraries(Map<String, Object?> settings) async {
+    final prefs = preferences;
+    if (prefs == null) return;
+    final incomingRaw = settings[VaultLibraryRegistry.librariesKey];
+    if (incomingRaw is! String || incomingRaw.isEmpty) return;
+    final incoming = _decodeLibraryList(incomingRaw);
+    if (incoming.isEmpty) return;
+    final local = _decodeLibraryList(
+      prefs.getString(VaultLibraryRegistry.librariesKey) ?? '',
+    );
+    final seenPaths = <String>{};
+    final seenIds = <String>{};
+    for (final entry in local) {
+      final path = _libraryPathOf(entry);
+      if (path != null) seenPaths.add(path);
+      final id = _libraryIdOf(entry);
+      if (id != null) seenIds.add(id);
+    }
+    final merged = <Object?>[...local];
+    var added = 0;
+    for (final entry in incoming) {
+      final path = _libraryPathOf(entry);
+      final id = _libraryIdOf(entry);
+      if (path == null || id == null) continue;
+      if (!seenIds.add(id) || !seenPaths.add(path)) continue;
+      merged.add(entry);
+      added++;
+    }
+    if (added == 0) return;
+    await prefs.setString(
+      VaultLibraryRegistry.librariesKey,
+      jsonEncode(merged),
+    );
+    AppLogger.i(
+      'VaultBackupRestore',
+      'merged $added vault library path(s) from the backup; this phone keeps '
+          'its active library',
+    );
+  }
+
+  static List<Object?> _decodeLibraryList(String raw) {
+    if (raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is List ? List<Object?>.from(decoded) : const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static String? _libraryPathOf(Object? entry) {
+    if (entry is! Map) return null;
+    final path = entry['path'];
+    if (path is! String || path.trim().isEmpty) return null;
+    return p.normalize(path.trim().replaceAll('\\', '/'));
+  }
+
+  static String? _libraryIdOf(Object? entry) {
+    if (entry is! Map) return null;
+    final id = entry['id'];
+    return id is String && id.isNotEmpty ? id : null;
   }
 
   Future<VaultBackupResult> _importLegacyKeyPackage(

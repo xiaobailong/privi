@@ -1305,6 +1305,39 @@
 - 影响 / 约束（后续改动必须注意）: 导出确认框的安全提示不能删；导出目录必须是空文件夹；
   升 `manifestVersion` 时旧格式解析与校验分支必须保留；恢复设置后要 invalidate 相关 provider；
   注册表等新增设置键会自动随数据文件导出/恢复。
+
+## ADR-052 迁移顺序容错：导入时记住归档路径，媒体就位后再关联（不复制 manifest、不重复密钥）
+- 日期: 2026-11-10 | 状态: 已采纳（静态验证通过，真机未验证）
+- 背景: v6 数据文件不含媒体（`ADR-049`），而用户实际的迁移顺序常常是
+  「导出 → 新机导入数据 → 拷媒体文件夹 → 改名 → 加为保险库」。这种顺序下导入时看不到任何文件，
+  旧实现把行全部丢弃且不留痕迹；事后扫描孤儿只能建出**没有 DEK** 的行（`ISSUE-050`）。
+- 决策:
+  ① 导入发现 `missingLocalFile` 时，把**归档目录绝对路径**写入 app 私有标记
+     `documents/pending_restore/pending_restore.json`（`VaultPaths.pendingRestoreDir`），整批关联成功后删除；
+  ② `resumePending()` 复用同一套 `importFromDirectory`（不改解析、不改 installer），靠「id 已存在则跳过」保证幂等；
+  ③ 触发点：启动维护之后自动尝试一次 + 添加保险库目录成功后立即尝试（有标记就不问孤儿扫描）；
+  ④ 设备相关设置（`vault_libraries_v1` / `vault_active_library_v1`）**只合并不覆盖**；
+  ⑤ 导出补空白 `encryption_key_id`、恢复用 `defaultKeyId` 兜底，把「哪把密钥」显式写进数据文件。
+- 理由: 复用已通过静态检查的导入链路，改动面最小；标记只是一个路径，不引入新 schema、不复制密钥材料；
+  文件晚到时用户不必重新导出/导入。
+- 备选与为何不选:
+  - **把 manifest 复制到 app 私有目录**：能扛「用户删掉导出目录」，但会多一份**明文 KEK**，扩大安全边界 → 不选；
+  - **导入时就插入「没有文件的行」等以后再修**：网格出现打不开的空条目（`ADR-049` 明确禁止），
+    且启动维护的 `_purgeMissingFiles` 会把它们当丢失文件清掉；
+  - **让孤儿扫描去补 DEK**：磁盘上没有密钥材料，补不出来；
+  - **新增 pending 表（drift v11）**：要迁移 + 重新 codegen，收益不如一个 JSON 标记。
+- 影响 / 约束（后续改动必须注意）:
+  - 标记里**只能存路径**，不许把 manifest / KEK / DEK 复制进去；
+  - `resumePending()` 会再次恢复设置（同一份数据，值相同）；若以后设置恢复有副作用，要在这里加开关；
+  - 只要导入仍会「跳过缺文件的行」，就必须维持 `missingLocalFile → remember()` 这条链路（`ISSUE-050` 复发判据）；
+  - 归档目录被移动/删除时标记自动清除并打日志，用户需重新选择目录导入；
+  - 标记文件在 `documents/` 下、**不在** `vaultDir` 内，不会被 `mediaRoots()` 扫描到。
+- 相关文件: `lib/data/services/vault_pending_restore.dart`、`vault_backup_service.dart`、`vault_backup_restore.dart`、
+  `vault_backup_models.dart`、`lib/application/backup/vault_backup_controller.dart`、`lib/main.dart`、
+  `lib/presentation/settings/vault_libraries_screen.dart`、`lib/core/constants.dart`
+- 相关条目: `ISSUE-050`、`ADR-049`、`ADR-050`、`ADR-051`
+- 首次记录: 2026-11-10
+
 - 相关文件: `lib/data/services/vault_backup_service.dart` 及 `vault_backup_*.dart`、
   `lib/application/backup/vault_backup_controller.dart`、`lib/l10n/app_localizations.dart`
 - 相关条目: `ADR-047`、`ADR-050`、`ADR-051`、`ISSUE-029`③、`PIT-054`

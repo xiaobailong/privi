@@ -80,6 +80,15 @@ final class _VaultBackupRestorePreflight {
           : null;
       final localPath = await _resolveLocalFile(item, fileIndex);
       final existing = await db.getMediaById(id);
+      // A file indexed by the orphan scan (no DEK) under another id would
+      // otherwise become a second, permanently unopenable grid entry.
+      final staleRowId = existing == null && localPath != null
+          ? (await db.findByPrivatePath(localPath))?.id
+          : null;
+      final dek = item.encryptedDek;
+      final hasDek = dek != null && dek.isNotEmpty;
+      final encryptionKeyId =
+          hasDek ? (item.encryptionKeyId ?? manifest.defaultKeyId) : null;
       plans.add(
         _RestoreMediaPlan(
           media: item,
@@ -92,6 +101,8 @@ final class _VaultBackupRestorePreflight {
           expectedLength: item.byteLength ?? item.sizeBytes ?? 0,
           expectedDigest: item.sha256 ?? item.contentDigest ?? '',
           skipExisting: existing != null,
+          encryptionKeyId: encryptionKeyId,
+          staleRowId: staleRowId,
           missingLocalFile: localPath == null,
           localPath: localPath,
         ),

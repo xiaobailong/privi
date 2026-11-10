@@ -45,7 +45,7 @@
 | --- | --- |
 | 构建「卡住不动」：日志 0 字节、CPU 0%、进程杀不掉 | `ISSUE-001`（WMI 挂死）、`ISSUE-002`（看门狗） |
 | 构建 20 秒内就失败、`build_full.log` 写 `[错误] WMI 无响应` | `ISSUE-001`（复测要放独立窗口） |
-| 构建跑了约 5 分钟失败、`daemon disappeared` + `android\hs_err_pid*.log` | `ISSUE-004`（R8 提交内存耗尽，`MEM OK` 不代表安全） |
+| 构建跑了约 2~5 分钟失败、`daemon disappeared` + `android\hs_err_pid*.log` | `ISSUE-004`（R8 提交内存耗尽，`MEM OK` 不代表安全） |
 | `build.bat` 报「判定卡死」，`build\pub_*.log` 0 字节 | `ISSUE-002`、`PIT-011` |
 | `scripts\build_*.ps1` 全部报「未找到 / 跳过」 | `ISSUE-011`（路径不同步） |
 | `pubspec.yaml` 版本号没变、`.BUILD_NUM` 却涨了 | `ISSUE-005`（`.BUILD_NUM` 已于 2026-10-07 移除） |
@@ -205,6 +205,11 @@
 | 导入导出为什么只有一个入口 / 数据文件里有什么 / 为什么不含媒体文件 | `ADR-049` |
 | 导入密钥提示「本机已有自己的密钥」/ 文件不知道用哪把密钥解密 / 空白关系怎么补 | `ADR-050` |
 | 怎么并排使用多个保险库 / 旧手机目录迁移顺序 / 添加目录被拒 | `ADR-051` |
+| 跨手机迁移「先导入数据、后拷媒体」后私密库是空的 / 拷贝进来的密文打不开 | `ISSUE-050`、`ADR-052` |
+| 添加保险库目录后要不要「扫描孤立隐藏文件」/ 导入过的旧媒体记录怎么补回来 | `ISSUE-050`、`ADR-052` |
+| 跨设备导入后 `encryption_key_id` 为空、DEK 被本机默认密钥盖章 | `ISSUE-050`（根因③）、`ADR-050` |
+| 导入「保险库数据」会不会覆盖本机已添加的保险库路径 | `ADR-052`（④）、`ISSUE-050` |
+| 用 editor 改完文件后 git 警告 `LF will be replaced by CRLF` / 状态一片 M | `PIT-077` |
 
 
 
