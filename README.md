@@ -88,9 +88,9 @@
 ### 导入与备份
 
 - 系统分享 Intent 导入、批量隐藏
-- **保险库数据（导出 / 导入）**：设置页唯一的备份入口，密钥导入导出已合并进来。导出为单个 `privi_manifest.json`（v6），包含媒体记录（含回收站与播放历史）、相册 / 分组 / 归属、完整密钥环、以及全部应用设置；**不含媒体文件本体**（已在手机存储里，单独拷贝）。导入时按文件名把记录重新关联到本机媒体文件；找不到文件的条目不再直接丢弃，而是记入「待恢复」标记（只记归档目录绝对路径），媒体文件就位后自动重连（启动维护后 + 添加保险库目录成功后各尝试一次，幂等，成功后清除标记）；密钥登记为额外密钥，不覆盖本机密钥
+- **保险库数据（导出 / 导入）**：设置页唯一的备份入口，密钥导入导出已合并进来。导出为单个 **SQLite 数据库** `privi-vault-YYYYMMDD-HHMMSS.db`（容器格式 v1，记录布局 v6），包含媒体记录（含回收站与播放历史）、相册 / 分组 / 归属、完整密钥环、以及全部应用设置；**不含媒体文件本体**（已在手机存储里，单独拷贝）。可用任意 SQLite 工具打开查看；导入时按文件名把记录重新关联到本机媒体文件；找不到文件的条目不再直接丢弃，而是记入「待恢复」标记（只记归档目录绝对路径），媒体文件就位后自动重连（启动维护后 + 添加保险库目录成功后各尝试一次，幂等，成功后清除标记）；密钥登记为额外密钥，不覆盖本机密钥
   > ⚠️ 数据文件内含**明文保险库密钥**：任何同时拿到数据文件与保险库目录的人都能解密全部文件，请存到加密网盘或离线介质，不要分享。
-  > 兼容：旧版含 `media/` 文件夹的备份、以及旧 `.db` 密钥包仍可导入。
+  > 兼容：旧版单文件 JSON（`privi_manifest.json`）、含 `media/` 文件夹的备份、以及旧 `.db` 密钥包仍可导入；一个文件夹只放一份数据文件（导入时取其中最新的数据文件）。
 - **多保险库管理**（设置 → 存储）：可把手机上任意目录指定为额外保险库，与内置 `.privateheart_vault` **并行使用**；可切换「当前使用」的库（新隐藏的媒体写入该库）、移除登记（只删记录不删文件）。添加目录会校验不与已有库嵌套、不是存储卷根或公共媒体根目录
   > 迁移顺序：先把旧手机的保险库文件夹拷到本机 → 在管理页添加该目录 → 再导入保险库数据，媒体记录会按文件名自动匹配。
   > 顺序反过来（先导入数据、后拷媒体）也兼容：缺失媒体会记入「待恢复」，文件就位后自动关联，无需重新导出 / 导入。
@@ -151,7 +151,7 @@
 |------|------|
 | Android Keystore（`FlutterSecureStorage`） | 默认 KEK 与**密钥环**（历史 / 导入的额外密钥）持久化，硬件保护，双后端写入防读取失败（ISSUE-031） |
 | `<app_documents>/privi.sqlite` | 每个文件的 `encrypted_dek` 及其 `encryption_key_id`，记录该文件由哪把密钥加密 |
-| 用户选择的文件夹 / `privi_manifest.json` | 「保险库数据」导出文件，含全部元数据、密钥环与应用设置（不含媒体文件） |
+| 用户选择的文件夹 / `privi-vault-YYYYMMDD-HHMMSS.db` | 「保险库数据」导出文件（SQLite 单文件），含全部元数据、密钥环与应用设置（不含媒体文件）；旧版为 `privi_manifest.json` |
 
 ### 日志
 
@@ -193,7 +193,7 @@
 | `EncryptionKeyManager` | `lib/data/services/encryption_key_manager.dart` | KEK 生命周期（派生、持久化、加载、清除）+ 密钥环（`keyForId` / `registerKey` / `listKeys`），双 SecureStorage 后端容错 |
 | `EncryptionKeyLinkBackfill` | `lib/data/services/encryption_key_link_backfill.dart` | 启动时按空白行数幂等补入历史文件的 `encryption_key_id` |
 | `KeyBackupService` | `lib/data/services/key_backup_service.dart` | 旧版 `.db` 密钥包的只读兼容导入（新导出已并入「保险库数据」） |
-| `VaultBackupService` | `lib/data/services/vault_backup_service.dart` | 「保险库数据」v6 导出 / 导入：元数据 + 密钥环 + 全量设置，不含媒体文件 |
+| `VaultBackupService` | `lib/data/services/vault_backup_service.dart` | 「保险库数据」导出 / 导入：元数据 + 密钥环 + 全量设置，不含媒体文件；容器为单个 SQLite 数据库（`vault_backup_database.dart`） |
 | `VaultLibraryRegistry` | `lib/data/services/vault_library_registry.dart` | 多保险库注册表（添加 / 当前库 / 移除） |
 | `EncryptionRecordRepairService` | `lib/data/services/encryption_record_repair_service.dart` | 修复加密记录不一致（DB 标记已加密但文件为明文等），设置页「清除失败加密记录」 |
 
