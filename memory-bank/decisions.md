@@ -1271,7 +1271,7 @@
   ② 禁止写用户级 AI 记忆库（含 `update_memory`），已写入的本项目条目删除；
   ③ 每次回填后 `git commit`，历史版本由 git 管理，不靠会话摘要；
   ④ 红线同时写进 `AGENTS.md`（每次会话自动加载）与 `.clinerules/memory-bank.md`；
-  ⑤ 产品术语统一「保险库」，不用「私密库」；合并后的导入导出功能叫「保险库档案」。
+  ⑤ 产品术语统一「保险库」，不用「私密库」；合并后的导入导出功能叫「保险库数据」。
 - 理由: `memory-bank/` 已进 git、跨机器复用；`AGENTS.md` + `.clinerules/` 会被每次会话加载，
   等效于记忆但可审查、可 diff、可回滚。
 - 备选与为何不选:
@@ -1284,7 +1284,7 @@
 - 相关条目: `PIT-002`（编码）、`ADR-019`（临时产物去向）
 - 首次记录: 2026-11-10
 
-## ADR-049 密钥导入导出并入保险库导入导出 → 「保险库档案」v6
+## ADR-049 密钥导入导出并入保险库导入导出 → 「保险库数据」v6
 - 日期: 2026-11-10 | 状态: 已采纳（静态检查通过，真机未验证）
 - 背景: 设置页原有两个独立入口（密钥 `.db` 包 / 保险库文件夹）。用户要求合并，
   且导出要带走全部 app 数据但**排除媒体文件本体**（已在手机存储里，单独拷贝）。
@@ -1294,8 +1294,8 @@
   ② 导入按 `privatePath` / basename / `originalName` 在本机 `mediaRoots()` 索引里定位文件，
      找不到的条目跳过（不产生打不开的空条目）；
   ③ 旧 v1..v5 含 `media/` 的备份、以及目录里只有旧 `.db` 密钥包的情况，仍可导入；
-  ④ 对外功能名「保险库档案」，UI 明确提示档案含**明文 KEK**。
-- 理由: 一个文件覆盖迁移所需的全部数据；「档案」命名明确不含媒体本体，
+  ④ 对外功能名「保险库数据」，UI 明确提示数据文件含**明文 KEK**。
+- 理由: 一个文件覆盖迁移所需的全部数据；「数据」二字明确指向元数据而非媒体本体，
   避免用户误以为照片视频也一起备份了。
 - 备选与为何不选:
   - **保留双入口**：用户容易漏导密钥，导入后仍解不开；
@@ -1304,7 +1304,7 @@
     带到另一台手机后导致该机跳过必要的一次性补入（见 `ADR-050`）。
 - 影响 / 约束（后续改动必须注意）: 导出确认框的安全提示不能删；导出目录必须是空文件夹；
   升 `manifestVersion` 时旧格式解析与校验分支必须保留；恢复设置后要 invalidate 相关 provider；
-  注册表等新增设置键会自动随档案导出/恢复。
+  注册表等新增设置键会自动随数据文件导出/恢复。
 - 相关文件: `lib/data/services/vault_backup_service.dart` 及 `vault_backup_*.dart`、
   `lib/application/backup/vault_backup_controller.dart`、`lib/l10n/app_localizations.dart`
 - 相关条目: `ADR-047`、`ADR-050`、`ADR-051`、`ISSUE-029`③、`PIT-054`
@@ -1325,7 +1325,7 @@
 - 理由: 冲突的根因是「一行 DEK 只能靠唯一默认密钥解释」；把关系落到行上，多把密钥自然共存。
 - 备选与为何不选:
   - **导入时全库重新加密**：耗时且中断会损坏文件；
-  - **用「已补入」标记判幂等**：会随档案跨设备失效，且换密钥或导入旧备份产生新空白行后标记已过期；
+  - **用「已补入」标记判幂等**：会随数据文件跨设备失效，且换密钥或导入旧备份产生新空白行后标记已过期；
   - **按 DEK 逐个试探所有 KEK**：可行但慢，且无法表达「这个 keyId 不存在」应报错而非误解密。
 - 影响 / 约束（后续改动必须注意）: 写 DEK 必须同事务写 keyId（`updateMediaEncryption`），
   清空 DEK 必须同时清 keyId；只有 DEK 轮换（`setDefaultEncryptionKeyId`）才允许覆盖已有 keyId；
@@ -1343,7 +1343,7 @@
   ① 内置根 `/storage/emulated/0/.privateheart_vault` 由存储服务动态计算、始终存在、不可移除；
   ② 用户目录由 `VaultLibraryRegistry` 持久化（`SharedPreferences` `vault_libraries_v1`），
      可在「设置 → 存储 → 保险库管理」添加 / 设为当前 / 移除；
-  ③ `mediaRoots()` 合并所有根，孤儿扫描、密钥包重关联、档案恢复索引自动覆盖；
+  ③ `mediaRoots()` 合并所有根，孤儿扫描、密钥包重关联、数据恢复时的文件索引自动覆盖；
      `hiddenDestPath()` 写入「当前」库；
   ④ 不给 `media_items` 加 `vault_id`，归属按路径前缀动态判定；
   ⑤ `HideNaming` 的隐藏 / 还原判定扩展为「内置根 + 已注册根」，额外库还原统一落 Download。
@@ -1356,7 +1356,7 @@
 - 影响 / 约束（后续改动必须注意）: 添加目录必须校验：存在 / 可读 / 非卷根 /
   非公共媒体根（DCIM、Pictures、Download 等精确路径）/ 不与已有库互为父子（否则同一文件被扫两次）；
   移除只删行不删文件；跨手机路径失效时 UI 标「目录不存在」，
-  正确迁移顺序是「**先添加目录 → 再导入保险库档案**」；依赖已有 `MANAGE_EXTERNAL_STORAGE`。
+  正确迁移顺序是「**先添加目录 → 再导入保险库数据**」；依赖已有 `MANAGE_EXTERNAL_STORAGE`。
 - 相关文件: `lib/data/services/vault_library_registry.dart`、`vault_storage_service.dart`、
   `maintenance_service.dart`、`hide_naming.dart`、
   `lib/presentation/settings/vault_libraries_screen.dart`、`lib/application/providers.dart`

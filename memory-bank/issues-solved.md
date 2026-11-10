@@ -130,6 +130,15 @@
   或调大系统页面文件（本机提交上限 54340M ≈ 物理 28422M×1.9，R8 峰值需要 5GB 以上余量）
 - 复发判据（补，两条任选）: `findstr /c:"arena.cpp" android\hs_err_pid*.log` 命中 ⇒ 本条目；
   `findstr /c:"G1 virtual space" android\hs_err_pid*.log` 命中 ⇒ 本条目（同一根因的另一种表现）
+- 最近复核: 2026-11-10（**复发，未修复**）—— 两次 `scripts\build.bat norelease` 都在
+  `assembleRelease` 约 130–140s 报 `Gradle build daemon disappeared unexpectedly`：
+  ① 18:23 `hs_err_pid27688.log` = `mmap failed to map 897581056 bytes for G1 virtual space`，
+  开局 `MEM LOW_COMMIT FreeCommitMB=1173`；② 18:30 `hs_err_pid16784.log` =
+  `malloc failed to allocate 1884272 bytes for Chunk::new`，开局 `MEM OK FreeCommitMB=5047`。
+  ⇒ 再次印证「阈值不可当保证」；**连续重试无效**，别再重试，按上一条「下一步」调页面文件 / 关大头进程后由用户手工构建。
+  两次均 `BUILD_FAILED=1 WMI_FAILED=0 NEW_VER=1.1.1`，根目录只剩旧 `privi-1.1.0.apk`（`ISSUE-007` 陷阱）；
+  构建自动递增的 `pubspec.yaml` 已还原 1.1.0，不提交无对应 APK 的版本号。
+  Dart 侧 `build_runner`（272 outputs）与 AOT 编译均已成功，崩溃只在 R8 / Gradle 原生阶段，与业务代码无关。
 
 ## ISSUE-005 版本号漂移：`.BUILD_NUM` 涨了但 `pubspec.yaml` 没变
 - 状态: 已修复

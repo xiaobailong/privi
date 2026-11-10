@@ -80,15 +80,19 @@
   - 密钥仅存内存，锁屏时立即清除；KEK 持久化到 `FlutterSecureStorage`（Android Keystore 硬件保护），双后端容错
   - 临时文件 + 原子 rename，加解密中途崩溃不损坏原始文件
   - 向后兼容：无 `encrypted_dek` 的旧文件视为明文，正常浏览
-- **密钥备份与恢复**：导出密钥包（含 `encryptionSalt` + KEK），支持重装/换机后导入恢复密钥解密已有文件
+- **密钥环与文件级密钥记录**：每个已加密文件在数据库里记录包裹其 DEK 的密钥 id（`encryption_key_id`）。导入的密钥登记为「额外密钥」，**不覆盖本机默认密钥**，因此新建密钥后再导入也不会冲突，不同密钥加密的文件各自可解密；升级后首次启动会为历史空白关系补入本机密钥 id（幂等，补过就不再写）
+- 完整密钥随「保险库数据」一起导出/导入，不再有独立的密钥包入口；旧版 `.db` 密钥包仍可导入
 - **文件名加密**：将已加密文件的文件名改为随机字符串，隐藏原始文件名与扩展名，防止"按扩展名扫描"的程序认出文件类型（支持批量加密/恢复文件名）
 - **加密记录修复**：扫描并修复数据库加密标记与磁盘文件不一致的行（清除残留的失败加密记录）
 
 ### 导入与备份
 
 - 系统分享 Intent 导入、批量隐藏
-- 保险库完整导出 / 恢复（数据库 + 文件 + manifest 校验）
-- **密钥备份**：导出密钥包（`<pkg>_vault_key_backup.json`），含加密盐 + KEK，重装后可导入恢复密钥
+- **保险库数据（导出 / 导入）**：设置页唯一的备份入口，密钥导入导出已合并进来。导出为单个 `privi_manifest.json`（v6），包含媒体记录（含回收站与播放历史）、相册 / 分组 / 归属、完整密钥环、以及全部应用设置；**不含媒体文件本体**（已在手机存储里，单独拷贝）。导入时按文件名把记录重新关联到本机媒体文件，找不到文件的条目跳过；密钥登记为额外密钥，不覆盖本机密钥
+  > ⚠️ 数据文件内含**明文保险库密钥**：任何同时拿到数据文件与保险库目录的人都能解密全部文件，请存到加密网盘或离线介质，不要分享。
+  > 兼容：旧版含 `media/` 文件夹的备份、以及旧 `.db` 密钥包仍可导入。
+- **多保险库管理**（设置 → 存储）：可把手机上任意目录指定为额外保险库，与内置 `.privateheart_vault` **并行使用**；可切换「当前使用」的库（新隐藏的媒体写入该库）、移除登记（只删记录不删文件）。添加目录会校验不与已有库嵌套、不是存储卷根或公共媒体根目录
+  > 迁移顺序：先把旧手机的保险库文件夹拷到本机 → 在管理页添加该目录 → 再导入保险库数据，媒体记录会按文件名自动匹配。
 - 重装后重新索引隐藏目录媒体
 
 ### 维护工具
@@ -127,7 +131,7 @@
 
 | 路径 | 说明 |
 |------|------|
-| `<app_documents>/privi.sqlite` | SQLite 数据库（Drift，schema v9），存储媒体索引、相册、合集、播放记录、加密 DEK 等全部元数据 |
+| `<app_documents>/privi.sqlite` | SQLite 数据库（Drift，schema v10），存储媒体索引、相册、合集、播放记录、加密 DEK 与 `encryption_key_id`（文件↔密钥关系）等全部元数据 |
 
 > `<app_documents>` 为 Android `getApplicationDocumentsDirectory()` 返回的路径，通常为 `/data/data/com.privi.app/app_flutter/`。
 
@@ -136,14 +140,16 @@
 | 路径 | 说明 |
 |------|------|
 | `<app_documents>/vault/` | 应用私有仓库（`thumbs/` 缩略图、`share_staging/` 导入暂存、`media/` 媒体暂存、`staging/` 导出暂存） |
-| `/storage/emulated/0/.privateheart_vault/` | 共享存储隐藏根目录（隐藏的媒体文件存放于此，含 `.nomedia` 防系统媒体扫描；同一卷下 rename 即隐藏，无需拷贝） |
+| `/storage/emulated/0/.privateheart_vault/` | **内置保险库**：共享存储隐藏根目录（隐藏的媒体文件存放于此，含 `.nomedia` 防系统媒体扫描；同一卷下 rename 即隐藏，无需拷贝） |
+| 用户指定目录（`SharedPreferences: vault_libraries_v1`） | **额外保险库**：可添加多个，与内置库并行；其中一个为「当前使用」，新隐藏的媒体写入该库 |
 
 ### 密钥存储
 
 | 路径 | 说明 |
 |------|------|
-| Android Keystore（`FlutterSecureStorage`） | KEK 持久化存储，硬件保护，双后端写入防读取失败（ISSUE-031） |
-| `<app_documents>/vault/backup/` | 密钥备份包导出目录 |
+| Android Keystore（`FlutterSecureStorage`） | 默认 KEK 与**密钥环**（历史 / 导入的额外密钥）持久化，硬件保护，双后端写入防读取失败（ISSUE-031） |
+| `<app_documents>/privi.sqlite` | 每个文件的 `encrypted_dek` 及其 `encryption_key_id`，记录该文件由哪把密钥加密 |
+| 用户选择的文件夹 / `privi_manifest.json` | 「保险库数据」导出文件，含全部元数据、密钥环与应用设置（不含媒体文件） |
 
 ### 日志
 
@@ -171,6 +177,7 @@
 - **文件格式（PRV2）**：`[nonce:12][ciphertext:N][auth_tag:16]`
 - **原子写入**：加解密先写临时文件，完成后原子 rename 替换，中途崩溃不损坏原始文件
 - **密钥管理**：修改密码/图案后自动旋转所有 DEK（用新 KEK 重新加密）；锁屏清除内存 KEK，解锁后从 SecureStorage 加载
+- **密钥环**：导入 / 历史 KEK 按指纹 id 登记为额外密钥，解密时按每行的 `encryption_key_id` 取对应 KEK（空值回退当前默认密钥）；多把密钥互不覆盖，因此「新建密钥后再导入」不再冲突
 
 ### 加解密服务
 
@@ -181,8 +188,11 @@
 | `BatchEncryptionService` | `lib/data/services/batch_encryption_service.dart` | 批量加密已有明文文件（设置页「加密已有文件」），多队列并发，支持暂停/恢复 |
 | `BatchDecryptionService` | `lib/data/services/batch_decryption_service.dart` | 批量解密恢复明文（设置页「解密所有文件」），DEK 先解密后清除，崩溃安全 |
 | `FilenameEncryptionService` | `lib/data/services/filename_encryption_service.dart` | 文件名加密/恢复：将文件名改为随机字符串，隐藏原始文件名与扩展名 |
-| `EncryptionKeyManager` | `lib/data/services/encryption_key_manager.dart` | KEK 生命周期管理（派生、持久化、加载、清除），双 SecureStorage 后端容错 |
-| `KeyBackupService` | `lib/data/services/key_backup_service.dart` | 密钥包导出/导入（含 `encryptionSalt` + KEK），支持重装后恢复密钥解密已有文件 |
+| `EncryptionKeyManager` | `lib/data/services/encryption_key_manager.dart` | KEK 生命周期（派生、持久化、加载、清除）+ 密钥环（`keyForId` / `registerKey` / `listKeys`），双 SecureStorage 后端容错 |
+| `EncryptionKeyLinkBackfill` | `lib/data/services/encryption_key_link_backfill.dart` | 启动时按空白行数幂等补入历史文件的 `encryption_key_id` |
+| `KeyBackupService` | `lib/data/services/key_backup_service.dart` | 旧版 `.db` 密钥包的只读兼容导入（新导出已并入「保险库数据」） |
+| `VaultBackupService` | `lib/data/services/vault_backup_service.dart` | 「保险库数据」v6 导出 / 导入：元数据 + 密钥环 + 全量设置，不含媒体文件 |
+| `VaultLibraryRegistry` | `lib/data/services/vault_library_registry.dart` | 多保险库注册表（添加 / 当前库 / 移除） |
 | `EncryptionRecordRepairService` | `lib/data/services/encryption_record_repair_service.dart` | 修复加密记录不一致（DB 标记已加密但文件为明文等），设置页「清除失败加密记录」 |
 
 ---
@@ -212,24 +222,27 @@ flutter build apk --release               # 构建 Release APK
 
 ### 一键构建
 
-项目根目录 `build.bat` 自动完成版本递增、代码生成、编译与 Release 发布（其依赖的 PowerShell 辅助脚本统一放在 `scripts/` 目录）：
+构建脚本在 `scripts\build.bat`（依赖的 PowerShell 辅助脚本在 `scripts/tools/`）：
 
 ```bash
-build.bat           # 完整构建（递增版本 → 代码生成 → 编译 → 发布 Release）
-build.bat fast      # 快速构建（跳过代码生成）
-build.bat gradle    # 仅 Gradle 编译
-build.bat codegen   # 仅代码生成
-build.bat release   # 只发布（不重新编译）
-build.bat norelease # 构建但不发布 Release（等价于 set SKIP_RELEASE=1）
-build.bat clean     # 清理所有构建产物
+scripts\build.bat           # 完整构建 + 递增版本 + 发布 Release
+scripts\build.bat fast      # 跳过代码生成（其余步骤照跑）
+scripts\build.bat gradle    # 仅 Gradle 编译（不递增版本、不出根目录 APK）
+scripts\build.bat codegen   # 仅代码生成
+scripts\build.bat release   # 只发布已有 APK，不重新编译
+scripts\build.bat norelease # 构建但不发布 Release（等价于 set SKIP_RELEASE=1）
+scripts\build.bat clean     # 清理所有构建产物
 ```
 
-每次 `build.bat` / `build.bat fast` 自动把 `pubspec.yaml` 版本号的最后一段 +1（`1.0.59` → `1.0.60`），产物为 `privi-<version>.apk`（如 `privi-1.0.59.apk`，**不带** `+build` 后缀）；Android `versionCode` 由该版本号推导（`1.0.59` → 10059）。
+实际顺序是 `[1/7] 代码生成 → [2/7] 递增版本 → [3/4] 清理与 pub get → [5/7] 编译 → [6/7] 复制 APK → [7/7] 发布 Release`。
+`fast` / `gradle` / `clean` / `codegen` 的跳转发生在 `norelease` 参数扫描之前，因此**不要**写 `fast norelease`；用 `scripts\build.bat norelease` 或先 `set SKIP_RELEASE=1`。
 
-首次使用需修改 `build.bat` 顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径。
+每次完整 / fast 构建自动把 `pubspec.yaml` 版本号的 patch +1（`1.1.0` → `1.1.1`），满 99 进位（`1.0.99` → `1.1.0`）；产物为 `privi-<version>.apk`（如 `privi-1.1.1.apk`，**不带** `+build` 后缀）；Android `versionCode` 由该版本号推导（`1.1.1` → 10101）。构建会改脏 `pubspec.yaml`，构建成功后需单独提交这次版本递增（ADR-021 / ADR-026）。
+
+首次使用需修改 `scripts\build.bat` 顶部的 `JAVA_HOME`、`FLUTTER_HOME`、`ANDROID_HOME` 路径。
 
 发布 Release 依赖 `gh` CLI（`winget install --id GitHub.cli`），未安装或未登录时自动跳过。
-Release 仅从 `main` 分支发布，且要求当前提交**已推送到 origin**（否则只出包不发 Release，可事后跑 `build.bat release` 补发）。
+Release 仅从 `main` 分支发布，且要求当前提交**已推送到 origin**（否则只出包不发 Release，可事后跑 `scripts\build.bat release` 补发）。
 
 ### 安装到手机（Android）
 
@@ -275,7 +288,7 @@ adb install -r -d privi-<version>.apk # 允许版本号降级
 │   ├── application/      # 业务逻辑控制器（Riverpod）
 │   ├── core/             # 工具、主题、常量、路径定义（VaultPaths）
 │   ├── data/
-│   │   ├── db/           # Drift 数据库（schema v9：媒体索引、DEK 等）
+│   │   ├── db/           # Drift 数据库（schema v10：媒体索引、DEK、密钥 id 等）
 │   │   ├── repositories/ # 仓库层
 │   │   └── services/     # 服务层（加解密、导入导出、备份、维护）
 │   ├── domain/           # 领域模型
