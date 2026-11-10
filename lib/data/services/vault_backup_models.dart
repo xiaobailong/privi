@@ -235,16 +235,6 @@ final class _ManifestKey {
   final String? label;
   final String? salt;
   final bool isDefault;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'kek': kekBase64,
-        'fingerprint': fingerprint,
-        'createdAt': createdAt?.toIso8601String(),
-        if (label != null) 'label': label,
-        if (salt != null) 'salt': salt,
-        'isDefault': isDefault,
-      };
 }
 
 final class _ManifestSource {
@@ -252,11 +242,6 @@ final class _ManifestSource {
 
   final String platform;
   final String libraryId;
-
-  Map<String, dynamic> toJson() => {
-        'platform': platform,
-        'libraryId': libraryId,
-      };
 }
 
 final class _ManifestMedia {
@@ -327,35 +312,6 @@ final class _ManifestMedia {
   final String? thumbnailPath;
   final int? playCount;
   final DateTime? lastPlayedAt;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'file': fileName,
-        'thumb': thumbnailName,
-        'sha256': sha256,
-        'byteLength': byteLength,
-        'originalPath': originalPath,
-        'source': source?.toJson(),
-        'sourceRemovalPending': sourceRemovalPending,
-        'contentDigest': contentDigest,
-        'originalName': originalName,
-        'mimeType': mimeType,
-        'isVideo': isVideo,
-        'width': width,
-        'height': height,
-        'durationMs': durationMs,
-        'rating': rating,
-        'dateAdded': dateAdded?.toIso8601String(),
-        'dateTaken': dateTaken?.toIso8601String(),
-        'sizeBytes': sizeBytes,
-        'deletedAt': deletedAt?.toIso8601String(),
-        'encryptedDek': encryptedDek,
-        'encryptionKeyId': encryptionKeyId,
-        'privatePath': privatePath,
-        'thumbnailPath': thumbnailPath,
-        'playCount': playCount,
-        'lastPlayedAt': lastPlayedAt?.toIso8601String(),
-      };
 }
 
 final class _ManifestAlbum {
@@ -382,19 +338,6 @@ final class _ManifestAlbum {
   final int? rating;
   final int? sortIndex;
   final String? groupId;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'isSystem': isSystem,
-        'coverMediaId': coverMediaId,
-        'createdAt': createdAt?.toIso8601String(),
-        'systemKind': systemKind,
-        'pinnedAt': pinnedAt?.toIso8601String(),
-        'rating': rating,
-        'sortIndex': sortIndex,
-        'groupId': groupId,
-      };
 }
 
 final class _ManifestGroup {
@@ -409,13 +352,6 @@ final class _ManifestGroup {
   final String? name;
   final DateTime? createdAt;
   final int? sortIndex;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'createdAt': createdAt?.toIso8601String(),
-        'sortIndex': sortIndex,
-      };
 }
 
 final class _ManifestMembership {
@@ -428,12 +364,6 @@ final class _ManifestMembership {
   final String? albumId;
   final String? mediaId;
   final DateTime? addedAt;
-
-  Map<String, dynamic> toJson() => {
-        'albumId': albumId,
-        'mediaId': mediaId,
-        'addedAt': addedAt?.toIso8601String(),
-      };
 }
 
 final class _RestoreMediaPlan {

@@ -5,6 +5,7 @@ final class _VaultBackupManifestCodec {
 
   static const _parser = _VaultBackupManifestParser();
   static const _validator = _VaultBackupManifestValidator();
+  static const _database = _VaultBackupDatabaseCodec();
 
   /// Builds a v6 **data-only** manifest: every database row, the full key ring
   /// and all app settings — no media bytes.
@@ -111,8 +112,40 @@ final class _VaultBackupManifestCodec {
     return manifest;
   }
 
+  /// Reads a backup folder.
+  ///
+  /// Current exports are one SQLite file (`ADR-053`); a legacy
+  /// `privi_manifest.json` (v1..v6) is still accepted so backups made before
+  /// the container change keep importing.  When neither is present this throws
+  /// [VaultBackupErrorCode.manifestMissing] and the caller falls back to the
+  /// legacy key-package import.
   Future<_BackupManifest> read(String sourceDirectory) async {
-    final manifestFile = await _validatedManifestFile(sourceDirectory);
+    final file = await _backupFile(sourceDirectory);
+    final isLegacyJson =
+        p.basename(file.path) == VaultBackupService.manifestName;
+    final manifest =
+        isLegacyJson ? await _readLegacyJson(file) : await _database.read(file);
+    validateV5(manifest);
+    return manifest;
+  }
+
+  /// Backup file that would be imported from [sourceDirectory], or null.
+  ///
+  /// Shared by [read], the export conflict check (one backup per folder) and
+  /// the pending-restore marker.
+  Future<File?> findBackupFile(String sourceDirectory) async {
+    final root = Directory(sourceDirectory);
+    if (!await root.exists()) return null;
+    final data = await _databaseFile(root);
+    if (data != null) return data;
+    return _legacyManifest(root);
+  }
+
+  /// Writes the whole backup into [file] as one SQLite database.
+  Future<void> write(File file, _BackupManifest manifest) =>
+      _database.write(file, manifest);
+
+  Future<_BackupManifest> _readLegacyJson(File manifestFile) async {
     dynamic decoded;
     try {
       decoded = jsonDecode(await manifestFile.readAsString());
@@ -129,44 +162,8 @@ final class _VaultBackupManifestCodec {
         stage: VaultBackupStage.checkingBackup,
       );
     }
-    final manifest = _parser.parse(Map<String, dynamic>.from(decoded));
-    validateV5(manifest);
-    return manifest;
+    return _parser.parse(Map<String, dynamic>.from(decoded));
   }
-
-  Future<void> write(File file, _BackupManifest manifest) async {
-    await file.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(toJson(manifest)),
-      flush: true,
-    );
-    if (!await file.exists() || await file.length() == 0) {
-      throw const VaultBackupException(
-        VaultBackupErrorCode.destinationWriteFailed,
-        stage: VaultBackupStage.writingManifest,
-      );
-    }
-  }
-
-  Map<String, dynamic> toJson(_BackupManifest manifest) => {
-        'version': manifest.version,
-        'exportedAt': manifest.exportedAt?.toIso8601String(),
-        'verifiedAt': manifest.verifiedAt?.toIso8601String(),
-        'itemCount': manifest.declaredItemCount,
-        'totalBytes': manifest.declaredTotalBytes,
-        'media': manifest.media.map((item) => item.toJson()).toList(),
-        'albums': manifest.albums.map((item) => item.toJson()).toList(),
-        'albumGroups': manifest.groups.map((item) => item.toJson()).toList(),
-        'membership':
-            manifest.memberships.map((item) => item.toJson()).toList(),
-        'encryptionSalt': manifest.encryptionSalt,
-        if (manifest.version >= VaultBackupService.manifestVersion) ...{
-          'includesMedia': manifest.includesMedia,
-          'defaultKeyId': manifest.defaultKeyId,
-          'encryptionKeys':
-              manifest.encryptionKeys.map((key) => key.toJson()).toList(),
-          'appSettings': manifest.appSettings,
-        },
-      };
 
   /// Key id to record for one row.
   ///
@@ -189,7 +186,12 @@ final class _VaultBackupManifestCodec {
 
   void validateV5(_BackupManifest manifest) => _validator.validate(manifest);
 
-  Future<File> _validatedManifestFile(String sourceDirectory) async {
+  /// Locates and validates the backup file inside [sourceDirectory].
+  ///
+  /// The file must be a regular file directly inside the folder (no symlink
+  /// escape), otherwise a crafted folder could make the app read arbitrary
+  /// storage.
+  Future<File> _backupFile(String sourceDirectory) async {
     final root = Directory(sourceDirectory);
     if (!await root.exists()) {
       throw const VaultBackupException(
@@ -197,27 +199,26 @@ final class _VaultBackupManifestCodec {
         stage: VaultBackupStage.checkingBackup,
       );
     }
-    final file = File(
-      p.join(sourceDirectory, VaultBackupService.manifestName),
-    );
-    final type = await FileSystemEntity.type(file.path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) {
+    final file = await findBackupFile(sourceDirectory);
+    if (file == null) {
       throw const VaultBackupException(
         VaultBackupErrorCode.manifestMissing,
         stage: VaultBackupStage.checkingBackup,
       );
     }
+    final name = p.basename(file.path);
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
     if (type == FileSystemEntityType.link) {
-      throw const VaultBackupException(
+      throw VaultBackupException(
         VaultBackupErrorCode.unsafePath,
-        fileName: VaultBackupService.manifestName,
+        fileName: name,
         stage: VaultBackupStage.checkingBackup,
       );
     }
     if (type != FileSystemEntityType.file) {
-      throw const VaultBackupException(
+      throw VaultBackupException(
         VaultBackupErrorCode.malformedManifest,
-        fileName: VaultBackupService.manifestName,
+        fileName: name,
         stage: VaultBackupStage.checkingBackup,
       );
     }
@@ -225,9 +226,9 @@ final class _VaultBackupManifestCodec {
       final canonicalRoot = await root.resolveSymbolicLinks();
       final canonicalFile = await file.resolveSymbolicLinks();
       if (!p.isWithin(canonicalRoot, canonicalFile)) {
-        throw const VaultBackupException(
+        throw VaultBackupException(
           VaultBackupErrorCode.unsafePath,
-          fileName: VaultBackupService.manifestName,
+          fileName: name,
           stage: VaultBackupStage.checkingBackup,
         );
       }
@@ -237,10 +238,60 @@ final class _VaultBackupManifestCodec {
     } catch (error) {
       throw VaultBackupException(
         VaultBackupErrorCode.malformedManifest,
-        fileName: VaultBackupService.manifestName,
+        fileName: name,
         stage: VaultBackupStage.checkingBackup,
         cause: error,
       );
     }
+  }
+
+  /// The legacy JSON manifest of [root], or null when the folder has none.
+  Future<File?> _legacyManifest(Directory root) async {
+    final manifest = File(
+      p.join(root.path, VaultBackupService.manifestName),
+    );
+    final type = await FileSystemEntity.type(
+      manifest.path,
+      followLinks: false,
+    );
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      throw VaultBackupException(
+        VaultBackupErrorCode.unsafePath,
+        fileName: VaultBackupService.manifestName,
+        stage: VaultBackupStage.checkingBackup,
+      );
+    }
+    return manifest;
+  }
+
+  /// Newest SQLite data file in [root], or null.
+  ///
+  /// A folder can also hold a legacy key package, which shares the `.db`
+  /// extension: only files carrying the vault data format tag are considered,
+  /// so the caller can still fall back to the key-package import.
+  Future<File?> _databaseFile(Directory root) async {
+    final candidates = <File>[];
+    try {
+      await for (final entity in root.list(followLinks: false)) {
+        if (entity is! File) continue;
+        if (p.extension(entity.path).toLowerCase() !=
+            VaultBackupService.dataFileExtension) {
+          continue;
+        }
+        candidates.add(entity);
+      }
+    } catch (error) {
+      throw VaultBackupException(
+        VaultBackupErrorCode.malformedManifest,
+        stage: VaultBackupStage.checkingBackup,
+        cause: error,
+      );
+    }
+    candidates.sort((a, b) => p.basename(b.path).compareTo(p.basename(a.path)));
+    for (final candidate in candidates) {
+      if (await _database.hasFormat(candidate)) return candidate;
+    }
+    return null;
   }
 }

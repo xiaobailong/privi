@@ -210,6 +210,8 @@
 | 跨设备导入后 `encryption_key_id` 为空、DEK 被本机默认密钥盖章 | `ISSUE-050`（根因③）、`ADR-050` |
 | 导入「保险库数据」会不会覆盖本机已添加的保险库路径 | `ADR-052`（④）、`ISSUE-050` |
 | 用 editor 改完文件后 git 警告 `LF will be replaced by CRLF` / 状态一片 M | `PIT-077` |
+| 「保险库数据」导出的是 JSON 还是 SQLite / 数据文件叫什么 / 旧 `privi_manifest.json` 还能导入吗 | `ADR-053`、`ADR-049`、`ADR-052` |
+| 手写 SQL（`db.prepare` + `execute`）怎么在真机前静态校验 / `dart analyze` 通过但 SQL 是错的 | `PIT-078` |
 
 
 

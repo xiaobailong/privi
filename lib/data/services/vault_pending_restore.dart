@@ -10,12 +10,12 @@ part of 'vault_backup_service.dart';
 ///
 /// The import therefore records the archive directory here.  Once the copied
 /// directory becomes visible (a library was added, or the app started again)
-/// the very same manifest is imported again and the rows come back with their
+/// the very same data file is imported again and the rows come back with their
 /// DEKs, key ids and album memberships.
 ///
-/// Only the **path** is stored: copying the manifest into app storage would
-/// duplicate the plaintext KEKs it carries, which `ADR-049` deliberately keeps
-/// in the user-chosen export folder only.
+/// Only the **path** is stored: copying the data file into app storage would
+/// duplicate the plaintext KEKs it carries, which `ADR-049` / `ADR-053`
+/// deliberately keep in the user-chosen export folder only.
 final class _PendingRestoreStore {
   const _PendingRestoreStore();
 
@@ -43,8 +43,8 @@ final class _PendingRestoreStore {
         await clear();
         return null;
       }
-      final manifest = File(p.join(directory, VaultBackupService.manifestName));
-      if (!await manifest.exists()) {
+      if (await const _VaultBackupManifestCodec().findBackupFile(directory) ==
+          null) {
         AppLogger.w(
           'VaultPendingRestore',
           'archive is gone ($directory) — nothing left to relink',

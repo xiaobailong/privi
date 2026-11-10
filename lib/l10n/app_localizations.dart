@@ -580,7 +580,7 @@ class AppLocalizations {
 
   String get backupStageCopying => '正在整理数据';
 
-  String get backupStageWritingManifest => '正在写入清单';
+  String get backupStageWritingManifest => '正在写入数据文件';
 
   String get backupStageCheckingBackup => '正在检查数据';
 
@@ -606,12 +606,12 @@ class AppLocalizations {
 
   String get backupFolderSelectionFailed => '无法打开文件夹，请重试';
 
-  String get backupManifestMissing => '未找到密册数据清单。';
+  String get backupManifestMissing => '未找到密册数据文件（privi-vault-*.db）。';
 
-  String get backupManifestMalformed => '数据清单无效。';
+  String get backupManifestMalformed => '数据文件无效。';
 
   String backupManifestMalformedItem(String name) {
-    return '清单项目无效：$name';
+    return '数据项目无效：$name';
   }
 
   String get backupVersionUnsupported => '不支持此数据版本。';

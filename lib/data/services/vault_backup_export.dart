@@ -5,9 +5,9 @@ part of 'vault_backup_service.dart';
 /// and every SharedPreferences entry) **except** the media files themselves.
 ///
 /// Media files already live in phone storage and are copied separately; keeping
-/// them out of the backup makes an export a single small JSON file.  Restore
-/// matches rows back to the files by path / basename (see
-/// `_VaultBackupRestorePreflight`).
+/// them out of the backup makes an export one small SQLite database file
+/// (`privi-vault-YYYYMMDD-HHMMSS.db`, `ADR-053`).  Restore matches rows back to
+/// the files by path / basename (see `_VaultBackupRestorePreflight`).
 final class _VaultBackupExporter {
   _VaultBackupExporter({
     required this.db,
@@ -68,28 +68,28 @@ final class _VaultBackupExporter {
       );
       await staging.create(recursive: true);
 
+      final verifiedAt = DateTime.now().toUtc();
       final manifest = manifests.fromExport(
         entries: entries,
         albums: snapshot.albums,
         groups: snapshot.groups,
         memberships: snapshot.memberships,
         platformName: platformName,
-        verifiedAt: DateTime.now().toUtc(),
+        verifiedAt: verifiedAt,
         encryptionSalt: encryptionSalt,
         encryptionKeys: encryptionKeys,
         appSettings: appSettings,
         defaultKeyId: defaultKeyId,
       );
-      final stagedManifest = File(
-        p.join(staging.path, VaultBackupService.manifestName),
-      );
-      await manifests.write(stagedManifest, manifest);
-      // Round-trip the manifest before committing it: a truncated or invalid
+      final fileName = VaultBackupService.dataFileName(verifiedAt);
+      final stagedData = File(p.join(staging.path, fileName));
+      await manifests.write(stagedData, manifest);
+      // Round-trip the data file before committing it: a truncated or invalid
       // snapshot must not look like a successful backup.
       await manifests.read(staging.path);
       await _commitManifest(
-        stagedManifest,
-        File(p.join(destination.path, VaultBackupService.manifestName)),
+        stagedData,
+        File(p.join(destination.path, fileName)),
         committed,
       );
 
@@ -103,6 +103,7 @@ final class _VaultBackupExporter {
       await staging.delete(recursive: true);
       staging = null;
 
+      final dataFile = File(p.join(destination.path, fileName));
       _emitBackupProgress(
         onProgress,
         VaultBackupStage.completed,
@@ -111,7 +112,7 @@ final class _VaultBackupExporter {
       );
       return VaultBackupResult(
         itemCount: entries.length,
-        totalBytes: 0,
+        totalBytes: await dataFile.length(),
         checksumsVerified: true,
         status: VaultBackupResultStatus.completed,
       );
@@ -231,9 +232,16 @@ final class _VaultBackupExporter {
         stage: VaultBackupStage.writingManifest,
       );
     }
-    await _requireMissing(
-      p.join(destination.path, VaultBackupService.manifestName),
-    );
+    // One backup per folder: a second data file would make "which one do I
+    // restore?" ambiguous, so a non-empty backup target is refused.
+    final existing = await manifests.findBackupFile(destination.path);
+    if (existing != null) {
+      throw VaultBackupException(
+        VaultBackupErrorCode.destinationConflict,
+        fileName: p.basename(existing.path),
+        stage: VaultBackupStage.writingManifest,
+      );
+    }
     return destination;
   }
 

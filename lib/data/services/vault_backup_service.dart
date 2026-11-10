@@ -7,6 +7,7 @@ import 'package:drift/drift.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
@@ -23,6 +24,7 @@ import 'vault_library_registry.dart';
 import 'vault_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 
+part 'vault_backup_database.dart';
 part 'vault_backup_export.dart';
 part 'vault_backup_manifest.dart';
 part 'vault_backup_manifest_organization.dart';
@@ -46,6 +48,10 @@ part 'vault_pending_restore.dart';
 /// also record which key wrapped their DEK, so keys imported from another
 /// install can be registered without ever replacing this install's default
 /// key.
+///
+/// The container is one standalone SQLite database (`ADR-053`), so the file can
+/// be opened with any SQLite tool; legacy `privi_manifest.json` backups (v1..v6)
+/// and old `.db` key packages stay importable.
 class VaultBackupService implements VaultBackupOperations {
   VaultBackupService({
     required AppDatabase db,
@@ -71,7 +77,17 @@ class VaultBackupService implements VaultBackupOperations {
         _backfill = backfill,
         _usePrivateMediaStorage = usePrivateMediaStorage;
 
+  /// Legacy container (v1..v6): the JSON manifest at the root of the folder.
+  /// Still read on import, never written anymore (`ADR-053`).
   static const manifestName = 'privi_manifest.json';
+
+  /// File name of a current export: `privi-vault-YYYYMMDD-HHMMSS.db`.
+  static String dataFileName(DateTime now) =>
+      const _VaultBackupDatabaseCodec().suggestedFileName(now);
+
+  /// Extension of the SQLite data file (same `.db` as the legacy key package;
+  /// the `meta.format` row tells the two apart).
+  static const dataFileExtension = _VaultBackupDatabaseCodec.fileExtension;
 
   /// v6: one data-only backup (media bytes excluded) carrying the key ring and
   /// all app settings.  v1..v5 backups that still contain a `media/` folder

@@ -1285,7 +1285,7 @@
 - 首次记录: 2026-11-10
 
 ## ADR-049 密钥导入导出并入保险库导入导出 → 「保险库数据」v6
-- 日期: 2026-11-10 | 状态: 已采纳（静态检查通过，真机未验证）
+- 日期: 2026-11-10 | 状态: 已采纳（**文件容器已被 `ADR-053` 取代**：改回单个 SQLite `.db`；其余决策仍有效）
 - 背景: 设置页原有两个独立入口（密钥 `.db` 包 / 保险库文件夹）。用户要求合并，
   且导出要带走全部 app 数据但**排除媒体文件本体**（已在手机存储里，单独拷贝）。
 - 决策:
@@ -1394,5 +1394,42 @@
   `maintenance_service.dart`、`hide_naming.dart`、
   `lib/presentation/settings/vault_libraries_screen.dart`、`lib/application/providers.dart`
 - 相关条目: `ADR-047`、`ADR-049`、`ISSUE-049`、`PIT-065`
+- 首次记录: 2026-11-10
+
+## ADR-053 「保险库数据」容器改回单个 SQLite 数据库（容器 v1 / 记录布局 v6）
+- 日期: 2026-11-10 | 状态: 已采纳（静态验证通过，真机未验证）
+- 背景: `ADR-047` 已把密钥包改成 SQLite（好装信息、可演进）；随后 `ADR-049` 把密钥包并入
+  「保险库数据」时，容器却是单个 `privi_manifest.json`。用户明确要求：**保险库数据（导出 / 导入）
+  依然要用 SQLite 方式** —— 结构化表、可用工具查看、以后加列不必整篇重写。
+- 决策:
+  ① 导出 = 单个 `privi-vault-YYYYMMDD-HHMMSS.db`（SQLite；`PRAGMA journal_mode = DELETE`，
+     不留 `-wal` / `-shm` 兄弟文件）。`meta.format = 'privi-vault-data'`、`meta.version = 1`（容器版本）、
+     `meta.manifestVersion = 6`（记录布局版本，语义仍是 `ADR-049` 的 v6）；
+  ② 表：`meta` / `media` / `albums` / `album_groups` / `memberships` / `encryption_keys` / `app_settings`；
+     每行带 `position` 保留导出顺序；日期一律 ISO-8601 TEXT；`app_settings.value` 存 `jsonEncode`，
+     读回还原 bool / int / double / String / List<String>；
+  ③ 编解码独立成 `vault_backup_database.dart`（`_VaultBackupDatabaseCodec`），`_BackupManifest` 模型与
+     preflight / installer / 恢复链路**一行未改**（读写层替换）；
+  ④ 导入仍是「选文件夹」：先找 `privi-vault-*.db`（文件名倒序，取第一个 `meta.format` 命中者），
+     再找旧 `privi_manifest.json`；都没有才 `manifestMissing` ⇒ 回落到旧 `.db` 密钥包导入；
+  ⑤ 一个文件夹只放一份数据文件：导出前用同一套 `findBackupFile()` 检查，命中即 `destinationConflict`。
+- 理由: 结构化容器装得下全部记录且可演进；旧 JSON / 旧密钥包仍可导入，用户不必重新导出；
+  恢复链路复用，改动面最小（只有「写、读、发现文件、导出命名」四处）。
+- 备选与为何不选:
+  - **把整篇 JSON 塞进 SQLite 的一个 meta 行**：只换壳，体积翻倍且失去可查询的意义；
+  - **直接拷贝 drift 的 `privi.sqlite`**：会带走本机 WAL、绝对路径与设备相关设置，还要面对 schema 版本差异；
+  - **导入改成选文件（file picker）**：现有 UI / controller 是目录选择，改动面大，且「先导入数据、后拷媒体」
+    的待恢复标记只存目录（`ADR-052`）。
+- 影响 / 约束（后续改动必须注意）:
+  - 加字段 ⇒ 加列 + 抬 `meta.version`，并**保留**旧版本读取分支；容器版本高于支持值时
+    报 `unsupportedManifestVersion`，不要猜；
+  - `.db` 扩展名与旧密钥包相同，只能靠 `meta.format` 区分（`privi-vault-data` vs `privi-key-backup`）；
+  - 导出确认框的「明文 KEK」警告不能删（文件里就是明文密钥环）；
+  - 导出结果 `totalBytes` 现在是数据文件字节数（此前恒为 0）；
+  - 旧 JSON 的写入侧（各模型的 `toJson`）已删除，只保留读取解析器 `_VaultBackupManifestParser`。
+- 相关文件: `lib/data/services/vault_backup_database.dart`、`vault_backup_service.dart`、
+  `vault_backup_manifest.dart`、`vault_backup_export.dart`、`vault_backup_models.dart`、
+  `vault_pending_restore.dart`、`lib/l10n/app_localizations.dart`
+- 相关条目: `ADR-047`、`ADR-049`、`ADR-052`、`ISSUE-049`、`PIT-078`
 - 首次记录: 2026-11-10
 

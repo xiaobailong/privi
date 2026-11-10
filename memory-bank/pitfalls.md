@@ -1419,3 +1419,24 @@
 - 自检: 只剩自己未改动的老代码行（如 `settings_screen.dart` 的 `_filenames` 折行、l10n 的旧 getter）⇒ 放行
 - 相关: `PIT-062`、`PIT-066`、`PIT-069`（副本对比）、`PIT-014`（`dart.exe` 全路径）
 - 首次记录: 2026-10-21（改造密钥包时的静态自测）
+
+## PIT-078 手写 SQL 只跑 `dart analyze` 查不出来：占位符数 / 列名要等真机才炸
+- 触发条件: 在 Dart 里手写 `db.prepare('INSERT ... 28 个 ?')` + `stmt.execute([...28 个值...])`
+  （本次 `ADR-053` 把「保险库数据」改成 SQLite 容器）
+- 错误现象: `dart analyze` 只做类型检查，SQL 只是普通字符串 —— 参数个数不对、列名拼错、表名写错，
+  分析期全绿，直到**用户导出/导入时**才抛 `SqliteException`（还是写到一半）
+- 正确做法（本次的静态校验，一条命令 5 秒定论）: 用 Python 自带的 `sqlite3` 直接吃 Dart 源码里的 SQL
+  （临时脚本 `tmp\check_sqlite_schema.py`，只用一次、按 `tmp` 约定已清理；下面五步即重建方法）
+  ```powershell
+  & 'C:\Python314\python.exe' tmp\check_sqlite_schema.py    # 退出码 0 + ERRORS=0 才算过
+  ```
+  脚本五步：
+  ① 正则取 `_schemaSql = '''...'''` 的 DDL → `con.executescript()`（表名/类型/约束错立刻炸）；
+  ② 按源码顺序配对 `db.prepare('...' '...')` 与 `insert.execute([...])`（多行字符串要先拼接再数 `?`）；
+  ③ 校验 `sql.count('?')` == 值个数（值逐个换行写的代码可数行，行内写的按顶层逗号切）；
+  ④ `con.execute(sql, ['x']*n)` 真跑一次（SQLite 是动态类型，'x' 也能塞进 INTEGER 列，只为验证形状）；
+  ⑤ 再把每个 `SELECT ...` 也 `execute` 一次（`ORDER BY position` 之类的列名错才发现）
+- 反例（别这么写）: "`dart analyze` 过 == 改完"；或只肉眼数 `?` 不真跑（`GROUP BY`/列名错照样漏）
+- 自检: 输出形如 `prepares: 7 value-lists: 7` + 7 条 `[ok] INSERT ...` + 8 条 `[ok] SELECT ...` + `ERRORS=0`
+- 相关: `ADR-053`、`PIT-014`（`dart.exe` 全路径）、`PIT-002`（脚本编码）
+- 首次记录: 2026-11-10
