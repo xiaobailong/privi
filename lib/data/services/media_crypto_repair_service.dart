@@ -146,7 +146,13 @@ class MediaCryptoRepairService {
     final results = <CryptoRepairResult>[];
     if (paths.isEmpty) return CryptoRepairReport(results);
 
-    final kek = _keyManager.getKey();
+    // Rows may have been encrypted with any key in the ring (an imported
+    // backup keeps its own key), so repair tries every key this install knows.
+    final keys = _keyManager.hasKey
+        ? (await _keyManager.listKeys())
+            .map((record) => record.kek)
+            .toList(growable: false)
+        : null;
     // One snapshot for the whole run: rows are only ever *cleared* here, so a
     // stale snapshot can at worst retry a DEK that was just removed.
     final items = await _repository.listActive();
@@ -156,7 +162,7 @@ class MediaCryptoRepairService {
       onProgress?.call(index, paths.length, p.basename(path));
       CryptoRepairResult result;
       try {
-        result = await _repairOne(path: path, items: items, kek: kek);
+        result = await _repairOne(path: path, items: items, keys: keys);
       } catch (error, stackTrace) {
         AppLogger.e('MediaCryptoRepairService',
             'repair $path failed: $error\n$stackTrace');
@@ -186,7 +192,7 @@ class MediaCryptoRepairService {
   Future<CryptoRepairResult> _repairOne({
     required String path,
     required List<MediaItem> items,
-    required Uint8List? kek,
+    required List<Uint8List>? keys,
   }) async {
     final file = File(path);
     if (!file.existsSync()) {
@@ -209,10 +215,10 @@ class MediaCryptoRepairService {
       'MediaCryptoRepairService',
       'repair $path: bytes=$bytes header=$header plaintext=$plaintext '
           'owners=${owners.length} '
-          'ownerDeks=${owners.where(_hasDek).length} locked=${kek == null}',
+          'ownerDeks=${owners.where(_hasDek).length} locked=${keys == null}',
     );
 
-    if (kek != null) {
+    if (keys != null) {
       final candidates = _candidates(
         path: path,
         bytes: bytes,
@@ -221,27 +227,27 @@ class MediaCryptoRepairService {
         plaintext: plaintext,
       );
       for (final candidate in candidates) {
-        final dek = await _encryption.decryptDek(
-          encryptedDekBase64: candidate.dekBase64,
-          kek: kek,
-        );
-        if (dek == null) {
-          AppLogger.w('MediaCryptoRepairService',
-              'repair $path: candidate ${candidate.source} DEK unusable');
-          continue;
-        }
-        if (await _decryptInPlace(file: file, dek: dek, path: path)) {
-          await _clearDeks(owners, reason: 'decrypted ${p.basename(path)}');
-          AppLogger.w(
-            'MediaCryptoRepairService',
-            'repair $path: decrypted with ${candidate.source} DEK',
+        for (final kek in keys) {
+          final dek = await _encryption.decryptDek(
+            encryptedDekBase64: candidate.dekBase64,
+            kek: kek,
           );
-          return CryptoRepairResult(
-            path: path,
-            outcome: CryptoRepairOutcome.decrypted,
-            source: candidate.source,
-          );
+          if (dek == null) continue;
+          if (await _decryptInPlace(file: file, dek: dek, path: path)) {
+            await _clearDeks(owners, reason: 'decrypted ${p.basename(path)}');
+            AppLogger.w(
+              'MediaCryptoRepairService',
+              'repair $path: decrypted with ${candidate.source} DEK',
+            );
+            return CryptoRepairResult(
+              path: path,
+              outcome: CryptoRepairOutcome.decrypted,
+              source: candidate.source,
+            );
+          }
         }
+        AppLogger.w('MediaCryptoRepairService',
+            'repair $path: candidate ${candidate.source} DEK unusable');
       }
     }
 
@@ -262,7 +268,7 @@ class MediaCryptoRepairService {
     }
 
     final hasOwnerDek = owners.any(_hasDek);
-    if (kek == null && hasOwnerDek) {
+    if (keys == null && hasOwnerDek) {
       AppLogger.w('MediaCryptoRepairService',
           'repair $path: vault locked, cannot try the stored DEK');
       return CryptoRepairResult(

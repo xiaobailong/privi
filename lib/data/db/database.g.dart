@@ -142,6 +142,12 @@ class $MediaItemsTable extends MediaItems
   late final GeneratedColumn<String> encryptedDek = GeneratedColumn<String>(
       'encrypted_dek', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _encryptionKeyIdMeta =
+      const VerificationMeta('encryptionKeyId');
+  @override
+  late final GeneratedColumn<String> encryptionKeyId = GeneratedColumn<String>(
+      'encryption_key_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -164,7 +170,8 @@ class $MediaItemsTable extends MediaItems
         contentDigest,
         playCount,
         lastPlayedAt,
-        encryptedDek
+        encryptedDek,
+        encryptionKeyId
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -293,6 +300,12 @@ class $MediaItemsTable extends MediaItems
           encryptedDek.isAcceptableOrUnknown(
               data['encrypted_dek']!, _encryptedDekMeta));
     }
+    if (data.containsKey('encryption_key_id')) {
+      context.handle(
+          _encryptionKeyIdMeta,
+          encryptionKeyId.isAcceptableOrUnknown(
+              data['encryption_key_id']!, _encryptionKeyIdMeta));
+    }
     return context;
   }
 
@@ -344,6 +357,8 @@ class $MediaItemsTable extends MediaItems
           DriftSqlType.dateTime, data['${effectivePrefix}last_played_at']),
       encryptedDek: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}encrypted_dek']),
+      encryptionKeyId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}encryption_key_id']),
     );
   }
 
@@ -390,6 +405,13 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
 
   /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
   final String? encryptedDek;
+
+  /// Id of the KEK that wrapped [encryptedDek] (`EncryptionKeyManager.keyIdFor`).
+  ///
+  /// Null for rows encrypted before the key ring existed — decryption falls
+  /// back to the current default KEK for those.  Storing the id per file lets
+  /// keys imported from another vault coexist with this install's own key.
+  final String? encryptionKeyId;
   const MediaItemRow(
       {required this.id,
       required this.privatePath,
@@ -411,7 +433,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
       this.contentDigest,
       required this.playCount,
       this.lastPlayedAt,
-      this.encryptedDek});
+      this.encryptedDek,
+      this.encryptionKeyId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -457,6 +480,9 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
     }
     if (!nullToAbsent || encryptedDek != null) {
       map['encrypted_dek'] = Variable<String>(encryptedDek);
+    }
+    if (!nullToAbsent || encryptionKeyId != null) {
+      map['encryption_key_id'] = Variable<String>(encryptionKeyId);
     }
     return map;
   }
@@ -504,6 +530,9 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
       encryptedDek: encryptedDek == null && nullToAbsent
           ? const Value.absent()
           : Value(encryptedDek),
+      encryptionKeyId: encryptionKeyId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(encryptionKeyId),
     );
   }
 
@@ -533,6 +562,7 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
       playCount: serializer.fromJson<int>(json['playCount']),
       lastPlayedAt: serializer.fromJson<DateTime?>(json['lastPlayedAt']),
       encryptedDek: serializer.fromJson<String?>(json['encryptedDek']),
+      encryptionKeyId: serializer.fromJson<String?>(json['encryptionKeyId']),
     );
   }
   @override
@@ -560,6 +590,7 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
       'playCount': serializer.toJson<int>(playCount),
       'lastPlayedAt': serializer.toJson<DateTime?>(lastPlayedAt),
       'encryptedDek': serializer.toJson<String?>(encryptedDek),
+      'encryptionKeyId': serializer.toJson<String?>(encryptionKeyId),
     };
   }
 
@@ -584,7 +615,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
           Value<String?> contentDigest = const Value.absent(),
           int? playCount,
           Value<DateTime?> lastPlayedAt = const Value.absent(),
-          Value<String?> encryptedDek = const Value.absent()}) =>
+          Value<String?> encryptedDek = const Value.absent(),
+          Value<String?> encryptionKeyId = const Value.absent()}) =>
       MediaItemRow(
         id: id ?? this.id,
         privatePath: privatePath ?? this.privatePath,
@@ -614,6 +646,9 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
             lastPlayedAt.present ? lastPlayedAt.value : this.lastPlayedAt,
         encryptedDek:
             encryptedDek.present ? encryptedDek.value : this.encryptedDek,
+        encryptionKeyId: encryptionKeyId.present
+            ? encryptionKeyId.value
+            : this.encryptionKeyId,
       );
   MediaItemRow copyWithCompanion(MediaItemsCompanion data) {
     return MediaItemRow(
@@ -656,6 +691,9 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
       encryptedDek: data.encryptedDek.present
           ? data.encryptedDek.value
           : this.encryptedDek,
+      encryptionKeyId: data.encryptionKeyId.present
+          ? data.encryptionKeyId.value
+          : this.encryptionKeyId,
     );
   }
 
@@ -682,7 +720,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
           ..write('contentDigest: $contentDigest, ')
           ..write('playCount: $playCount, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
-          ..write('encryptedDek: $encryptedDek')
+          ..write('encryptedDek: $encryptedDek, ')
+          ..write('encryptionKeyId: $encryptionKeyId')
           ..write(')'))
         .toString();
   }
@@ -709,7 +748,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
         contentDigest,
         playCount,
         lastPlayedAt,
-        encryptedDek
+        encryptedDek,
+        encryptionKeyId
       ]);
   @override
   bool operator ==(Object other) =>
@@ -735,7 +775,8 @@ class MediaItemRow extends DataClass implements Insertable<MediaItemRow> {
           other.contentDigest == this.contentDigest &&
           other.playCount == this.playCount &&
           other.lastPlayedAt == this.lastPlayedAt &&
-          other.encryptedDek == this.encryptedDek);
+          other.encryptedDek == this.encryptedDek &&
+          other.encryptionKeyId == this.encryptionKeyId);
 }
 
 class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
@@ -760,6 +801,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
   final Value<int> playCount;
   final Value<DateTime?> lastPlayedAt;
   final Value<String?> encryptedDek;
+  final Value<String?> encryptionKeyId;
   final Value<int> rowid;
   const MediaItemsCompanion({
     this.id = const Value.absent(),
@@ -783,6 +825,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
     this.playCount = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     this.encryptedDek = const Value.absent(),
+    this.encryptionKeyId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MediaItemsCompanion.insert({
@@ -807,6 +850,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
     this.playCount = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     this.encryptedDek = const Value.absent(),
+    this.encryptionKeyId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         privatePath = Value(privatePath),
@@ -837,6 +881,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
     Expression<int>? playCount,
     Expression<DateTime>? lastPlayedAt,
     Expression<String>? encryptedDek,
+    Expression<String>? encryptionKeyId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -862,6 +907,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
       if (playCount != null) 'play_count': playCount,
       if (lastPlayedAt != null) 'last_played_at': lastPlayedAt,
       if (encryptedDek != null) 'encrypted_dek': encryptedDek,
+      if (encryptionKeyId != null) 'encryption_key_id': encryptionKeyId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -888,6 +934,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
       Value<int>? playCount,
       Value<DateTime?>? lastPlayedAt,
       Value<String?>? encryptedDek,
+      Value<String?>? encryptionKeyId,
       Value<int>? rowid}) {
     return MediaItemsCompanion(
       id: id ?? this.id,
@@ -911,6 +958,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
       playCount: playCount ?? this.playCount,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       encryptedDek: encryptedDek ?? this.encryptedDek,
+      encryptionKeyId: encryptionKeyId ?? this.encryptionKeyId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -982,6 +1030,9 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
     if (encryptedDek.present) {
       map['encrypted_dek'] = Variable<String>(encryptedDek.value);
     }
+    if (encryptionKeyId.present) {
+      map['encryption_key_id'] = Variable<String>(encryptionKeyId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1012,6 +1063,7 @@ class MediaItemsCompanion extends UpdateCompanion<MediaItemRow> {
           ..write('playCount: $playCount, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
           ..write('encryptedDek: $encryptedDek, ')
+          ..write('encryptionKeyId: $encryptionKeyId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2108,6 +2160,7 @@ typedef $$MediaItemsTableCreateCompanionBuilder = MediaItemsCompanion Function({
   Value<int> playCount,
   Value<DateTime?> lastPlayedAt,
   Value<String?> encryptedDek,
+  Value<String?> encryptionKeyId,
   Value<int> rowid,
 });
 typedef $$MediaItemsTableUpdateCompanionBuilder = MediaItemsCompanion Function({
@@ -2132,6 +2185,7 @@ typedef $$MediaItemsTableUpdateCompanionBuilder = MediaItemsCompanion Function({
   Value<int> playCount,
   Value<DateTime?> lastPlayedAt,
   Value<String?> encryptedDek,
+  Value<String?> encryptionKeyId,
   Value<int> rowid,
 });
 
@@ -2228,6 +2282,10 @@ class $$MediaItemsTableFilterComposer
 
   ColumnFilters<String> get encryptedDek => $composableBuilder(
       column: $table.encryptedDek, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get encryptionKeyId => $composableBuilder(
+      column: $table.encryptionKeyId,
+      builder: (column) => ColumnFilters(column));
 
   Expression<bool> albumMediaRefs(
       Expression<bool> Function($$AlbumMediaTableFilterComposer f) f) {
@@ -2330,6 +2388,10 @@ class $$MediaItemsTableOrderingComposer
   ColumnOrderings<String> get encryptedDek => $composableBuilder(
       column: $table.encryptedDek,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get encryptionKeyId => $composableBuilder(
+      column: $table.encryptionKeyId,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$MediaItemsTableAnnotationComposer
@@ -2404,6 +2466,9 @@ class $$MediaItemsTableAnnotationComposer
   GeneratedColumn<String> get encryptedDek => $composableBuilder(
       column: $table.encryptedDek, builder: (column) => column);
 
+  GeneratedColumn<String> get encryptionKeyId => $composableBuilder(
+      column: $table.encryptionKeyId, builder: (column) => column);
+
   Expression<T> albumMediaRefs<T extends Object>(
       Expression<T> Function($$AlbumMediaTableAnnotationComposer a) f) {
     final $$AlbumMediaTableAnnotationComposer composer = $composerBuilder(
@@ -2470,6 +2535,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             Value<int> playCount = const Value.absent(),
             Value<DateTime?> lastPlayedAt = const Value.absent(),
             Value<String?> encryptedDek = const Value.absent(),
+            Value<String?> encryptionKeyId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaItemsCompanion(
@@ -2494,6 +2560,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             playCount: playCount,
             lastPlayedAt: lastPlayedAt,
             encryptedDek: encryptedDek,
+            encryptionKeyId: encryptionKeyId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2518,6 +2585,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             Value<int> playCount = const Value.absent(),
             Value<DateTime?> lastPlayedAt = const Value.absent(),
             Value<String?> encryptedDek = const Value.absent(),
+            Value<String?> encryptionKeyId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaItemsCompanion.insert(
@@ -2542,6 +2610,7 @@ class $$MediaItemsTableTableManager extends RootTableManager<
             playCount: playCount,
             lastPlayedAt: lastPlayedAt,
             encryptedDek: encryptedDek,
+            encryptionKeyId: encryptionKeyId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

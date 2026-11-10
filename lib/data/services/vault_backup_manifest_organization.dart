@@ -4,7 +4,7 @@ final class _VaultBackupOrganizationParser {
   const _VaultBackupOrganizationParser();
 
   _ManifestAlbum parseAlbum(Map<String, dynamic> raw, int version) {
-    final strict = version >= VaultBackupService.manifestVersion;
+    final strict = version >= VaultBackupService.strictManifestVersion;
     final parsedIsSystem =
         _optionalManifestBool(raw['isSystem'], 'album isSystem');
     final isSystem = strict
@@ -57,7 +57,7 @@ final class _VaultBackupOrganizationParser {
   }
 
   _ManifestGroup parseGroup(Map<String, dynamic> raw, int version) {
-    final strict = version >= VaultBackupService.manifestVersion;
+    final strict = version >= VaultBackupService.strictManifestVersion;
     final id = strict
         ? _validatedBackupId(
             _requiredManifestString(raw['id'], 'group id'),
@@ -86,7 +86,7 @@ final class _VaultBackupOrganizationParser {
     Map<String, dynamic> raw,
     int version,
   ) {
-    final strict = version >= VaultBackupService.manifestVersion;
+    final strict = version >= VaultBackupService.strictManifestVersion;
     final rawAlbumId = strict
         ? _requiredManifestString(raw['albumId'], 'album id')
         : _optionalManifestString(raw['albumId'], 'album id');

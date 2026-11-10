@@ -41,6 +41,13 @@ class MediaItems extends Table {
   /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
   TextColumn get encryptedDek => text().nullable()();
 
+  /// Id of the KEK that wrapped [encryptedDek] (`EncryptionKeyManager.keyIdFor`).
+  ///
+  /// Null for rows encrypted before the key ring existed — decryption falls
+  /// back to the current default KEK for those.  Storing the id per file lets
+  /// keys imported from another vault coexist with this install's own key.
+  TextColumn get encryptionKeyId => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

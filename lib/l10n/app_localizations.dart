@@ -532,25 +532,37 @@ class AppLocalizations {
 
   String get vaultSize => '保险库大小';
 
-  String get exportVault => '导出保险库…';
+  /// 合并后的功能名：保险库数据（Vault Data）。「数据」= 记录、相册、
+  /// 密钥和设置，媒体文件本体不在其中，需单独拷贝。
+  String get exportVault => '导出保险库数据…';
 
-  String get exportVaultSubtitle => '将媒体与元数据导出到文件夹';
+  String get exportVaultSubtitle => '把记录、相册、密钥和设置存成一份数据文件；不含媒体文件';
 
-  String get importVault => '导入保险库…';
+  String get importVault => '导入保险库数据…';
 
-  String get importVaultSubtitle => '从先前的导出文件夹导入';
+  String get importVaultSubtitle => '从数据文件恢复；媒体文件请先单独拷贝回保险库目录';
 
-  String get backupExportPickerTitle => '选择备份文件夹';
+  String get backupExportWarning => '导出会保存全部媒体记录、相册、加密密钥和应用设置，'
+      '但不会包含媒体文件本体（它们已保存在手机存储里，请单独拷贝）。\n\n'
+      '⚠️ 数据文件里含有「未加密」的保险库密钥：任何同时拿到数据文件与保险库目录的人'
+      '都能解密全部文件。请放到加密网盘或离线介质，不要分享给别人。\n\n继续导出？';
 
-  String get backupRestorePickerTitle => '选择备份文件夹';
+  String get backupImportWarning => '导入会恢复记录、相册、设置，并把其中的加密密钥'
+      '登记为额外密钥，不会覆盖本机当前密钥。\n\n'
+      '媒体文件不在数据文件里：请先把它们（保持原文件名）单独拷贝到本应用的保险库目录，'
+      '导入时会按文件名自动匹配；找不到文件的条目会被跳过。\n\n继续导入？';
 
-  String get backupExportProgressTitle => '导出保险库';
+  String get backupExportPickerTitle => '选择数据存放文件夹';
 
-  String get backupRestoreProgressTitle => '恢复保险库';
+  String get backupRestorePickerTitle => '选择数据所在文件夹';
 
-  String get backupExportCompleteTitle => '备份已验证';
+  String get backupExportProgressTitle => '导出保险库数据';
 
-  String get backupRestoreCompleteTitle => '恢复完成';
+  String get backupRestoreProgressTitle => '恢复保险库数据';
+
+  String get backupExportCompleteTitle => '数据已验证';
+
+  String get backupRestoreCompleteTitle => '数据恢复完成';
 
   String get backupExportErrorTitle => '导出失败';
 
@@ -560,23 +572,23 @@ class AppLocalizations {
 
   String get backupCancelledBody => '未保存任何更改。';
 
-  String get backupCancelling => '正在完成当前文件…';
+  String get backupCancelling => '正在收尾…';
 
   String get backupStagePreparing => '正在准备';
 
-  String get backupStageCheckingSource => '正在检查源文件';
+  String get backupStageCheckingSource => '正在读取数据';
 
-  String get backupStageCopying => '正在复制媒体';
+  String get backupStageCopying => '正在整理数据';
 
   String get backupStageWritingManifest => '正在写入清单';
 
-  String get backupStageCheckingBackup => '正在检查备份';
+  String get backupStageCheckingBackup => '正在检查数据';
 
-  String get backupStageRestoring => '正在恢复媒体';
+  String get backupStageRestoring => '正在恢复数据';
 
   String get backupStageComplete => '已完成';
 
-  String get backupProgressLabel => '备份进度';
+  String get backupProgressLabel => '数据进度';
 
   String backupProgressCount(int completed, int total) {
     return '$completed / $total';
@@ -586,23 +598,23 @@ class AppLocalizations {
     return '$count 项';
   }
 
-  String get backupChecksumVerified => '已检查 SHA-256';
+  String get backupChecksumVerified => '已验证数据内容';
 
-  String get backupCheckedWithoutChecksum => '文件已检查 · 无校验值';
+  String get backupCheckedWithoutChecksum => '已读取数据内容 · 无校验值';
 
   String get backupUnknownItem => '未知项目';
 
   String get backupFolderSelectionFailed => '无法打开文件夹，请重试';
 
-  String get backupManifestMissing => '未找到密册备份清单。';
+  String get backupManifestMissing => '未找到密册数据清单。';
 
-  String get backupManifestMalformed => '备份清单无效。';
+  String get backupManifestMalformed => '数据清单无效。';
 
   String backupManifestMalformedItem(String name) {
     return '清单项目无效：$name';
   }
 
-  String get backupVersionUnsupported => '不支持此备份版本。';
+  String get backupVersionUnsupported => '不支持此数据版本。';
 
   String backupSourceMissing(String name) {
     return '源文件缺失：$name';
@@ -648,13 +660,13 @@ class AppLocalizations {
     return '请选择空文件夹。已有项目：$name';
   }
 
-  String get backupExportWriteFailed => '无法写入备份，请检查文件夹权限和剩余空间。';
+  String get backupExportWriteFailed => '无法写入数据文件，请检查文件夹权限和剩余空间。';
 
-  String get backupRestoreWriteFailed => '无法恢复备份，请检查存储权限和剩余空间。';
+  String get backupRestoreWriteFailed => '无法恢复数据，请检查存储权限和剩余空间。';
 
-  String get backupExportFailedGeneric => '导出失败，请检查源文件后重试。';
+  String get backupExportFailedGeneric => '导出失败，请检查保险库数据后重试。';
 
-  String get backupRestoreFailedGeneric => '恢复失败，请检查备份后重试。';
+  String get backupRestoreFailedGeneric => '恢复失败，请检查数据文件后重试。';
 
   String get encryptExistingFiles => '加密已有文件';
 
@@ -837,40 +849,6 @@ class AppLocalizations {
   String encryptResultPartial(int completed, int failed) {
     return '已加密 $completed 个文件，$failed 个失败。';
   }
-
-  // ── Vault key backup (export / import) ──
-
-  String get exportVaultKey => '导出加密密钥';
-  String get exportVaultKeySubtitle => '保存成 SQLite 数据库文件：含密钥、加密记录与文件名映射';
-  String get importVaultKey => '导入加密密钥';
-  String get importVaultKeySubtitle => '重装/换机后，用导出的数据库文件恢复解密能力与文件名映射';
-  String get exportVaultKeyWarning => '导出的数据库文件里有「未加密」的保险库密钥，以及每个文件的加密密钥（DEK）'
-      '和文件名映射：任何同时拿到该文件与本应用保险库目录的人，都能解密全部文件。\n\n'
-      '请放到加密网盘或离线介质，不要分享给别人。\n\n'
-      '⚠️ 改过图案/密码后密钥会变：旧密钥包将失效，请重新导出一次。\n\n继续导出？';
-  String importVaultKeyWarningDetail(int files, int encryptedFiles) =>
-      '该数据库里有本机的保险库密钥、$encryptedFiles 个文件的加密密钥（DEK）'
-      '和 $files 条文件名映射。\n\n'
-      '导入会接管本机密钥，并把「库里已有对应文件」的加密记录与文件名写回本机数据库：\n'
-      '• 只在本机还没有自己的加密文件时使用（例如刚重装、刚换机）；\n'
-      '• 若本机已有自己的密钥，导入会被拒绝，以免本机已加密文件全部失效；\n'
-      '• 找不到对应文件的条目会被跳过，不会生成打不开的空条目。\n\n继续导入？';
-  String vaultKeyExported(String path) => '密钥已导出：$path';
-  String get vaultKeyExportFailed => '导出失败，请重试';
-  String get vaultKeyExportLocked => '请先解锁保险库，再导出密钥';
-  String get pickVaultKeyTitle => '选择密钥文件';
-  String get vaultKeyImported => '密钥导入成功：现在可用该密钥解密已加密的文件';
-  String vaultKeyImportedDetail(int restored, int updated, int skipped) {
-    if (restored + updated + skipped == 0) return vaultKeyImported;
-    return '$vaultKeyImported（恢复 $restored 条 · 更新 $updated 条 · 跳过 $skipped 条）';
-  }
-
-  String get vaultKeyImportMalformed => '该文件不是有效的密册密钥包';
-  String get vaultKeyImportUnsupportedVersion => '该密钥包由更新版本的密册导出，当前版本无法读取';
-  String get vaultKeyImportSaltConflict => '本机已有自己的密钥材料，已拒绝导入（否则本机已加密文件会全部失效）';
-  String get vaultKeyImportKeyMismatch => '该密钥与库中已加密文件不匹配，已拒绝导入';
-  String get vaultKeyImportFailed => '导入失败，请重试';
-  String get vaultKeyImportReadFailed => '无法读取该文件';
 
   String get scanOrphans => '扫描孤立隐藏文件';
 
@@ -1135,4 +1113,85 @@ class AppLocalizations {
   String unlockLockout(int seconds) {
     return '请在 $seconds 秒后重试';
   }
+
+  // ── 保险库管理（多保险库）──
+
+  String get vaultLibraries => '保险库管理';
+
+  String get vaultLibrariesSubtitle => '把手机上的目录添加为保险库，多个保险库可同时存在';
+
+  String get vaultLibraryBuiltIn => '默认保险库';
+
+  String get vaultLibraryBuiltInSubtitle => '应用内置，不能移除';
+
+  String get vaultLibraryCurrent => '当前使用';
+
+  String get vaultLibrarySetCurrent => '设为当前';
+
+  String get vaultLibrarySetCurrentDone => '已切换当前保险库';
+
+  String get vaultLibraryAdd => '添加保险库…';
+
+  String get vaultLibraryAddHint =>
+      '选择手机上已存放媒体文件的目录，例如从旧手机拷贝来的保险库文件夹';
+
+  String get vaultLibraryAddConfirmTitle => '添加为保险库？';
+
+  String get vaultLibraryAddConfirmBody =>
+      '该目录会被登记为保险库，并写入 .nomedia 以对系统图库隐藏。\n\n'
+      '目录里的文件不会被移动或删除，原有默认保险库保持不变，两者可同时使用。';
+
+  String get vaultLibraryAdded => '保险库已添加';
+
+  String get vaultLibraryScanTitle => '立即扫描？';
+
+  String get vaultLibraryScanBody =>
+      '是否扫描这个目录里的媒体文件并加入保险库？已有记录不会重复导入，'
+      '目录下没有数据库记录的文件会按文件名重建索引。';
+
+  String vaultLibraryScanDone(int count) => '扫描完成，已恢复 $count 个文件';
+
+  String get vaultLibraryRemove => '移除';
+
+  String get vaultLibraryRemoveTitle => '移除这个保险库？';
+
+  String get vaultLibraryRemoveBody =>
+      '只取消登记并移除该目录下的媒体记录，手机里的文件不会被删除。\n\n'
+      '之后重新添加该目录并扫描，即可恢复记录。';
+
+  String vaultLibraryRemoved(int count) => '已移除保险库，取消 $count 条记录';
+
+  String get vaultLibraryUnavailable => '目录不存在（可能来自另一台手机）';
+
+  String get vaultLibraryEmpty => '还没有添加其它保险库';
+
+  String get vaultLibraryHint =>
+      '新隐藏的文件会保存到「当前使用」的保险库；所有保险库里的文件都会一起显示。';
+
+  String get vaultLibraryMigrationHint =>
+      '从其它手机迁移：先把旧保险库文件夹拷贝到本机，在这里添加该目录，'
+      '再导入保险库数据，媒体记录会按文件名自动匹配。';
+
+  String get vaultLibraryNameHint => '给这个保险库起个名字';
+
+  String get vaultLibraryErrorTitle => '无法添加该目录';
+
+  String get vaultLibraryErrEmpty => '未选择目录';
+
+  String get vaultLibraryErrMissing => '目录不存在';
+
+  String get vaultLibraryErrNotDirectory => '这不是一个文件夹';
+
+  String get vaultLibraryErrUnreadable =>
+      '无法读取该目录，请在系统设置中允许本应用「所有文件访问权限」';
+
+  String get vaultLibraryErrDuplicate => '该目录已经登记为保险库';
+
+  String get vaultLibraryErrNested =>
+      '不能选择已有保险库的上级目录或子目录，否则同一个文件会被重复扫描';
+
+  String get vaultLibraryErrReserved =>
+      '请选择一个具体的文件夹，而不是存储根目录';
+
+  String get vaultLibraryOperationFailed => '操作失败，请重试';
 }

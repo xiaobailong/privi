@@ -110,10 +110,19 @@ class BatchDecryptionService {
         if (index >= items.length) return;
 
         final item = items[index];
-        final kek = _keyManager.getKey();
-        if (kek == null) {
+        if (!_keyManager.hasKey) {
           stats.keyLost = true;
           return;
+        }
+        // Each row records which KEK wrapped its DEK; imported keys live in
+        // the key ring alongside this install's default key.
+        final kek = await _keyManager.keyForId(item.encryptionKeyId);
+        if (kek == null) {
+          stats.failed++;
+          AppLogger.e('BatchDecryptionService',
+              'no key ${item.encryptionKeyId} for ${item.id} — skipping');
+          onProgress?.call(stats);
+          continue;
         }
 
         try {

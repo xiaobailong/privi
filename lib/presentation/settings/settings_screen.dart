@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,7 +12,6 @@ import '../../data/repositories/media_repository.dart';
 import '../../data/services/batch_decryption_service.dart';
 import '../../data/services/batch_encryption_service.dart';
 import '../../data/services/filename_encryption_service.dart';
-import '../../data/services/key_backup_service.dart';
 import '../../data/services/maintenance_service.dart';
 import '../../data/services/playback_display_service.dart';
 import '../../data/services/vault_backup_service.dart';
@@ -21,6 +19,7 @@ import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
+import 'vault_libraries_screen.dart';
 import '../../core/utils/app_logger.dart';
 
 /// Full settings — security, display, playback, storage export/import.
@@ -76,18 +75,6 @@ class SettingsScreen extends ConsumerWidget {
               ref.read(lockControllerProvider.notifier).lock();
               Navigator.of(context).popUntil((r) => r.isFirst);
             },
-          ),
-          ListTile(
-            leading: const Icon(Icons.key_outlined),
-            title: Text(context.l10n.exportVaultKey),
-            subtitle: Text(context.l10n.exportVaultKeySubtitle),
-            onTap: () => _exportVaultKey(context, ref),
-          ),
-          ListTile(
-            leading: const Icon(Icons.vpn_key_outlined),
-            title: Text(context.l10n.importVaultKey),
-            subtitle: Text(context.l10n.importVaultKeySubtitle),
-            onTap: () => _importVaultKey(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.gesture),
@@ -325,6 +312,17 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => _clearPlayHistory(context, ref),
           ),
           _SectionHeader(context.l10n.sectionStorage),
+          ListTile(
+            key: const ValueKey('settings-vault-libraries'),
+            leading: const Icon(Icons.folder_copy_outlined),
+            title: Text(context.l10n.vaultLibraries),
+            subtitle: Text(context.l10n.vaultLibrariesSubtitle),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const VaultLibrariesScreen(),
+              ),
+            ),
+          ),
           Consumer(
             builder: (context, ref, _) {
               final sizeAsync = ref.watch(vaultSizeBytesProvider);
@@ -533,156 +531,6 @@ class SettingsScreen extends ConsumerWidget {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.l10n.errorWithDetails('$e'))),
       );
-    }
-  }
-
-  /// Reads a key package the user picks and adopts it as this install's key.
-  ///
-  /// Validates **before** asking for confirmation (a rejected package must never
-  /// look like a successful import) and lets the service refuse a package that
-  /// would invalidate files already encrypted here.  v2 packages are SQLite
-  /// databases that also carry the filename/DEK map (ADR-047); v1 JSON packages
-  /// still import as key-only.
-  Future<void> _importVaultKey(BuildContext context, WidgetRef ref) async {
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-      withData: false,
-    );
-    final path = picked?.files.single.path;
-    if (path == null || !context.mounted) return;
-
-    final service = ref.read(keyBackupServiceProvider);
-    KeyPackageSummary? summary;
-    var preview = KeyImportOutcome.failed;
-    try {
-      summary = await service.inspectPackage(path);
-      if (summary != null) {
-        preview = await service.validatePackage(path);
-      }
-    } catch (e, stackTrace) {
-      AppLogger.e('SettingsScreen', 'inspect vault key: $e\n$stackTrace');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.vaultKeyImportReadFailed)),
-        );
-      }
-      return;
-    }
-    if (!context.mounted) return;
-    if (summary == null || preview != KeyImportOutcome.imported) {
-      final outcome = summary == null ? KeyImportOutcome.malformed : preview;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _keyImportMessage(context, KeyImportResult(outcome: outcome)),
-          ),
-        ),
-      );
-      return;
-    }
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(context.l10n.importVaultKey),
-        content: Text(
-          context.l10n.importVaultKeyWarningDetail(
-            summary!.fileCount,
-            summary.encryptedFileCount,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(context.l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(context.l10n.continueAction),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-
-    final result = await service.importPackage(path);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_keyImportMessage(context, result))),
-    );
-  }
-
-  String _keyImportMessage(BuildContext context, KeyImportResult result) {
-    switch (result.outcome) {
-      case KeyImportOutcome.imported:
-        return context.l10n.vaultKeyImportedDetail(
-          result.restored,
-          result.updated,
-          result.skipped,
-        );
-      case KeyImportOutcome.malformed:
-        return context.l10n.vaultKeyImportMalformed;
-      case KeyImportOutcome.unsupportedVersion:
-        return context.l10n.vaultKeyImportUnsupportedVersion;
-      case KeyImportOutcome.saltConflict:
-        return context.l10n.vaultKeyImportSaltConflict;
-      case KeyImportOutcome.keyMismatch:
-        return context.l10n.vaultKeyImportKeyMismatch;
-      case KeyImportOutcome.failed:
-        return context.l10n.vaultKeyImportFailed;
-    }
-  }
-
-  /// Writes the vault key material (KEK + salt) **and** the filename/DEK map to
-  /// a SQLite database in the directory the user picks, so a reinstall/device
-  /// change can still decrypt old files and show their original names.
-  Future<void> _exportVaultKey(BuildContext context, WidgetRef ref) async {
-    if (ref.read(encryptionKeyManagerProvider).getKey() == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.vaultKeyExportLocked)),
-      );
-      return;
-    }
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(context.l10n.exportVaultKey),
-        content: Text(context.l10n.exportVaultKeyWarning),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(context.l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(context.l10n.continueAction),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-
-    final pickDirectory = ref.read(vaultBackupDirectoryPickerProvider);
-    final directory = await pickDirectory(context.l10n.exportVaultKey);
-    if (directory == null || !context.mounted) return;
-
-    try {
-      final saved =
-          await ref.read(keyBackupServiceProvider).exportToDirectory(directory);
-      AppLogger.i('SettingsScreen', 'vault key exported to $saved');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.vaultKeyExported(saved))),
-        );
-      }
-    } catch (e, stackTrace) {
-      AppLogger.e('SettingsScreen', 'export vault key: $e\n$stackTrace');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.vaultKeyExportFailed)),
-        );
-      }
     }
   }
 
@@ -1718,11 +1566,33 @@ class SettingsScreen extends ConsumerWidget {
     WidgetRef ref,
     VaultBackupOperation operation,
   ) async {
-    final controller = ref.read(vaultBackupControllerProvider.notifier);
     final restoring = operation == VaultBackupOperation.restore;
+    final l10n = context.l10n;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(restoring ? l10n.importVault : l10n.exportVault),
+        content: Text(
+          restoring ? l10n.backupImportWarning : l10n.backupExportWarning,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.continueAction),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final controller = ref.read(vaultBackupControllerProvider.notifier);
     final pickerTitle = restoring
-        ? context.l10n.backupRestorePickerTitle
-        : context.l10n.backupExportPickerTitle;
+        ? l10n.backupRestorePickerTitle
+        : l10n.backupExportPickerTitle;
     final bool started;
     try {
       final selectDirectory = ref.read(vaultBackupDirectoryPickerProvider);

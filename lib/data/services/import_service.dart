@@ -440,6 +440,7 @@ class ImportService implements VaultWorkflow {
         await _mediaRepository.updateEncryptedDek(
           record.item.id,
           encryptedDekBase64,
+          encryptionKeyId: EncryptionKeyManager.keyIdFor(kek),
         );
 
         await encryptionService.encryptFileWithDek(

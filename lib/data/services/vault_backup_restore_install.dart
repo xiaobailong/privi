@@ -40,10 +40,28 @@ final class _VaultBackupRestoreInstaller {
           plans.length,
           plan.originalName,
         );
-        if (!plan.skipExisting) {
+        if (manifest.dataOnly) {
+          // v6: no payload to copy. Point the restored row at the media file
+          // the user already placed in phone storage.
+          final localPath = plan.localPath;
+          if (!plan.skipExisting &&
+              !plan.missingLocalFile &&
+              localPath != null) {
+            final destination = File(localPath);
+            installed.add(
+              _InstalledMedia(
+                plan: plan,
+                destination: destination,
+                thumbnailPath: await _localThumbnailPath(plan),
+                createdFiles: const [],
+              ),
+            );
+            restoredCount++;
+          }
+        } else if (!plan.skipExisting) {
           final destination = await _restoreDestination(plan);
           final restoredFile = await _installRestoredFile(
-            source: plan.source,
+            source: plan.source!,
             destination: destination,
             expectedLength: plan.expectedLength,
             expectedDigest: plan.expectedDigest,
@@ -104,12 +122,14 @@ final class _VaultBackupRestoreInstaller {
       );
       return VaultBackupResult(
         itemCount: restoredCount,
-        totalBytes: plans.fold(
-          0,
-          (sum, plan) => sum + plan.expectedLength,
-        ),
+        totalBytes: manifest.dataOnly
+            ? 0
+            : plans.fold(
+                0,
+                (sum, plan) => sum + plan.expectedLength,
+              ),
         checksumsVerified:
-            manifest.version >= VaultBackupService.manifestVersion,
+            manifest.version >= VaultBackupService.strictManifestVersion,
         status: VaultBackupResultStatus.completed,
       );
     } on _VaultBackupCancelled {
@@ -131,6 +151,16 @@ final class _VaultBackupRestoreInstaller {
     }
   }
 
+  Future<String?> _localThumbnailPath(_RestoreMediaPlan plan) async {
+    final recorded = plan.media.thumbnailPath;
+    if (recorded != null && await File(recorded).exists()) return recorded;
+    final candidate = await storage.thumbFileFor(plan.id);
+    if (await candidate.exists() && await candidate.length() > 0) {
+      return candidate.path;
+    }
+    return null;
+  }
+
   ({MediaItem item, String? userAlbumId}) _mediaEntry(
     _InstalledMedia installed,
     int version,
@@ -138,6 +168,7 @@ final class _VaultBackupRestoreInstaller {
     final plan = installed.plan;
     final item = plan.media;
     final isVideo = item.isVideo ?? false;
+    final dataOnly = version >= VaultBackupService.manifestVersion;
     return (
       item: MediaItem(
         id: plan.id,
@@ -152,7 +183,9 @@ final class _VaultBackupRestoreInstaller {
         rating: item.rating ?? 0,
         dateAdded: item.dateAdded ?? DateTime.now().toUtc(),
         dateTaken: item.dateTaken,
-        sizeBytes: installed.destination.lengthSync(),
+        sizeBytes: dataOnly
+            ? (item.sizeBytes ?? installed.destination.lengthSync())
+            : installed.destination.lengthSync(),
         thumbnailPath: installed.thumbnailPath,
         deletedAt: item.deletedAt,
         sourcePlatformId:
@@ -161,9 +194,12 @@ final class _VaultBackupRestoreInstaller {
             version >= 4 &&
             item.sourceRemovalPending,
         contentDigest: version >= 4 ? item.contentDigest : null,
-        // Restored encrypted media keeps the DEK the backup carried, so it can
-        // be decrypted again with the same pattern/PIN (ISSUE-029).
+        // Restored encrypted media keeps the DEK **and the key it belongs to**,
+        // so an imported key works without touching this install's default key.
         encryptedDek: item.encryptedDek,
+        encryptionKeyId: dataOnly ? item.encryptionKeyId : null,
+        playCount: dataOnly ? (item.playCount ?? 0) : 0,
+        lastPlayedAt: dataOnly ? item.lastPlayedAt : null,
       ),
       userAlbumId: null,
     );

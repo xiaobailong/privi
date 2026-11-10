@@ -120,12 +120,20 @@ class MaintenanceService {
   Future<int> _repairEncryptionArtifacts() async {
     var repaired = 0;
     try {
-      final root = await _storage.vaultDir;
-      if (!await root.exists()) return 0;
+      // All libraries, not just the app-private metadata root: an interrupted
+      // encryption in a user-added vault leaves `.enc_bak` there too.
       final files = <File>[];
-      await for (final entity
-          in root.list(recursive: true, followLinks: false)) {
-        if (entity is File) files.add(entity);
+      for (final root in await _storage.mediaRoots()) {
+        if (!await root.exists()) continue;
+        try {
+          await for (final entity
+              in root.list(recursive: true, followLinks: false)) {
+            if (entity is File) files.add(entity);
+          }
+        } catch (e) {
+          AppLogger.w('MaintenanceService',
+              'encryption artifact scan ${root.path}: $e');
+        }
       }
       for (final file in files) {
         final name = p.basename(file.path);
@@ -532,7 +540,50 @@ class MaintenanceService {
       if (Directory(extra).existsSync()) parents.add(extra);
     }
 
+    // User-added libraries are vault roots in their own right. Unlike the
+    // built-in mirror (root + one level), a migrated directory may have an
+    // arbitrary depth, so walk it recursively.
+    final extraRoots = <String>{};
+    for (final root in HideNaming.extraVaultRoots) {
+      if (Directory(root).existsSync()) extraRoots.add(root);
+    }
+
     final out = <_OrphanCandidate>[];
+    final seenPaths = <String>{};
+    for (final rootPath in extraRoots) {
+      try {
+        await for (final ent in Directory(rootPath).list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (ent is! File) continue;
+          final path = ent.path;
+          final base = p.basename(path);
+          if (base == VaultPaths.nomedia || _isScratchPath(path)) continue;
+          if (!_looksLikeMedia(base)) continue;
+          if (!seenPaths.add(_norm(path))) continue;
+          if (knownSet.contains(_norm(path))) continue;
+          var folder = p.basename(ent.parent.path);
+          if (p.equals(ent.parent.path, rootPath) ||
+              folder.startsWith('.') ||
+              folder == VaultPaths.hiddenRootName) {
+            folder = 'Recovered';
+          }
+          if (folder.toLowerCase() == 'download') folder = 'Downloads';
+          out.add(
+            _OrphanCandidate(
+              path: path,
+              name: HideNaming.displayName(path),
+              isVideo: _isVideoName(path),
+              folderName: HideNaming.sanitizeFolder(folder),
+            ),
+          );
+        }
+      } catch (e) {
+        AppLogger.w('MaintenanceService', 'library scan $rootPath: $e');
+      }
+    }
+
     for (final dirPath in parents) {
       final dir = Directory(dirPath);
       if (!await dir.exists()) continue;
@@ -551,6 +602,7 @@ class MaintenanceService {
           // Outside vault: only legacy marker names.
           if (!inVault && !legacy) continue;
           if (inVault && !_looksLikeMedia(base)) continue;
+          if (!seenPaths.add(_norm(path))) continue;
           if (knownSet.contains(_norm(path))) continue;
           if (!await ent.exists()) continue;
 
@@ -605,6 +657,13 @@ class MaintenanceService {
       );
     }
     return out;
+  }
+
+  static bool _isScratchPath(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized.contains('/${VaultPaths.stagingDir}/') ||
+        normalized.contains('/${VaultPaths.shareStagingDir}/') ||
+        normalized.contains('/${VaultPaths.thumbsDir}/');
   }
 
   static bool _looksLikeMedia(String name) =>

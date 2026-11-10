@@ -912,10 +912,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<String?> _decryptToTemp(MediaItem item) async {
-    final kek = ref.read(encryptionKeyManagerProvider).getKey();
+    final kek = await ref
+        .read(encryptionKeyManagerProvider)
+        .keyForId(item.encryptionKeyId);
     if (kek == null) {
       AppLogger.e('PlayerScreen',
-          'Cannot decrypt ${item.id}: vault key not loaded (vault locked?)');
+          'Cannot decrypt ${item.id}: encryption key ${item.encryptionKeyId ?? "default"} '
+          'not loaded (vault locked or key missing)');
       return null;
     }
     try {

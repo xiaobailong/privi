@@ -3,7 +3,11 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/services/vault_backup_service.dart';
+import '../media/album_kind_preferences.dart';
+import '../media/album_list_preferences.dart';
+import '../media/visible_folder_view_preferences.dart';
 import '../providers.dart';
+import '../settings/settings_controller.dart';
 import '../../core/utils/app_logger.dart';
 
 enum VaultBackupOperation { export, restore }
@@ -165,6 +169,16 @@ class VaultBackupController extends Notifier<VaultBackupUiState> {
       if (!result.cancelled && operation == VaultBackupOperation.restore) {
         ref.invalidate(vaultSizeBytesProvider);
         ref.invalidate(albumsProvider);
+        // v6 backups restore every app setting; drop the cached state so the
+        // UI reads the freshly written SharedPreferences values.
+        ref.invalidate(settingsControllerProvider);
+        ref.invalidate(albumListPreferencesProvider);
+        ref.invalidate(albumKindPreferencesProvider);
+        ref.invalidate(visibleFolderViewPreferencesProvider);
+        // The archive also carries the registered vault libraries. Reload the
+        // in-memory registry so scans/writes immediately see the restored list
+        // (paths from another phone will be shown as unavailable in Settings).
+        ref.read(vaultLibraryRegistryProvider).reload();
       }
     } catch (error, stackTrace) {
       AppLogger.e('VaultBackupController',

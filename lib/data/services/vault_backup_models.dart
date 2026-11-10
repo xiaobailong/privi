@@ -135,31 +135,15 @@ final class _ExportSnapshot {
   final List<AlbumMediaRow> memberships;
 }
 
+/// v6 exports only the row + a stable identifier; no payload is copied.
 final class _ExportEntry {
   const _ExportEntry({
     required this.row,
-    required this.source,
     required this.fileName,
-    required this.byteLength,
-    required this.sha256,
-    this.thumbnailName,
   });
 
   final MediaItemRow row;
-  final File source;
   final String fileName;
-  final int byteLength;
-  final String sha256;
-  final String? thumbnailName;
-
-  _ExportEntry withThumbnail(String? value) => _ExportEntry(
-        row: row,
-        source: source,
-        fileName: fileName,
-        byteLength: byteLength,
-        sha256: sha256,
-        thumbnailName: value,
-      );
 }
 
 final class _BackupManifest {
@@ -174,6 +158,10 @@ final class _BackupManifest {
     required this.groups,
     required this.memberships,
     this.encryptionSalt,
+    this.encryptionKeys = const [],
+    this.appSettings = const {},
+    this.defaultKeyId,
+    this.includesMedia = true,
   });
 
   final int version;
@@ -193,10 +181,57 @@ final class _BackupManifest {
   /// before a salt existed (ISSUE-029).  The salt is not a secret.
   final String? encryptionSalt;
 
+  /// v6: every KEK this vault can decrypt with (raw key material, base64).
+  /// Registering these on import never replaces the receiving install's own
+  /// default key — each media row names the key it needs.
+  final List<_ManifestKey> encryptionKeys;
+
+  /// v6: full `SharedPreferences` snapshot (app settings / view preferences).
+  final Map<String, Object?> appSettings;
+
+  /// v6: id of the key that was default at export time.
+  final String? defaultKeyId;
+
+  /// v6 backups contain **no media bytes**; the files stay in phone storage.
+  final bool includesMedia;
+
+  bool get dataOnly => version >= VaultBackupService.manifestVersion;
+
   int get payloadBytes => media.fold(
         0,
         (sum, item) => sum + (item.byteLength ?? 0),
       );
+}
+
+/// One KEK carried by a v6 backup.
+final class _ManifestKey {
+  const _ManifestKey({
+    required this.id,
+    required this.kekBase64,
+    required this.fingerprint,
+    required this.createdAt,
+    this.label,
+    this.salt,
+    this.isDefault = false,
+  });
+
+  final String id;
+  final String kekBase64;
+  final String fingerprint;
+  final DateTime? createdAt;
+  final String? label;
+  final String? salt;
+  final bool isDefault;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'kek': kekBase64,
+        'fingerprint': fingerprint,
+        'createdAt': createdAt?.toIso8601String(),
+        if (label != null) 'label': label,
+        if (salt != null) 'salt': salt,
+        'isDefault': isDefault,
+      };
 }
 
 final class _ManifestSource {
@@ -234,6 +269,11 @@ final class _ManifestMedia {
     required this.sizeBytes,
     required this.deletedAt,
     this.encryptedDek,
+    this.encryptionKeyId,
+    this.privatePath,
+    this.thumbnailPath,
+    this.playCount,
+    this.lastPlayedAt,
   });
 
   final String? id;
@@ -264,6 +304,17 @@ final class _ManifestMedia {
   /// Null for plaintext media and for older backups.
   final String? encryptedDek;
 
+  /// v6: id of the KEK that wrapped [encryptedDek]. Files encrypted with an
+  /// imported key keep pointing at it instead of the default key.
+  final String? encryptionKeyId;
+
+  /// v6: original on-device path, used to find the media file (which is not
+  /// part of a data-only backup) when importing.
+  final String? privatePath;
+  final String? thumbnailPath;
+  final int? playCount;
+  final DateTime? lastPlayedAt;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'file': fileName,
@@ -286,6 +337,11 @@ final class _ManifestMedia {
         'sizeBytes': sizeBytes,
         'deletedAt': deletedAt?.toIso8601String(),
         'encryptedDek': encryptedDek,
+        'encryptionKeyId': encryptionKeyId,
+        'privatePath': privatePath,
+        'thumbnailPath': thumbnailPath,
+        'playCount': playCount,
+        'lastPlayedAt': lastPlayedAt?.toIso8601String(),
       };
 }
 
@@ -379,6 +435,8 @@ final class _RestoreMediaPlan {
     required this.expectedLength,
     required this.expectedDigest,
     required this.skipExisting,
+    this.missingLocalFile = false,
+    this.localPath,
   });
 
   final _ManifestMedia media;
@@ -386,11 +444,21 @@ final class _RestoreMediaPlan {
   final String originalName;
   final String? originalPath;
   final String sourceFolder;
-  final File source;
+
+  /// Payload file inside a v1..v5 backup. Null for v6 data-only backups, which
+  /// use the media file already present in phone storage instead.
+  final File? source;
   final File? thumbnail;
   final int expectedLength;
   final String expectedDigest;
   final bool skipExisting;
+
+  /// v6: no media file was found in phone storage for this row. The metadata
+  /// is kept in the manifest but must not become an empty grid entry.
+  final bool missingLocalFile;
+
+  /// v6: absolute path of the media file found in phone storage.
+  final String? localPath;
 }
 
 final class _InstalledFile {

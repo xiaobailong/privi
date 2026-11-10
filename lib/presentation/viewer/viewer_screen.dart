@@ -231,10 +231,11 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
     }
     final encryptionService = ref.read(mediaEncryptionServiceProvider);
     final keyManager = ref.read(encryptionKeyManagerProvider);
-    final kek = keyManager.getKey();
+    final kek = await keyManager.keyForId(item.encryptionKeyId);
     if (kek == null) {
       AppLogger.e('ViewerScreen',
-          'Cannot decrypt ${item.id}: KEK not available (vault locked?)');
+          'Cannot decrypt ${item.id}: encryption key ${item.encryptionKeyId ?? "default"} '
+          'not available (vault locked or key missing)');
       return null;
     }
     try {

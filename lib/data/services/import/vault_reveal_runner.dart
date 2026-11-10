@@ -582,10 +582,11 @@ class VaultRevealRunner {
       return;
     }
 
-    final kek = keyManager.getKey();
+    final kek = await keyManager.keyForId(item.encryptionKeyId);
     if (kek == null) {
       throw StateError('Encrypted item ${item.id} cannot be revealed: vault '
-          'key not loaded (lock and unlock the vault, then retry)');
+          'key not loaded (lock and unlock the vault, then retry) or the '
+          'encryption key ${item.encryptionKeyId} is missing');
     }
 
     final dek = await encryptionService.decryptDek(

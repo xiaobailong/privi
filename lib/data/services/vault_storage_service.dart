@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/constants.dart';
 import '../../core/media_thumbnail_spec.dart';
 import 'hide_naming.dart';
+import 'vault_library_registry.dart';
 import '../../core/utils/app_logger.dart';
 
 /// Manages vault directories:
@@ -14,13 +15,20 @@ import '../../core/utils/app_logger.dart';
 ///
 /// See docs/03-architecture/storage-and-hiding.md (dense gallery directory hide).
 class VaultStorageService {
-  VaultStorageService({this.initializeSharedRoot = true});
+  VaultStorageService({
+    this.initializeSharedRoot = true,
+    this.registry,
+  });
 
   /// Whether this instance may touch Android's shared-storage hide root.
   ///
   /// iOS uses the same app-private vault metadata path but must never probe or
   /// create `/storage/emulated/0/.privateheart_vault`.
   final bool initializeSharedRoot;
+
+  /// Extra vault libraries registered by the user. Optional so a caller that
+  /// only needs app-private metadata is unaffected.
+  final VaultLibraryRegistry? registry;
 
   Directory? _vault;
   Directory? _thumbs;
@@ -64,19 +72,171 @@ class VaultStorageService {
 
   /// Directories that may hold vault media files (recursive scan targets).
   ///
-  /// Returns both the app-private vault and the shared `.privateheart_vault`
-  /// root so key-package import can re-associate rows with files that survived a
-  /// reinstall (their metadata DB did not).
+  /// The app-private metadata root plus **every** library root: the built-in
+  /// `.privateheart_vault` and each user-added directory. Key-package and
+  /// archive restores use this to re-associate rows with files that survived a
+  /// reinstall or a manual copy from another phone.
   Future<List<Directory>> mediaRoots() async {
     final roots = <Directory>[await ensureVault()];
+    roots.addAll(await libraryRoots());
+    return roots;
+  }
+
+  /// All library roots that currently exist on this device.
+  ///
+  /// A registered path that no longer exists (e.g. it was copied from an
+  /// archive made on another phone) is skipped, never created implicitly.
+  Future<List<Directory>> libraryRoots() async {
+    final roots = <Directory>[];
     if (initializeSharedRoot) {
       try {
         roots.add(await ensureHiddenRoot());
       } catch (e) {
-        AppLogger.w('VaultStorageService', 'mediaRoots: ensureHiddenRoot: $e');
+        AppLogger.w('VaultStorageService', 'libraryRoots: ensureHiddenRoot: $e');
       }
     }
+    for (final path in registry?.rootPaths ?? const <String>[]) {
+      try {
+        final dir = Directory(path);
+        if (await dir.exists()) roots.add(dir);
+      } catch (e) {
+        AppLogger.w('VaultStorageService', 'libraryRoots: $path: $e');
+      }
+    }
+    // Keep HideNaming's vault-path tests in sync with the effective roots.
+    HideNaming.extraVaultRoots = {
+      for (final entry in registry?.userLibraries ?? const <VaultLibraryEntry>[])
+        entry.path,
+    };
     return roots;
+  }
+
+  /// Root that receives newly hidden media. Defaults to the built-in root;
+  /// falls back to it if the selected library disappeared from the device.
+  Future<Directory> activeLibraryRoot() async {
+    if (!initializeSharedRoot) return ensureVault();
+    final id = registry?.activeId ?? VaultLibraryRegistry.builtInId;
+    final path = registry?.pathFor(id);
+    if (path != null) {
+      final dir = Directory(path);
+      if (await dir.exists()) {
+        await _ensureNomedia(dir);
+        return dir;
+      }
+      AppLogger.w('VaultStorageService',
+          'active library $id is missing ($path); using built-in root');
+    }
+    return ensureHiddenRoot();
+  }
+
+  /// Validates a user-picked directory before registering it as a library.
+  ///
+  /// Rejects missing/unreadable paths, volume roots, the app-private metadata
+  /// vault, and anything nested in (or containing) an existing library: nested
+  /// roots would make every scan index the same file twice.
+  Future<VaultLibraryPathCheck> validateLibraryPath(String rawPath) async {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty) {
+      return const VaultLibraryPathCheck(VaultLibraryPathIssue.empty);
+    }
+    final normalized = _norm(trimmed);
+    if (_isVolumeRoot(normalized) || _isPublicMediaRoot(normalized)) {
+      return const VaultLibraryPathCheck(VaultLibraryPathIssue.reserved);
+    }
+    if (await FileSystemEntity.type(normalized, followLinks: false) ==
+        FileSystemEntityType.notFound) {
+      return const VaultLibraryPathCheck(VaultLibraryPathIssue.missing);
+    }
+    if (await FileSystemEntity.type(normalized, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      return const VaultLibraryPathCheck(VaultLibraryPathIssue.notDirectory);
+    }
+    try {
+      await Directory(normalized)
+          .list(followLinks: false)
+          .first
+          .timeout(const Duration(seconds: 3));
+    } on StateError {
+      // An empty directory is a perfectly valid (new) library.
+    } catch (_) {
+      return const VaultLibraryPathCheck(VaultLibraryPathIssue.unreadable);
+    }
+
+    final existing = <String>[_norm((await ensureVault()).path)];
+    if (initializeSharedRoot) {
+      try {
+        existing.add(_norm((await ensureHiddenRoot()).path));
+      } catch (_) {}
+    }
+    for (final entry in registry?.userLibraries ?? const <VaultLibraryEntry>[]) {
+      existing.add(_norm(entry.path));
+    }
+    for (final root in existing) {
+      if (p.equals(root, normalized) || p.equals(root, '$normalized/')) {
+        return const VaultLibraryPathCheck(VaultLibraryPathIssue.duplicate);
+      }
+      if (p.isWithin(root, normalized) || p.isWithin(normalized, root)) {
+        return const VaultLibraryPathCheck(VaultLibraryPathIssue.nested);
+      }
+    }
+    return VaultLibraryPathCheck(
+      VaultLibraryPathIssue.ok,
+      normalizedPath: normalized,
+    );
+  }
+
+  /// Marks a newly registered directory with `.nomedia` so the system gallery
+  /// ignores it. Call this once when a library is added.
+  Future<void> prepareLibraryDirectory(String path) =>
+      _ensureNomedia(Directory(path));
+
+  /// Writes `.nomedia` so the system gallery ignores this library.
+  Future<void> _ensureNomedia(Directory dir) async {
+    try {
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final marker = File(p.join(dir.path, VaultPaths.nomedia));
+      if (!await marker.exists()) await marker.create();
+    } catch (e) {
+      AppLogger.w('VaultStorageService', 'nomedia ${dir.path}: $e');
+    }
+  }
+
+  static String _norm(String path) =>
+      p.normalize(path.trim().replaceAll('\\', '/'));
+
+  static bool _isVolumeRoot(String path) {
+    final clean = path.replaceAll(RegExp(r'/+$'), '');
+    const reserved = {
+      '/',
+      '/storage',
+      '/storage/emulated',
+      '/storage/emulated/0',
+      '/sdcard',
+      '/mnt/sdcard',
+    };
+    if (reserved.contains(clean) || clean.isEmpty) return true;
+    final segments = p
+        .split(clean)
+        .where((segment) => segment.isNotEmpty && segment != '/')
+        .toList();
+    return segments.length < 2;
+  }
+
+  /// These are scanned for *legacy marker* files, not vault roots. Registering
+  /// one wholesale would import every unrelated photo in the user's gallery as
+  /// a vault item. Sub-folders of them are fine.
+  static bool _isPublicMediaRoot(String path) {
+    const base = '/storage/emulated/0';
+    const publicRoots = {
+      '$base/DCIM',
+      '$base/DCIM/Camera',
+      '$base/Pictures',
+      '$base/Download',
+      '$base/Downloads',
+      '$base/Movies',
+      '$base/Music',
+    };
+    return publicRoots.contains(path.replaceAll(RegExp(r'/+$'), ''));
   }
 
   Future<Directory> get shareStagingDir async {
@@ -145,14 +305,15 @@ class VaultStorageService {
     required String? sourceFolder,
     bool encryptFileName = false,
   }) async {
-    final root = await ensureHiddenRoot();
+    // New hides go to the currently selected library, so several vaults can
+    // be used in parallel without ever moving the built-in one.
+    final root = await activeLibraryRoot();
     final folder = HideNaming.sanitizeFolder(sourceFolder);
     final dir = Directory(p.join(root.path, folder));
     if (!await dir.exists()) {
       await dir.create(recursive: true);
-      final nm = File(p.join(dir.path, VaultPaths.nomedia));
-      if (!await nm.exists()) await nm.create();
     }
+    await _ensureNomedia(dir);
     if (encryptFileName) {
       // Retry on the (astronomically unlikely) name clash: renaming onto an
       // existing file would silently replace it.

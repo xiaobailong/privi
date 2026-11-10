@@ -200,7 +200,11 @@ class BatchEncryptionService {
     final dek = _encryption.generateDek();
     final nonce = _encryption.generateNonce();
     final encryptedDek = await _encryption.encryptDek(dek: dek, kek: kek);
-    await _repository.updateEncryptedDek(item.id, encryptedDek);
+    await _repository.updateEncryptedDek(
+      item.id,
+      encryptedDek,
+      encryptionKeyId: EncryptionKeyManager.keyIdFor(kek),
+    );
 
     try {
       await _encryption.encryptFileWithDek(

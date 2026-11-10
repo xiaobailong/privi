@@ -15,6 +15,33 @@ abstract final class HideNaming {
 
   static final RegExp _encryptedNamePattern = RegExp(r'^[0-9a-f]{32}$');
 
+  /// Roots of user-added vault libraries, kept in sync by
+  /// `VaultLibraryRegistry`. `isHiddenVaultPath` used to recognise only the
+  /// hard-coded `.privateheart_vault` name; migrated directories need to count
+  /// as vault paths too, otherwise unhide would dump everything into Download
+  /// and orphan scans would ignore them.
+  static Set<String> extraVaultRoots = <String>{};
+
+  static bool _isBuiltInVaultPath(String norm) =>
+      norm.contains('/${VaultPaths.hiddenRootName}/') ||
+      norm.endsWith('/${VaultPaths.hiddenRootName}');
+
+  static String _normalizedRoot(String root) {
+    final norm = root.trim().replaceAll('\\', '/');
+    return norm.endsWith('/') && norm.length > 1
+        ? norm.substring(0, norm.length - 1)
+        : norm;
+  }
+
+  static bool _isWithinExtraRoot(String norm) {
+    for (final root in extraVaultRoots) {
+      final r = _normalizedRoot(root);
+      if (r.isEmpty) continue;
+      if (norm == r || norm.startsWith('$r/')) return true;
+    }
+    return false;
+  }
+
   /// Random, extension-less name for filename-encrypted media (`ADR-042`).
   ///
   /// 32 lowercase hex chars: **no dot**, so programs that scan by extension
@@ -42,8 +69,7 @@ abstract final class HideNaming {
 
   static bool isHiddenVaultPath(String path) {
     final norm = path.replaceAll('\\', '/');
-    return norm.contains('/${VaultPaths.hiddenRootName}/') ||
-        norm.endsWith('/${VaultPaths.hiddenRootName}');
+    return _isBuiltInVaultPath(norm) || _isWithinExtraRoot(norm);
   }
 
   static bool isHiddenPath(String path) =>
@@ -106,14 +132,24 @@ abstract final class HideNaming {
   /// Default public folder when mirror is missing / unknown / Imported.
   static const String defaultRestoreDir = '$publicStorageRoot/Download';
 
-  /// Mirror folder segment under `.privateheart_vault/<Folder>/…`, or null.
+  /// Mirror folder segment under a vault root (`<root>/<Folder>/…`), or null.
   static String? vaultMirrorFolder(String privatePath) {
     final norm = privatePath.replaceAll('\\', '/');
     const marker = '/${VaultPaths.hiddenRootName}/';
     final idx = norm.indexOf(marker);
-    if (idx < 0) return null;
-    final rest = norm.substring(idx + marker.length);
-    if (rest.isEmpty) return null;
+    String? rest;
+    if (idx >= 0) {
+      rest = norm.substring(idx + marker.length);
+    } else {
+      for (final root in extraVaultRoots) {
+        final r = _normalizedRoot(root);
+        if (r.isNotEmpty && norm.startsWith('$r/')) {
+          rest = norm.substring(r.length + 1);
+          break;
+        }
+      }
+    }
+    if (rest == null || rest.isEmpty) return null;
     final folder = rest.split('/').firstWhere(
           (s) => s.isNotEmpty,
           orElse: () => '',
@@ -162,11 +198,14 @@ abstract final class HideNaming {
         ? p.basename(originalName.trim())
         : p.basename(privatePath);
 
-    if (isHiddenVaultPath(privatePath)) {
+    final norm = privatePath.replaceAll('\\', '/');
+    if (_isBuiltInVaultPath(norm)) {
       final folder = vaultMirrorFolder(privatePath);
       return p.join(publicRestoreDirForVaultFolder(folder), fileName);
     }
 
+    // Extra (user-added) libraries have no meaningful public mirror folder;
+    // restore to Download rather than inventing `/storage/emulated/0/<lib>`.
     return p.join(defaultRestoreDir, fileName);
   }
 }

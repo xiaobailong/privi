@@ -70,6 +70,7 @@ class MediaRepository {
       playCount: Value(item.playCount),
       lastPlayedAt: Value(item.lastPlayedAt),
       encryptedDek: Value(item.encryptedDek),
+      encryptionKeyId: Value(item.encryptionKeyId),
     );
   }
 
@@ -102,8 +103,34 @@ class MediaRepository {
   }) =>
       _db.updateMediaDates(id, dateTaken: dateTaken, dateAdded: dateAdded);
 
-  Future<void> updateEncryptedDek(String id, String? encryptedDek) =>
-      _db.updateMediaEncryptedDek(id, encryptedDek);
+  /// Writes the wrapped DEK and the id of the KEK that wrapped it together.
+  ///
+  /// Encryption callers must pass [encryptionKeyId] (the id of the KEK they
+  /// used); clearing a DEK (`encryptedDek == null`) also clears the key id.
+  Future<void> updateEncryptedDek(
+    String id,
+    String? encryptedDek, {
+    String? encryptionKeyId,
+  }) =>
+      _db.updateMediaEncryption(
+        id,
+        encryptedDek: encryptedDek,
+        encryptionKeyId: encryptedDek == null || encryptedDek.isEmpty
+            ? null
+            : encryptionKeyId,
+      );
+
+  /// Re-points rows at a key after all their DEKs were re-wrapped with it.
+  Future<int> setDefaultEncryptionKeyId(String keyId) =>
+      _db.setDefaultEncryptionKeyId(keyId);
+
+  /// Number of encrypted rows that have no key id yet (one-time backfill).
+  Future<int> countMissingEncryptionKeyId() =>
+      _db.countMediaMissingEncryptionKeyId();
+
+  /// Stamps blank key links with this phone's default key id.
+  Future<int> backfillEncryptionKeyId(String keyId) =>
+      _db.backfillEncryptionKeyId(keyId);
 
   /// Points [id] at its renamed ciphertext file (filename encryption, ADR-042).
   Future<void> updatePrivatePath(String id, String privatePath) =>
@@ -132,6 +159,14 @@ class MediaRepository {
   /// Active items whose encryptedDek is NOT null (already encrypted).
   Future<List<MediaItem>> listEncrypted() async {
     final rows = await _db.listEncryptedActiveMediaRows();
+    return rows.map(_map).toList(growable: false);
+  }
+
+  /// Every row, active and soft-deleted. Vault library removal needs the
+  /// recycle bin too, otherwise those rows would keep pointing at a root that
+  /// is no longer a library.
+  Future<List<MediaItem>> listAll() async {
+    final rows = await _db.listAllMediaRows();
     return rows.map(_map).toList(growable: false);
   }
 
@@ -244,6 +279,7 @@ class MediaRepository {
         playCount: r.playCount,
         lastPlayedAt: r.lastPlayedAt,
         encryptedDek: r.encryptedDek,
+        encryptionKeyId: r.encryptionKeyId,
       );
 
   List<MediaItem> _mapList(List<MediaItemRow> rows) =>

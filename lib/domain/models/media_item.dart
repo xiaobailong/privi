@@ -23,6 +23,7 @@ class MediaItem {
     this.playCount = 0,
     this.lastPlayedAt,
     this.encryptedDek,
+    this.encryptionKeyId,
   });
 
   final String id;
@@ -63,6 +64,12 @@ class MediaItem {
   /// AES-256-GCM encrypted DEK (base64). Null for legacy plaintext rows.
   final String? encryptedDek;
 
+  /// Id of the KEK that wrapped [encryptedDek]. Null on legacy rows, meaning
+  /// "decrypt with the current default key" — see `EncryptionKeyManager`.
+  /// Imported keys are registered under this id instead of replacing the
+  /// default key, so files from different vaults never compete for one KEK.
+  final String? encryptionKeyId;
+
   bool get isDeleted => deletedAt != null;
   bool get isFavorite => rating >= 1;
 
@@ -98,6 +105,7 @@ class MediaItem {
     int? playCount,
     DateTime? lastPlayedAt,
     String? encryptedDek,
+    String? encryptionKeyId,
     bool clearDeletedAt = false,
   }) {
     return MediaItem(
@@ -122,6 +130,7 @@ class MediaItem {
       playCount: playCount ?? this.playCount,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       encryptedDek: encryptedDek ?? this.encryptedDek,
+      encryptionKeyId: encryptionKeyId ?? this.encryptionKeyId,
     );
   }
 }

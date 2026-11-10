@@ -87,6 +87,16 @@ Future<void> main() async {
 
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(() async {
+      // One-time initialization for builds that predate the file↔key relation:
+      // stamp already-encrypted rows with this phone's key id. A zero-row
+      // COUNT short-circuits, so this writes nothing after the first run.
+      try {
+        final backfill =
+            await container.read(encryptionKeyLinkBackfillProvider).run();
+        AppLogger.i('Main', 'key-link backfill: $backfill');
+      } catch (e, stackTrace) {
+        AppLogger.e('Main', 'key-link backfill failed: $e\n$stackTrace');
+      }
       try {
         final summary = await container
             .read(maintenanceServiceProvider)

@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.memory() : super(NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -54,6 +54,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 9) {
             await _ensureEncryptedDekColumn();
           }
+          if (from < 10) {
+            await _ensureEncryptionKeyIdColumn();
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -66,6 +69,7 @@ class AppDatabase extends _$AppDatabase {
           final repairedSourceMetadata = await _ensureSourceMetadataSchema();
           final repairedPlayCount = await _ensurePlayCountSchema();
           final repairedEncryptedDek = await _ensureEncryptedDekColumn();
+          final repairedEncryptionKeyId = await _ensureEncryptionKeyIdColumn();
           // System albums were seeded with mangled placeholder names; repair
           // them on every open (no schema bump required).
           final repairedSystemNames = await _ensureSystemAlbumNames();
@@ -75,13 +79,15 @@ class AppDatabase extends _$AppDatabase {
               repairedSourceMetadata ||
               repairedPlayCount ||
               repairedEncryptedDek ||
+              repairedEncryptionKeyId ||
               repairedSystemNames) {
             AppLogger.d(
               'Database',
-              'Database v9 safety repair applied: '
+              'Database v10 safety repair applied: '
                   'original_path=$repairedOriginalPath, pinned_at=$repairedPinnedAt, '
                   'organizer=$repairedOrganizer, source_metadata=$repairedSourceMetadata, '
                   'play_count=$repairedPlayCount, encrypted_dek=$repairedEncryptedDek, '
+                  'encryption_key_id=$repairedEncryptionKeyId, '
                   'system_album_names=$repairedSystemNames',
             );
           }
@@ -193,6 +199,17 @@ class AppDatabase extends _$AppDatabase {
     if (names.contains('encrypted_dek')) return false;
     await customStatement(
       'ALTER TABLE media_items ADD COLUMN encrypted_dek TEXT NULL',
+    );
+    return true;
+  }
+
+  /// v10: which KEK wrapped this row's DEK. Null = legacy row, decrypt with
+  /// the current default key.
+  Future<bool> _ensureEncryptionKeyIdColumn() async {
+    final names = await _columnNames('media_items');
+    if (names.contains('encryption_key_id')) return false;
+    await customStatement(
+      'ALTER TABLE media_items ADD COLUMN encryption_key_id TEXT NULL',
     );
     return true;
   }
@@ -435,6 +452,63 @@ class AppDatabase extends _$AppDatabase {
   Future<void> updateMediaEncryptedDek(String id, String? encryptedDek) {
     return (update(mediaItems)..where((t) => t.id.equals(id))).write(
       MediaItemsCompanion(encryptedDek: Value(encryptedDek)),
+    );
+  }
+
+  /// Records the wrapped DEK **together with** the key that wrapped it.
+  ///
+  /// Keeping both in one write is important: a row must never point at a key
+  /// id while its DEK belongs to a different key (PIT-044 ordering rule).
+  Future<void> updateMediaEncryption(
+    String id, {
+    required String? encryptedDek,
+    required String? encryptionKeyId,
+  }) {
+    return (update(mediaItems)..where((t) => t.id.equals(id))).write(
+      MediaItemsCompanion(
+        encryptedDek: Value(encryptedDek),
+        encryptionKeyId: Value(encryptionKeyId),
+      ),
+    );
+  }
+
+  /// Bulk re-point rows at the default key after a DEK rotation.
+  Future<int> setDefaultEncryptionKeyId(String keyId) {
+    return customUpdate(
+      'UPDATE media_items SET encryption_key_id = ? '
+      'WHERE encrypted_dek IS NOT NULL',
+      variables: [Variable<String>(keyId)],
+      updates: {mediaItems},
+    );
+  }
+
+  /// Encrypted rows whose key link is still blank (NULL or empty).
+  ///
+  /// These are rows written by builds before `encryption_key_id` existed, or
+  /// rows restored from a v1..v5 backup. A cheap COUNT is the whole
+  /// idempotence check: zero means "this phone has already been backfilled",
+  /// so no write is attempted on later launches.
+  Future<int> countMediaMissingEncryptionKeyId() async {
+    final rows = await customSelect(
+      "SELECT COUNT(*) AS c FROM media_items "
+      "WHERE encrypted_dek IS NOT NULL AND encrypted_dek <> '' "
+      "AND (encryption_key_id IS NULL OR TRIM(encryption_key_id) = '')",
+    ).get();
+    if (rows.isEmpty) return 0;
+    return rows.first.read<int>('c');
+  }
+
+  /// Stamps this phone's default key id onto **only** the blank links.
+  ///
+  /// Rows that already name a key (e.g. files decrypted by an imported key)
+  /// are never touched — overwriting them would make their DEK unopenable.
+  Future<int> backfillEncryptionKeyId(String keyId) {
+    return customUpdate(
+      "UPDATE media_items SET encryption_key_id = ? "
+      "WHERE encrypted_dek IS NOT NULL AND encrypted_dek <> '' "
+      "AND (encryption_key_id IS NULL OR TRIM(encryption_key_id) = '')",
+      variables: [Variable<String>(keyId)],
+      updates: {mediaItems},
     );
   }
 

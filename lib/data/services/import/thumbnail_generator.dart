@@ -263,10 +263,11 @@ class ThumbnailGenerator {
     final encryptedDek = current?.encryptedDek;
     if (encryptedDek == null || encryptedDek.isEmpty) return job.privatePath;
 
-    final kek = keyManager.getKey();
+    final kek = await keyManager.keyForId(current?.encryptionKeyId);
     if (kek == null) {
       AppLogger.d('ThumbnailGenerator',
-          'thumb ${job.id}: encrypted but vault key not loaded — skipped');
+          'thumb ${job.id}: encrypted but its encryption key is unavailable '
+          '— skipped');
       return null;
     }
     try {

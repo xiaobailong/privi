@@ -607,6 +607,7 @@ class LockController extends Notifier<VaultLockState> {
       Uint8List oldKek, Uint8List newKek, String caller) async {
     final encryptionService = ref.read(mediaEncryptionServiceProvider);
     final repo = ref.read(mediaRepositoryProvider);
+    final keyManager = ref.read(encryptionKeyManagerProvider);
     try {
       final encryptedItems = await repo.listEncrypted();
       int okCount = 0;
@@ -614,9 +615,17 @@ class LockController extends Notifier<VaultLockState> {
       for (final item in encryptedItems) {
         if (item.encryptedDek == null || item.encryptedDek!.isEmpty) continue;
         try {
+          // A row may have been encrypted with a key imported from another
+          // vault; unwrap with *its* key, not just this install's default one.
+          final rowKek =
+              await keyManager.keyForId(item.encryptionKeyId) ?? oldKek;
           Uint8List? dek = await encryptionService.decryptDek(
             encryptedDekBase64: item.encryptedDek!,
             kek: newKek,
+          );
+          dek ??= await encryptionService.decryptDek(
+            encryptedDekBase64: item.encryptedDek!,
+            kek: rowKek,
           );
           dek ??= await encryptionService.decryptDek(
             encryptedDekBase64: item.encryptedDek!,
@@ -634,7 +643,11 @@ class LockController extends Notifier<VaultLockState> {
             dek: dek,
             kek: newKek,
           );
-          await repo.updateEncryptedDek(item.id, newEncryptedDek);
+          await repo.updateEncryptedDek(
+            item.id,
+            newEncryptedDek,
+            encryptionKeyId: EncryptionKeyManager.keyIdFor(newKek),
+          );
           okCount++;
         } catch (_) {
           lostCount++;

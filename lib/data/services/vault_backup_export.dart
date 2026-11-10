@@ -1,21 +1,30 @@
 part of 'vault_backup_service.dart';
 
+/// Writes a v6 **data-only** backup: everything the app stores (media rows
+/// including the recycle bin, albums, groups, memberships, the full key ring
+/// and every SharedPreferences entry) **except** the media files themselves.
+///
+/// Media files already live in phone storage and are copied separately; keeping
+/// them out of the backup makes an export a single small JSON file.  Restore
+/// matches rows back to the files by path / basename (see
+/// `_VaultBackupRestorePreflight`).
 final class _VaultBackupExporter {
   _VaultBackupExporter({
     required this.db,
     required this.uuid,
     required this.platformName,
     this.security,
+    this.keyManager,
+    this.preferences,
   });
 
   final AppDatabase db;
   final Uuid uuid;
   final String platformName;
-
-  /// Supplies the KEK salt for the manifest so a restored vault can re-derive
-  /// the same key (ISSUE-029).  Null in tests without a security service.
   final SecurityService? security;
-  final _VaultBackupFileOps files = const _VaultBackupFileOps();
+  final EncryptionKeyManager? keyManager;
+  final SharedPreferences? preferences;
+
   final _VaultBackupManifestCodec manifests = const _VaultBackupManifestCodec();
 
   Future<VaultBackupResult> run(
@@ -25,11 +34,10 @@ final class _VaultBackupExporter {
   }) async {
     final activeSession = session ?? VaultBackupSession();
     Directory? staging;
-    Directory? createdMediaDirectory;
     final committed = <File>[];
     var failureStage = VaultBackupStage.preparing;
     try {
-      final encryptionSalt = await security?.readEncryptionSalt();
+      failureStage = VaultBackupStage.preparing;
       final snapshot = await _loadSnapshot();
       final rows = snapshot.media;
       _emitBackupProgress(
@@ -38,78 +46,61 @@ final class _VaultBackupExporter {
         0,
         rows.length,
       );
+      _checkBackupCancelled(activeSession);
 
-      failureStage = VaultBackupStage.checkingSource;
-      final entries = await _preflightSources(
-        rows,
-        activeSession,
+      final entries = _entries(rows);
+      final encryptionKeys = await _encryptionKeys();
+      final appSettings = _appSettings();
+      final encryptionSalt = await security?.readEncryptionSalt();
+      final defaultKeyId = keyManager?.currentKeyId();
+      _emitBackupProgress(
         onProgress,
+        VaultBackupStage.preparing,
+        rows.length,
+        rows.length,
       );
       _checkBackupCancelled(activeSession);
 
       failureStage = VaultBackupStage.writingManifest;
-      final destination = await _prepareDestination(
-        destinationPath,
-        entries,
-      );
-      final mediaDirectory = Directory(p.join(destination.path, 'media'));
+      final destination = await _prepareDestination(destinationPath);
       staging = Directory(
         p.join(destination.path, '.privi-export-${uuid.v4()}'),
       );
-      final stagingMedia = Directory(p.join(staging.path, 'media'));
-      await stagingMedia.create(recursive: true);
+      await staging.create(recursive: true);
 
-      failureStage = VaultBackupStage.copying;
-      final stagedEntries = await _stagePayloads(
-        entries,
-        stagingMedia,
-        activeSession,
-        onProgress,
-      );
-      _checkBackupCancelled(activeSession);
-      failureStage = VaultBackupStage.writingManifest;
-      _emitBackupProgress(
-        onProgress,
-        VaultBackupStage.writingManifest,
-        rows.length,
-        rows.length,
-      );
       final manifest = manifests.fromExport(
-        entries: stagedEntries,
+        entries: entries,
         albums: snapshot.albums,
         groups: snapshot.groups,
         memberships: snapshot.memberships,
         platformName: platformName,
         verifiedAt: DateTime.now().toUtc(),
         encryptionSalt: encryptionSalt,
+        encryptionKeys: encryptionKeys,
+        appSettings: appSettings,
+        defaultKeyId: defaultKeyId,
       );
       final stagedManifest = File(
         p.join(staging.path, VaultBackupService.manifestName),
       );
       await manifests.write(stagedManifest, manifest);
+      // Round-trip the manifest before committing it: a truncated or invalid
+      // snapshot must not look like a successful backup.
       await manifests.read(staging.path);
-
-      if (!await mediaDirectory.exists()) {
-        await mediaDirectory.create();
-        createdMediaDirectory = mediaDirectory;
-      }
-      await _commitNewFiles(
-        stagingMedia: stagingMedia,
-        stagedManifest: stagedManifest,
-        destination: destination,
-        mediaDirectory: mediaDirectory,
-        entries: stagedEntries,
-        committed: committed,
+      await _commitManifest(
+        stagedManifest,
+        File(p.join(destination.path, VaultBackupService.manifestName)),
+        committed,
       );
+
       failureStage = VaultBackupStage.checkingBackup;
-      await _verifyCommittedExport(
+      await _verifyCommitted(
         destination: destination,
-        mediaDirectory: mediaDirectory,
-        entries: stagedEntries,
+        expected: manifest,
         session: activeSession,
         onProgress: onProgress,
       );
-      await files.removeDirectory(staging);
+      await staging.delete(recursive: true);
       staging = null;
 
       _emitBackupProgress(
@@ -119,17 +110,13 @@ final class _VaultBackupExporter {
         rows.length,
       );
       return VaultBackupResult(
-        itemCount: stagedEntries.length,
-        totalBytes: manifest.declaredTotalBytes!,
+        itemCount: entries.length,
+        totalBytes: 0,
         checksumsVerified: true,
         status: VaultBackupResultStatus.completed,
       );
     } on _VaultBackupCancelled {
-      await _rollback(
-        committed,
-        staging: staging,
-        createdMediaDirectory: createdMediaDirectory,
-      );
+      await _rollback(committed, staging: staging);
       return const VaultBackupResult(
         itemCount: 0,
         totalBytes: 0,
@@ -137,20 +124,12 @@ final class _VaultBackupExporter {
         status: VaultBackupResultStatus.cancelled,
       );
     } on VaultBackupException {
-      await _rollback(
-        committed,
-        staging: staging,
-        createdMediaDirectory: createdMediaDirectory,
-      );
+      await _rollback(committed, staging: staging);
       rethrow;
     } catch (error, stackTrace) {
       AppLogger.e(
           'VaultBackupExport', 'vault export failed: $error\n$stackTrace');
-      await _rollback(
-        committed,
-        staging: staging,
-        createdMediaDirectory: createdMediaDirectory,
-      );
+      await _rollback(committed, staging: staging);
       throw VaultBackupException(
         VaultBackupErrorCode.destinationWriteFailed,
         stage: failureStage,
@@ -172,27 +151,11 @@ final class _VaultBackupExporter {
     });
   }
 
-  Future<List<_ExportEntry>> _preflightSources(
-    List<MediaItemRow> rows,
-    VaultBackupSession session,
-    VaultBackupProgressCallback? onProgress,
-  ) async {
+  List<_ExportEntry> _entries(List<MediaItemRow> rows) {
     final entries = <_ExportEntry>[];
     final names = <String>{};
-    for (var index = 0; index < rows.length; index++) {
-      _checkBackupCancelled(session);
-      final row = rows[index];
-      _emitBackupProgress(
-        onProgress,
-        VaultBackupStage.checkingSource,
-        index,
-        rows.length,
-        row.originalName,
-      );
+    for (final row in rows) {
       final id = _validatedBackupId(row.id, 'media id');
-      // Filename-encrypted media has no extension (ADR-042): fall back to the
-      // stored original name so the archive entry stays recognisable.  Restore
-      // uses the manifest, never this name.
       final extension = p.extension(row.privatePath);
       final fileName = extension.isNotEmpty
           ? '$id$extension'
@@ -202,38 +165,52 @@ final class _VaultBackupExporter {
         throw VaultBackupException(
           VaultBackupErrorCode.destinationConflict,
           fileName: fileName,
-          stage: VaultBackupStage.checkingSource,
+          stage: VaultBackupStage.preparing,
         );
       }
-      final source = File(row.privatePath);
-      final sourceHash = await files.hashSource(
-        source,
-        row.originalName,
-        expectedDigest: row.contentDigest,
-      );
-      entries.add(
-        _ExportEntry(
-          row: row,
-          source: source,
-          fileName: fileName,
-          byteLength: sourceHash.length,
-          sha256: sourceHash.digest,
-        ),
-      );
-      _emitBackupProgress(
-        onProgress,
-        VaultBackupStage.checkingSource,
-        index + 1,
-        rows.length,
-      );
+      entries.add(_ExportEntry(row: row, fileName: fileName));
     }
     return List.unmodifiable(entries);
   }
 
-  Future<Directory> _prepareDestination(
-    String destinationPath,
-    List<_ExportEntry> entries,
-  ) async {
+  Future<List<_ManifestKey>> _encryptionKeys() async {
+    final records = await keyManager?.listKeys() ?? const [];
+    final salt = await security?.readEncryptionSalt();
+    return List.unmodifiable(
+      records.map(
+        (record) => _ManifestKey(
+          id: record.id,
+          kekBase64: base64Encode(record.kek),
+          fingerprint: record.fingerprint,
+          createdAt: record.createdAt,
+          label: record.label,
+          salt: record.isDefault ? (record.salt ?? salt) : record.salt,
+          isDefault: record.isDefault,
+        ),
+      ),
+    );
+  }
+
+  Map<String, Object?> _appSettings() {
+    final prefs = preferences;
+    if (prefs == null) return const <String, Object?>{};
+    final snapshot = <String, Object?>{};
+    for (final key in prefs.getKeys()) {
+      // Flutter's own internal counters are not app data.
+      if (key.startsWith('flutter.')) continue;
+      final value = prefs.get(key);
+      if (value is bool ||
+          value is int ||
+          value is double ||
+          value is String ||
+          value is List<String>) {
+        snapshot[key] = value;
+      }
+    }
+    return snapshot;
+  }
+
+  Future<Directory> _prepareDestination(String destinationPath) async {
     final destination = Directory(destinationPath);
     final destinationType = await FileSystemEntity.type(
       destination.path,
@@ -254,37 +231,9 @@ final class _VaultBackupExporter {
         stage: VaultBackupStage.writingManifest,
       );
     }
-
     await _requireMissing(
       p.join(destination.path, VaultBackupService.manifestName),
     );
-    final mediaDirectory = Directory(p.join(destination.path, 'media'));
-    final mediaType = await FileSystemEntity.type(
-      mediaDirectory.path,
-      followLinks: false,
-    );
-    if (mediaType == FileSystemEntityType.link) {
-      throw const VaultBackupException(
-        VaultBackupErrorCode.unsafePath,
-        fileName: 'media',
-        stage: VaultBackupStage.writingManifest,
-      );
-    }
-    if (mediaType != FileSystemEntityType.notFound &&
-        mediaType != FileSystemEntityType.directory) {
-      throw const VaultBackupException(
-        VaultBackupErrorCode.destinationConflict,
-        fileName: 'media',
-        stage: VaultBackupStage.writingManifest,
-      );
-    }
-    if (mediaType == FileSystemEntityType.directory) {
-      for (final entry in entries) {
-        await _requireMissing(p.join(mediaDirectory.path, entry.fileName));
-        final thumbnailName = '${entry.row.id}.thumb.png';
-        await _requireMissing(p.join(mediaDirectory.path, thumbnailName));
-      }
-    }
     return destination;
   }
 
@@ -299,103 +248,7 @@ final class _VaultBackupExporter {
     }
   }
 
-  Future<List<_ExportEntry>> _stagePayloads(
-    List<_ExportEntry> entries,
-    Directory stagingMedia,
-    VaultBackupSession session,
-    VaultBackupProgressCallback? onProgress,
-  ) async {
-    final staged = <_ExportEntry>[];
-    for (var index = 0; index < entries.length; index++) {
-      _checkBackupCancelled(session);
-      final entry = entries[index];
-      _emitBackupProgress(
-        onProgress,
-        VaultBackupStage.copying,
-        index,
-        entries.length,
-        entry.row.originalName,
-      );
-      await files.copyAndVerify(
-        source: entry.source,
-        target: File(p.join(stagingMedia.path, entry.fileName)),
-        expectedLength: entry.byteLength,
-        expectedDigest: entry.sha256,
-        fileName: entry.row.originalName,
-        mismatchCode: VaultBackupErrorCode.sourceChanged,
-        stage: VaultBackupStage.copying,
-      );
-      final thumbnailName = await _copyOptionalThumbnail(
-        entry.row,
-        stagingMedia,
-      );
-      staged.add(entry.withThumbnail(thumbnailName));
-      _emitBackupProgress(
-        onProgress,
-        VaultBackupStage.copying,
-        index + 1,
-        entries.length,
-      );
-    }
-    return List.unmodifiable(staged);
-  }
-
-  Future<String?> _copyOptionalThumbnail(
-    MediaItemRow row,
-    Directory stagingMedia,
-  ) async {
-    final rawPath = row.thumbnailPath;
-    if (rawPath == null || rawPath.trim().isEmpty) return null;
-    final source = File(rawPath);
-    if (!await source.exists()) return null;
-    final name = '${_validatedBackupId(row.id, 'media id')}.thumb.png';
-    final target = File(p.join(stagingMedia.path, name));
-    try {
-      await source.openRead().pipe(target.openWrite());
-      if (await target.length() == 0) {
-        await target.delete();
-        return null;
-      }
-      return name;
-    } catch (error, stackTrace) {
-      AppLogger.e('VaultBackupExport',
-          'optional backup thumbnail skipped: $error\n$stackTrace');
-      if (await target.exists()) await target.delete();
-      return null;
-    }
-  }
-
-  Future<void> _commitNewFiles({
-    required Directory stagingMedia,
-    required File stagedManifest,
-    required Directory destination,
-    required Directory mediaDirectory,
-    required List<_ExportEntry> entries,
-    required List<File> committed,
-  }) async {
-    for (final entry in entries) {
-      await _commitNewFile(
-        File(p.join(stagingMedia.path, entry.fileName)),
-        File(p.join(mediaDirectory.path, entry.fileName)),
-        committed,
-      );
-      final thumbnailName = entry.thumbnailName;
-      if (thumbnailName != null) {
-        await _commitNewFile(
-          File(p.join(stagingMedia.path, thumbnailName)),
-          File(p.join(mediaDirectory.path, thumbnailName)),
-          committed,
-        );
-      }
-    }
-    await _commitNewFile(
-      stagedManifest,
-      File(p.join(destination.path, VaultBackupService.manifestName)),
-      committed,
-    );
-  }
-
-  Future<void> _commitNewFile(
+  Future<void> _commitManifest(
     File staged,
     File target,
     List<File> committed,
@@ -405,70 +258,39 @@ final class _VaultBackupExporter {
     committed.add(target);
   }
 
-  Future<void> _verifyCommittedExport({
+  Future<void> _verifyCommitted({
     required Directory destination,
-    required Directory mediaDirectory,
-    required List<_ExportEntry> entries,
+    required _BackupManifest expected,
     required VaultBackupSession session,
     required VaultBackupProgressCallback? onProgress,
   }) async {
+    _checkBackupCancelled(session);
+    _emitBackupProgress(
+      onProgress,
+      VaultBackupStage.checkingBackup,
+      0,
+      expected.media.length,
+    );
     try {
-      final manifest = await manifests.read(destination.path);
-      manifests.validateV5(manifest);
-      if (manifest.media.length != entries.length) {
+      final actual = await manifests.read(destination.path);
+      if (actual.version != expected.version ||
+          actual.media.length != expected.media.length ||
+          actual.encryptionKeys.length != expected.encryptionKeys.length ||
+          actual.appSettings.length != expected.appSettings.length ||
+          actual.albums.length != expected.albums.length ||
+          actual.groups.length != expected.groups.length ||
+          actual.memberships.length != expected.memberships.length) {
         throw const VaultBackupException(
           VaultBackupErrorCode.destinationWriteFailed,
           stage: VaultBackupStage.checkingBackup,
         );
       }
-      final byFile = {for (final item in manifest.media) item.fileName: item};
-      if (byFile.length != entries.length) {
-        throw const VaultBackupException(
-          VaultBackupErrorCode.destinationWriteFailed,
-          stage: VaultBackupStage.checkingBackup,
-        );
-      }
-      for (var index = 0; index < entries.length; index++) {
-        _checkBackupCancelled(session);
-        final entry = entries[index];
-        _emitBackupProgress(
-          onProgress,
-          VaultBackupStage.checkingBackup,
-          index,
-          entries.length,
-          entry.row.originalName,
-        );
-        final manifestEntry = byFile[entry.fileName];
-        if (manifestEntry == null ||
-            manifestEntry.byteLength != entry.byteLength ||
-            manifestEntry.sha256 != entry.sha256) {
-          throw VaultBackupException(
-            VaultBackupErrorCode.destinationWriteFailed,
-            fileName: entry.row.originalName,
-            stage: VaultBackupStage.checkingBackup,
-          );
-        }
-        await files.hashPayload(
-          File(p.join(mediaDirectory.path, entry.fileName)),
-          entry.row.originalName,
-          expectedLength: entry.byteLength,
-          expectedDigest: entry.sha256,
-        );
-        _emitBackupProgress(
-          onProgress,
-          VaultBackupStage.checkingBackup,
-          index + 1,
-          entries.length,
-        );
-      }
-      _checkBackupCancelled(session);
     } on _VaultBackupCancelled {
       rethrow;
     } on VaultBackupException catch (error) {
       if (error.code == VaultBackupErrorCode.destinationWriteFailed) rethrow;
       throw VaultBackupException(
         VaultBackupErrorCode.destinationWriteFailed,
-        fileName: error.fileName,
         stage: VaultBackupStage.checkingBackup,
         cause: error,
       );
@@ -479,36 +301,29 @@ final class _VaultBackupExporter {
         cause: error,
       );
     }
+    _emitBackupProgress(
+      onProgress,
+      VaultBackupStage.checkingBackup,
+      expected.media.length,
+      expected.media.length,
+    );
   }
 
   Future<void> _rollback(
     List<File> committed, {
     required Directory? staging,
-    required Directory? createdMediaDirectory,
   }) async {
     Object? firstError;
-    try {
-      await files.removeFiles(committed.reversed);
-    } catch (error) {
-      firstError = error;
-    }
-    if (createdMediaDirectory != null) {
+    for (final file in committed.reversed) {
       try {
-        if (await createdMediaDirectory.exists() &&
-            await createdMediaDirectory.list().isEmpty) {
-          await createdMediaDirectory.delete();
-        }
-      } catch (error, stackTrace) {
-        AppLogger.e(
-          'VaultBackupExport',
-          'vault backup directory rollback failed: $error\n$stackTrace',
-        );
+        if (await file.exists()) await file.delete();
+      } catch (error) {
         firstError ??= error;
       }
     }
     if (staging != null) {
       try {
-        await files.removeDirectory(staging);
+        if (await staging.exists()) await staging.delete(recursive: true);
       } catch (error) {
         firstError ??= error;
       }

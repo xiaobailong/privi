@@ -14,7 +14,10 @@ final class _VaultBackupManifestParser {
         stage: VaultBackupStage.checkingBackup,
       );
     }
-    final strict = version >= VaultBackupService.manifestVersion;
+    if (version >= VaultBackupService.manifestVersion) {
+      return _parseDataOnly(raw, version);
+    }
+    final strict = version >= VaultBackupService.strictManifestVersion;
     return _BackupManifest(
       version: version,
       exportedAt: _manifestDate(
@@ -69,7 +72,7 @@ final class _VaultBackupManifestParser {
   }
 
   _ManifestMedia _parseMedia(Map<String, dynamic> raw, int version) {
-    final strict = version >= VaultBackupService.manifestVersion;
+    final strict = version >= VaultBackupService.strictManifestVersion;
     final fileName = _requiredManifestString(raw['file'], 'file');
     _validateBackupName(fileName);
     final id = strict
@@ -208,6 +211,180 @@ final class _VaultBackupManifestParser {
       encryptedDek:
           _optionalManifestString(raw['encryptedDek'], 'encryptedDek'),
     );
+  }
+
+  /// v6: data-only snapshot. Media entries no longer carry a payload, so the
+  /// checksum/length rules of v1..v5 do not apply; keys and settings are new
+  /// top-level sections.
+  _BackupManifest _parseDataOnly(Map<String, dynamic> raw, int version) {
+    final media = _manifestObjects(raw['media'], 'media', required: true)
+        .map(_parseV6Media)
+        .toList(growable: false);
+    return _BackupManifest(
+      version: version,
+      exportedAt: _manifestDate(
+        raw['exportedAt'],
+        'exportedAt',
+        strict: true,
+        required: true,
+      ),
+      verifiedAt: _manifestDate(
+        raw['verifiedAt'],
+        'verifiedAt',
+        strict: true,
+        required: true,
+      ),
+      declaredItemCount: _manifestInt(raw['itemCount'], 'itemCount'),
+      declaredTotalBytes: _manifestInt(raw['totalBytes'], 'totalBytes'),
+      media: List.unmodifiable(media),
+      albums: List.unmodifiable(
+        _manifestObjects(raw['albums'], 'albums', required: true)
+            .map((entry) => _organization.parseAlbum(entry, version)),
+      ),
+      groups: List.unmodifiable(
+        _manifestObjects(raw['albumGroups'], 'albumGroups', required: true)
+            .map((entry) => _organization.parseGroup(entry, version)),
+      ),
+      memberships: List.unmodifiable(
+        _manifestObjects(raw['membership'], 'membership', required: true)
+            .map((entry) => _organization.parseMembership(entry, version)),
+      ),
+      encryptionSalt:
+          _optionalManifestString(raw['encryptionSalt'], 'encryptionSalt'),
+      encryptionKeys: _parseV6Keys(raw['encryptionKeys']),
+      appSettings: _parseV6Settings(raw['appSettings']),
+      defaultKeyId:
+          _optionalManifestString(raw['defaultKeyId'], 'defaultKeyId'),
+      includesMedia:
+          _optionalManifestBool(raw['includesMedia'], 'includesMedia') ?? true,
+    );
+  }
+
+  _ManifestMedia _parseV6Media(Map<String, dynamic> raw) {
+    final fileName = _requiredManifestString(raw['file'], 'file');
+    _validateBackupName(fileName);
+    final id = _validatedBackupId(
+      _requiredManifestString(raw['id'], 'media id'),
+      'media id',
+    );
+    final byteLength = _optionalManifestInt(raw['byteLength'], 'byteLength');
+    final sha256 = _optionalManifestString(raw['sha256'], 'sha256');
+    final rating = _optionalManifestInt(raw['rating'], 'rating') ?? 0;
+    if (rating < 0 || rating > 3) {
+      _throwMalformedManifest('rating');
+    }
+    final contentDigest =
+        _optionalManifestString(raw['contentDigest'], 'contentDigest');
+    return _ManifestMedia(
+      id: id,
+      fileName: fileName,
+      thumbnailName: _optionalManifestString(raw['thumb'], 'thumb'),
+      sha256: sha256,
+      byteLength: byteLength,
+      originalPath:
+          _optionalManifestString(raw['originalPath'], 'originalPath'),
+      source: _parseSource(raw['source']),
+      sourceRemovalPending: _optionalManifestBool(
+              raw['sourceRemovalPending'], 'sourceRemovalPending') ??
+          false,
+      contentDigest: contentDigest,
+      originalName:
+          _optionalManifestString(raw['originalName'], 'originalName'),
+      mimeType: _optionalManifestString(raw['mimeType'], 'mimeType'),
+      isVideo: _optionalManifestBool(raw['isVideo'], 'isVideo') ?? false,
+      width: _nonNegativeInt(raw['width'], 'width'),
+      height: _nonNegativeInt(raw['height'], 'height'),
+      durationMs: _nonNegativeInt(raw['durationMs'], 'durationMs'),
+      rating: rating,
+      dateAdded: _manifestDate(
+        raw['dateAdded'],
+        'dateAdded',
+        strict: true,
+        required: true,
+      ),
+      dateTaken: _manifestDate(
+        raw['dateTaken'],
+        'dateTaken',
+        strict: true,
+        required: false,
+      ),
+      sizeBytes: _optionalManifestInt(raw['sizeBytes'], 'sizeBytes'),
+      deletedAt: _manifestDate(
+        raw['deletedAt'],
+        'deletedAt',
+        strict: true,
+        required: false,
+      ),
+      encryptedDek:
+          _optionalManifestString(raw['encryptedDek'], 'encryptedDek'),
+      encryptionKeyId:
+          _optionalManifestString(raw['encryptionKeyId'], 'encryptionKeyId'),
+      privatePath: _optionalManifestString(raw['privatePath'], 'privatePath'),
+      thumbnailPath:
+          _optionalManifestString(raw['thumbnailPath'], 'thumbnailPath'),
+      playCount: _optionalManifestInt(raw['playCount'], 'playCount'),
+      lastPlayedAt: _manifestDate(
+        raw['lastPlayedAt'],
+        'lastPlayedAt',
+        strict: true,
+        required: false,
+      ),
+    );
+  }
+
+  List<_ManifestKey> _parseV6Keys(Object? value) {
+    if (value == null) return const <_ManifestKey>[];
+    if (value is! List) _throwMalformedManifest('encryptionKeys');
+    final keys = <_ManifestKey>[];
+    for (final entry in value) {
+      if (entry is! Map) _throwMalformedManifest('encryptionKeys');
+      final json = Map<String, dynamic>.from(entry);
+      final id = _requiredManifestString(json['id'], 'encryptionKeys.id');
+      final kek = _requiredManifestString(json['kek'], 'encryptionKeys.kek');
+      try {
+        if (base64Decode(kek).length != EncryptionKeyManager.kekBytes) {
+          _throwMalformedManifest('encryptionKeys.kek');
+        }
+      } on FormatException {
+        _throwMalformedManifest('encryptionKeys.kek');
+      }
+      keys.add(
+        _ManifestKey(
+          id: id,
+          kekBase64: kek,
+          fingerprint: _optionalManifestString(
+                json['fingerprint'],
+                'encryptionKeys.fingerprint',
+              ) ??
+              '',
+          createdAt: _manifestDate(
+            json['createdAt'],
+            'encryptionKeys.createdAt',
+            strict: true,
+            required: false,
+          ),
+          label: _optionalManifestString(json['label'], 'encryptionKeys.label'),
+          salt: _optionalManifestString(json['salt'], 'encryptionKeys.salt'),
+          isDefault: json['isDefault'] == true,
+        ),
+      );
+    }
+    return List.unmodifiable(keys);
+  }
+
+  Map<String, Object?> _parseV6Settings(Object? value) {
+    if (value == null) return const <String, Object?>{};
+    if (value is! Map) _throwMalformedManifest('appSettings');
+    final map = Map<String, dynamic>.from(value);
+    final settings = <String, Object?>{};
+    map.forEach((key, entry) {
+      if (entry is bool || entry is int || entry is double || entry is String) {
+        settings[key] = entry;
+      } else if (entry is List && entry.every((item) => item is String)) {
+        settings[key] = List<String>.from(entry);
+      }
+    });
+    return settings;
   }
 
   _ManifestSource? _parseSource(Object? value) {

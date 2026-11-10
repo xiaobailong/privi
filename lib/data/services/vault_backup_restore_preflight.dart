@@ -4,6 +4,7 @@ final class _VaultBackupRestorePreflight {
   const _VaultBackupRestorePreflight({
     required this.db,
     required this.albums,
+    required this.storage,
     required this.uuid,
     required this.files,
     required this.manifests,
@@ -11,6 +12,7 @@ final class _VaultBackupRestorePreflight {
 
   final AppDatabase db;
   final AlbumRepository albums;
+  final VaultStorageService storage;
   final Uuid uuid;
   final _VaultBackupFileOps files;
   final _VaultBackupManifestCodec manifests;
@@ -21,15 +23,140 @@ final class _VaultBackupRestorePreflight {
     VaultBackupSession session,
     VaultBackupProgressCallback? onProgress,
   ) async {
-    final plans = await _preflightMedia(
-      sourceDirectory,
-      manifest,
-      session,
-      onProgress,
-    );
+    final plans = manifest.dataOnly
+        ? await _preflightDataOnly(manifest, session, onProgress)
+        : await _preflightMedia(
+            sourceDirectory,
+            manifest,
+            session,
+            onProgress,
+          );
     await _preflightStructure(manifest, plans);
     _checkBackupCancelled(session);
     return plans;
+  }
+
+  /// v6: media bytes are not in the backup. Match each row to a file already
+  /// present in phone storage; rows without a file are kept in the manifest but
+  /// skipped on install (never become empty grid entries).
+  Future<List<_RestoreMediaPlan>> _preflightDataOnly(
+    _BackupManifest manifest,
+    VaultBackupSession session,
+    VaultBackupProgressCallback? onProgress,
+  ) async {
+    final fileIndex = await _localVaultFileIndex();
+    final plans = <_RestoreMediaPlan>[];
+    final ids = <String>{};
+    final referencedNames = <String>{};
+    for (var index = 0; index < manifest.media.length; index++) {
+      _checkBackupCancelled(session);
+      final item = manifest.media[index];
+      final fileName = item.fileName;
+      _emitBackupProgress(
+        onProgress,
+        VaultBackupStage.checkingBackup,
+        index,
+        manifest.media.length,
+        item.originalName ?? fileName,
+      );
+      if (!referencedNames.add(fileName)) {
+        throw VaultBackupException(
+          VaultBackupErrorCode.malformedManifest,
+          fileName: fileName,
+          stage: VaultBackupStage.checkingBackup,
+        );
+      }
+      final id = item.id ?? uuid.v4();
+      if (!ids.add(id)) {
+        throw VaultBackupException(
+          VaultBackupErrorCode.malformedManifest,
+          fileName: fileName,
+          stage: VaultBackupStage.checkingBackup,
+        );
+      }
+      final originalName = item.originalName ?? fileName;
+      final originalPath = manifest.version >= 2
+          ? _validatedOriginalPath(item.originalPath)
+          : null;
+      final localPath = await _resolveLocalFile(item, fileIndex);
+      final existing = await db.getMediaById(id);
+      plans.add(
+        _RestoreMediaPlan(
+          media: item,
+          id: id,
+          originalName: originalName,
+          originalPath: originalPath,
+          sourceFolder: _restoreSourceFolder(originalPath),
+          source: null,
+          thumbnail: null,
+          expectedLength: item.byteLength ?? item.sizeBytes ?? 0,
+          expectedDigest: item.sha256 ?? item.contentDigest ?? '',
+          skipExisting: existing != null,
+          missingLocalFile: localPath == null,
+          localPath: localPath,
+        ),
+      );
+      _emitBackupProgress(
+        onProgress,
+        VaultBackupStage.checkingBackup,
+        index + 1,
+        manifest.media.length,
+      );
+    }
+    return List.unmodifiable(plans);
+  }
+
+  /// basename → absolute path for every media file in the vault roots.
+  Future<Map<String, String>> _localVaultFileIndex() async {
+    final index = <String, String>{};
+    for (final root in await storage.mediaRoots()) {
+      try {
+        await for (final entity
+            in root.list(recursive: true, followLinks: false)) {
+          if (entity is! File) continue;
+          final path = entity.path;
+          if (_isScratchPath(path)) continue;
+          index.putIfAbsent(p.basename(path), () => path);
+        }
+      } catch (e) {
+        AppLogger.w(
+            'VaultBackupRestorePreflight', 'scan ${root.path} failed: $e');
+      }
+    }
+    return index;
+  }
+
+  Future<String?> _resolveLocalFile(
+    _ManifestMedia item,
+    Map<String, String> index,
+  ) async {
+    final privatePath = item.privatePath;
+    if (privatePath != null && privatePath.isNotEmpty) {
+      if (await File(privatePath).exists()) return privatePath;
+      final byBasename = index[p.basename(privatePath)];
+      if (byBasename != null) return byBasename;
+    }
+    final byBackupName = index[item.fileName];
+    if (byBackupName != null) return byBackupName;
+    final originalPath = item.originalPath;
+    if (originalPath != null &&
+        originalPath.isNotEmpty &&
+        await File(originalPath).exists()) {
+      return originalPath;
+    }
+    final originalName = item.originalName;
+    if (originalName != null && originalName.isNotEmpty) {
+      final byOriginal = index[p.basename(originalName)];
+      if (byOriginal != null) return byOriginal;
+    }
+    return null;
+  }
+
+  static bool _isScratchPath(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized.contains('/${VaultPaths.stagingDir}/') ||
+        normalized.contains('/${VaultPaths.shareStagingDir}/') ||
+        normalized.contains('/${VaultPaths.thumbsDir}/');
   }
 
   Future<List<_RestoreMediaPlan>> _preflightMedia(
@@ -117,7 +244,7 @@ final class _VaultBackupRestorePreflight {
           originalName: originalName,
           originalPath: originalPath,
           sourceFolder: _restoreSourceFolder(originalPath),
-          source: source!,
+          source: source,
           thumbnail: thumbnail,
           expectedLength: expectedLength,
           expectedDigest: expectedDigest,
@@ -266,8 +393,15 @@ final class _VaultBackupRestorePreflight {
       }
     }
 
-    final mediaIds = {for (final plan in plans) plan.id};
-    if (manifest.version >= VaultBackupService.manifestVersion) {
+    // A v6 backup deliberately skips rows whose media file is not present;
+    // structural references are still validated against the full manifest.
+    final mediaIds = manifest.dataOnly
+        ? {
+            for (final item in manifest.media)
+              if (item.id != null) item.id!
+          }
+        : {for (final plan in plans) plan.id};
+    if (manifest.version >= VaultBackupService.strictManifestVersion) {
       for (final album in manifest.albums) {
         final coverMediaId = album.coverMediaId;
         if (coverMediaId != null && !mediaIds.contains(coverMediaId)) {
@@ -290,7 +424,7 @@ final class _VaultBackupRestorePreflight {
           stage: VaultBackupStage.checkingBackup,
         );
       }
-      if (manifest.version >= VaultBackupService.manifestVersion &&
+      if (manifest.version >= VaultBackupService.strictManifestVersion &&
           (!albumIds.contains(albumId) || !mediaIds.contains(mediaId))) {
         throw VaultBackupException(
           VaultBackupErrorCode.malformedManifest,

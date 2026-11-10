@@ -26,11 +26,12 @@ enum KeyImportOutcome {
   /// read. Refusing is safer than guessing at a newer layout.
   unsupportedVersion,
 
-  /// This install already holds **different** key material; importing would
-  /// silently invalidate every file encrypted on this device.
+  /// Legacy outcome kept for older UI strings. Since the key ring was added,
+  /// an import never replaces the default key, so this can no longer happen.
   saltConflict,
 
-  /// The key cannot unwrap any stored DEK ⇒ it does not belong to this vault.
+  /// Legacy outcome kept for older UI strings; a foreign key is now simply
+  /// registered as an additional key.
   keyMismatch,
 
   /// Secure-storage write failed.
@@ -124,6 +125,14 @@ class KeyImportResult {
 /// Import re-creates rows **only for files that actually exist** in this
 /// install's vault roots, so a package never produces empty grid entries.
 /// Legacy JSON packages (version 1) are still accepted for import.
+///
+/// **Key ring:** importing no longer replaces this install's KEK (which used
+/// to be refused with `saltConflict` whenever the device already had its own
+/// key).  The package key is registered as an additional key identified by
+/// its fingerprint, and restored rows record that id in
+/// `media_items.encryption_key_id`.  New exports use the unified vault
+/// backup (`VaultBackupService`, manifest v6); this service remains for
+/// reading older `.db` packages.
 ///
 /// **The package is as sensitive as the media itself**: it holds the raw KEK in
 /// clear with no password protection, so anyone who has it *and* the vault
@@ -352,12 +361,21 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
     if (outcome != KeyImportOutcome.imported) {
       return KeyImportResult(outcome: outcome);
     }
+    late final String keyId;
     try {
       final salt = package.salt;
       if (salt != null && salt.isNotEmpty) {
         await _security.adoptEncryptionSaltIfAbsent(salt);
       }
-      await _keyManager.setImportedKey(package.kek);
+      // Register as an *additional* key: this install's default KEK (and all
+      // files encrypted with it) stay untouched.  The id is derived from the
+      // key bytes, so rows restored below can point straight at it.
+      final record = await _keyManager.registerKey(
+        package.kek,
+        label: '旧密钥包',
+        salt: salt,
+      );
+      keyId = record.id;
     } catch (e, stackTrace) {
       AppLogger.e('KeyBackupService', 'import failed: $e\n$stackTrace');
       return const KeyImportResult(outcome: KeyImportOutcome.failed);
@@ -367,7 +385,7 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
     var updated = 0;
     var skipped = 0;
     try {
-      final counts = await _restoreFileMapping(package.rows);
+      final counts = await _restoreFileMapping(package.rows, keyId);
       restored = counts.restored;
       updated = counts.updated;
       skipped = counts.skipped;
@@ -422,6 +440,13 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
     return false;
   }
 
+  /// Only the package format can make an import unusable.
+  ///
+  /// The old `saltConflict` / `keyMismatch` refusals existed because importing
+  /// *replaced* the single KEK — a different key would orphan every file
+  /// encrypted on this device.  With per-file `encryption_key_id` the package
+  /// key is simply one more key in the ring, so neither condition can hurt
+  /// existing files anymore.
   Future<KeyImportOutcome> _validate(_KeyPackage package) async {
     if (package.unsupportedVersion) {
       AppLogger.w(
@@ -431,22 +456,11 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
       );
       return KeyImportOutcome.unsupportedVersion;
     }
-
-    final existingSalt = await _security.readEncryptionSalt();
-    if (existingSalt != null &&
-        existingSalt.isNotEmpty &&
-        existingSalt != package.salt) {
-      // Keep ISSUE-029's rule: never overwrite salt material this install
-      // already depends on.
-      AppLogger.w('KeyBackupService',
-          'import refused: this install already has its own encryption salt');
-      return KeyImportOutcome.saltConflict;
-    }
-
     if (!await _matchesPackage(package)) {
-      AppLogger.w('KeyBackupService',
-          'import refused: the key does not unwrap any stored DEK');
-      return KeyImportOutcome.keyMismatch;
+      AppLogger.w(
+          'KeyBackupService',
+          'package key does not unwrap any stored DEK — registering it anyway '
+              'as an additional key');
     }
     return KeyImportOutcome.imported;
   }
@@ -494,6 +508,7 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
   /// back can be decrypted anyway.
   Future<({int restored, int updated, int skipped})> _restoreFileMapping(
     List<_PackageMediaRow> rows,
+    String keyId,
   ) async {
     if (rows.isEmpty) return (restored: 0, updated: 0, skipped: 0);
     final index = await _localVaultFileIndex();
@@ -521,7 +536,11 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
             dek != null &&
             dek.isNotEmpty &&
             _encryption.looksEncrypted(File(path))) {
-          await _repository.updateEncryptedDek(row.mediaId, dek);
+          await _repository.updateEncryptedDek(
+            row.mediaId,
+            dek,
+            encryptionKeyId: keyId,
+          );
           touched = true;
         }
         if (path != existing.privatePath) {
@@ -558,6 +577,9 @@ CREATE INDEX idx_media_keys_private_path ON media_keys (private_path);
           sizeBytes:
               row.sizeBytes > 0 ? row.sizeBytes : await _fileLengthOrZero(path),
           encryptedDek: row.encryptedDek,
+          encryptionKeyId: row.encryptedDek == null || row.encryptedDek!.isEmpty
+              ? null
+              : keyId,
           contentDigest: row.contentDigest,
         ),
       );

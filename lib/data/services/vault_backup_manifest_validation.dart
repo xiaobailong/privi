@@ -4,7 +4,7 @@ final class _VaultBackupManifestValidator {
   const _VaultBackupManifestValidator();
 
   void validateSummary(_BackupManifest manifest) {
-    if (manifest.version < VaultBackupService.manifestVersion) return;
+    if (manifest.version < VaultBackupService.strictManifestVersion) return;
     final itemCount = manifest.declaredItemCount;
     final totalBytes = manifest.declaredTotalBytes;
     if (manifest.exportedAt == null ||
@@ -24,7 +24,7 @@ final class _VaultBackupManifestValidator {
 
   void validate(_BackupManifest manifest) {
     validateSummary(manifest);
-    if (manifest.version < VaultBackupService.manifestVersion) return;
+    if (manifest.version < VaultBackupService.strictManifestVersion) return;
 
     final mediaIds = <String>{};
     final referencedNames = <String>{};

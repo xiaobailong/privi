@@ -6,6 +6,8 @@ final class _VaultBackupManifestCodec {
   static const _parser = _VaultBackupManifestParser();
   static const _validator = _VaultBackupManifestValidator();
 
+  /// Builds a v6 **data-only** manifest: every database row, the full key ring
+  /// and all app settings — no media bytes.
   _BackupManifest fromExport({
     required List<_ExportEntry> entries,
     required List<AlbumRow> albums,
@@ -13,16 +15,20 @@ final class _VaultBackupManifestCodec {
     required List<AlbumMediaRow> memberships,
     required String platformName,
     required DateTime verifiedAt,
+    required List<_ManifestKey> encryptionKeys,
+    required Map<String, Object?> appSettings,
     String? encryptionSalt,
+    String? defaultKeyId,
   }) {
     final media = entries
         .map(
           (entry) => _ManifestMedia(
             id: entry.row.id,
+            // Identifier only: v6 has no payload file to point at.
             fileName: entry.fileName,
-            thumbnailName: entry.thumbnailName,
-            sha256: entry.sha256,
-            byteLength: entry.byteLength,
+            thumbnailName: null,
+            sha256: null,
+            byteLength: null,
             originalPath: entry.row.originalPath,
             source: entry.row.sourcePlatformId == null
                 ? null
@@ -41,9 +47,14 @@ final class _VaultBackupManifestCodec {
             rating: entry.row.rating,
             dateAdded: entry.row.dateAdded,
             dateTaken: entry.row.dateTaken,
-            sizeBytes: entry.byteLength,
+            sizeBytes: entry.row.sizeBytes,
             deletedAt: entry.row.deletedAt,
             encryptedDek: entry.row.encryptedDek,
+            encryptionKeyId: entry.row.encryptionKeyId,
+            privatePath: entry.row.privatePath,
+            thumbnailPath: entry.row.thumbnailPath,
+            playCount: entry.row.playCount,
+            lastPlayedAt: entry.row.lastPlayedAt,
           ),
         )
         .toList(growable: false);
@@ -52,11 +63,13 @@ final class _VaultBackupManifestCodec {
       exportedAt: verifiedAt,
       verifiedAt: verifiedAt,
       declaredItemCount: media.length,
-      declaredTotalBytes: entries.fold<int>(
-        0,
-        (sum, entry) => sum + entry.byteLength,
-      ),
+      // Media files are intentionally excluded from v6 backups.
+      declaredTotalBytes: 0,
       encryptionSalt: encryptionSalt,
+      encryptionKeys: List.unmodifiable(encryptionKeys),
+      appSettings: Map.unmodifiable(appSettings),
+      defaultKeyId: defaultKeyId,
+      includesMedia: false,
       media: List.unmodifiable(media),
       albums: List.unmodifiable(
         albums.map(
@@ -146,6 +159,13 @@ final class _VaultBackupManifestCodec {
         'membership':
             manifest.memberships.map((item) => item.toJson()).toList(),
         'encryptionSalt': manifest.encryptionSalt,
+        if (manifest.version >= VaultBackupService.manifestVersion) ...{
+          'includesMedia': manifest.includesMedia,
+          'defaultKeyId': manifest.defaultKeyId,
+          'encryptionKeys':
+              manifest.encryptionKeys.map((key) => key.toJson()).toList(),
+          'appSettings': manifest.appSettings,
+        },
       };
 
   void validateV5Summary(_BackupManifest manifest) {

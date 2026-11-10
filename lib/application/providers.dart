@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart' show ChangeNotifierProvider;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +15,7 @@ import '../data/repositories/media_repository.dart';
 import '../data/services/batch_decryption_service.dart';
 import '../data/services/batch_encryption_service.dart';
 import '../data/services/biometric_service.dart';
+import '../data/services/encryption_key_link_backfill.dart';
 import '../data/services/encryption_key_manager.dart';
 import '../data/services/encryption_record_repair_service.dart';
 import '../data/services/filename_encryption_service.dart';
@@ -38,6 +40,7 @@ import '../data/services/native_crypto_service.dart';
 import '../data/services/security_service.dart';
 import '../data/services/thumbnail_cache.dart';
 import '../data/services/vault_backup_service.dart';
+import '../data/services/vault_library_registry.dart';
 import '../data/services/vault_storage_service.dart';
 import '../domain/enums.dart';
 import '../domain/models/album_view.dart';
@@ -96,8 +99,18 @@ final databaseProvider = Provider<AppDatabase>((ref) {
   return db;
 });
 
+/// User-added vault libraries. A single shared instance is also handed to
+/// [VaultStorageService] so every scan/write sees the same live root list.
+final vaultLibraryRegistryProvider =
+    ChangeNotifierProvider<VaultLibraryRegistry>((ref) {
+  return VaultLibraryRegistry(ref.watch(sharedPreferencesProvider));
+});
+
 final vaultStorageProvider = Provider<VaultStorageService>((ref) {
-  return VaultStorageService(initializeSharedRoot: true);
+  return VaultStorageService(
+    initializeSharedRoot: true,
+    registry: ref.read(vaultLibraryRegistryProvider),
+  );
 });
 
 final shareSourceStagerProvider = Provider<ShareSourceStager>((ref) {
@@ -288,10 +301,26 @@ final vaultBackupServiceProvider = Provider<VaultBackupOperations>((ref) {
     media: ref.watch(mediaRepositoryProvider),
     albums: ref.watch(albumRepositoryProvider),
     storage: ref.watch(vaultStorageProvider),
-    // Lets an exported backup carry the KEK salt plus each row's encrypted
-    // DEK, and lets a restore adopt them (ISSUE-029).
+    // v6 backups carry the whole key ring and every app setting, and a
+    // restore registers foreign keys instead of replacing the default one.
     security: ref.watch(securityServiceProvider),
+    keyManager: ref.watch(encryptionKeyManagerProvider),
+    preferences: ref.watch(sharedPreferencesProvider),
+    keyBackup: ref.watch(keyBackupServiceProvider),
+    backfill: ref.watch(encryptionKeyLinkBackfillProvider),
     usePrivateMediaStorage: false,
+  );
+});
+
+/// One-time, idempotent initialization of `media_items.encryption_key_id` for
+/// files encrypted before the file↔key relation existed. Runs at launch (and
+/// again after a restore); a zero-row COUNT means "already done" and writes
+/// nothing.
+final encryptionKeyLinkBackfillProvider =
+    Provider<EncryptionKeyLinkBackfill>((ref) {
+  return EncryptionKeyLinkBackfill(
+    media: ref.watch(mediaRepositoryProvider),
+    keyManager: ref.watch(encryptionKeyManagerProvider),
   );
 });
 
