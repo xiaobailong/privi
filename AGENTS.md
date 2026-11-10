@@ -72,3 +72,16 @@ presentation → domain ← data
 | Flutter | UI 框架 |
 | Dart | 编程语言 |
 | Gradle | Android 构建 |
+
+---
+
+## 跨会话知识记录约定
+
+- 本项目的**一切**术语、技术决策、问题、踩坑与协作约定，只写进 `memory-bank/`，
+  按 `memory-bank/README.md` / `WRITING.md` 的协议追加（`ADR-nnn` / `ISSUE-nnn` / `PIT-nnn`），
+  并同步更新 `README.md` §4 索引。
+- **禁止写入用户级 AI 记忆库**（`~/.codebuddy/.../memory`、`update_memory` 等）：
+  那些内容不随仓库分发、不进 code review、无法按版本回溯。详见 `ADR-048`。
+- `memory-bank/` 与约定文件必须纳入 git，每次回填后提交；历史版本由 git 管理，
+  不依赖会话摘要（会话压缩是有损的）。
+- 产品术语统一用「**保险库**」，不用「私密库」；合并后的导入导出功能叫「**保险库档案**」。

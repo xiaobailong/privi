@@ -41,6 +41,8 @@
 - 不许删旧条目、不许改编号；**状态**可以改：`已修复` / `已规避` / `未修复` / `未定位`。
 - 不许把整篇长文档复制进来：完整推导留在 `docs/HANDOFF-*.md`，条目里写「过程详见 `docs/xxx.md`」。
 - 编码约定：`memory-bank/*.md` = UTF-8（**无 BOM**）+ CRLF，与 `README.md`、`.clinerules/` 保持一致。
+- **项目知识禁止写进用户级 AI 记忆库**（`~/.codebuddy/.../memory` / `update_memory`）：
+  一律写 `memory-bank/` 并在回填后 `git commit`，历史由 git 回溯（见 `ADR-048`）。
 - 新增/改名 `scripts\` 下的辅助脚本、或改动 `build.bat` 的脚本路径时，
   必须回看 `ISSUE-011`（"静默降级"事故）并跑它的复发判据。
   注意判据 ①② 是静态命令（`findstr` / `dir`），**可以直接跑**；判据 ③ 要读 `build\build_full.log`，
