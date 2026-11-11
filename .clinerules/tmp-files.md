@@ -14,6 +14,9 @@
 - 命令里写**相对路径**即可（shell 的工作目录就是仓库根）：`> tmp\out.txt`；
   需要绝对路径时：`D:\WorkSpace\test\privi\tmp\out.txt`。
 - 命名直接用用途（如 `build_status.txt`、`probe_encode.ps1`），**不要**在 `tmp\` 里再建多层子目录。
+- **禁止生成仓库根 `tool\` 目录**：`tool\` 是历史遗留目录（2026-07-19 提交 `8a88988` 曾放
+  `readme_screenshots_test.dart`，2026-09-18 `a1ad5af` 已删除清理），现已无任何用途。
+  任何 AI/脚本都不得创建；临时脚本一律放 `tmp\`，长期复用脚本放 `scripts\tools\`。
 
 ## 2. 例外（这些不是"临时文件"，不要往 `tmp\` 塞）
 

@@ -79,6 +79,7 @@ privi/
 - 所有中间产物全写 `tmp\`
 - `tmp\` 被 `.gitignore` 忽略（`/tmp/`）
 - **收尾必须清空**
+- **禁止生成仓库根 `tool\` 目录**：`tool\` 是历史遗留目录（2026-07-19 提交 `8a88988` 曾放 `readme_screenshots_test.dart`，2026-09-18 `a1ad5af` 已删除清理）。现已无任何用途，任何 AI/脚本都不得创建；临时脚本一律放 `tmp\`，长期复用脚本放 `scripts\tools\`
 
 ### 知识库管理
 - 知识库位于 `memory-bank/`，索引文件 `memory-bank/README.md`
