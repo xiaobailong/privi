@@ -15,6 +15,7 @@ final class _VaultBackupRestorer {
     this.keyBackup,
     this.backfill,
     this.pending,
+    this.datasets,
   })  : manifests = const _VaultBackupManifestCodec(),
         preflight = _VaultBackupRestorePreflight(
           db: db,
@@ -33,6 +34,7 @@ final class _VaultBackupRestorer {
           platformName: platformName,
           usePrivateMediaStorage: usePrivateMediaStorage,
           files: const _VaultBackupFileOps(),
+          datasets: datasets,
         );
 
   final _VaultBackupManifestCodec manifests;
@@ -44,6 +46,8 @@ final class _VaultBackupRestorer {
   /// Registers the backup's keys as *additional* keys (never replacing this
   /// install's default), then restores settings.
   final EncryptionKeyManager? keyManager;
+
+  /// App settings restored from the archive.
   final SharedPreferences? preferences;
 
   /// Legacy v1/v2 `.db` key packages can still be imported from a directory.
@@ -52,8 +56,15 @@ final class _VaultBackupRestorer {
   /// Old (v1..v5) backups have no key links; stamp them with this phone's key.
   final EncryptionKeyLinkBackfill? backfill;
 
-  /// Remembers rows whose media file is not on this phone yet.
+  /// Remembers rows whose media file was not on this phone at import time.
+  ///
+  /// Since `ADR-054` the rows themselves are kept (with a `present = 0` ledger
+  /// entry), so new imports no longer write this marker. It is still read and
+  /// cleared so installations that carry an older marker finish their relink.
   final _PendingRestoreStore? pending;
+
+  /// 「保险库数据管理」台账（导入的数据集 + 每条记录的文件是否已定位）。
+  final VaultDatasetService? datasets;
 
   Future<VaultBackupResult> run(
     String sourceDirectory, {
@@ -61,6 +72,7 @@ final class _VaultBackupRestorer {
     VaultBackupProgressCallback? onProgress,
   }) async {
     final activeSession = session ?? VaultBackupSession();
+    String? datasetId;
     try {
       _emitBackupProgress(
         onProgress,
@@ -84,24 +96,24 @@ final class _VaultBackupRestorer {
         activeSession,
         onProgress,
       );
-      final missingFiles =
-          await _syncPendingRestore(manifest, plans, sourceDirectory);
+      datasetId = await _recordDataset(manifest, sourceDirectory, plans);
       final result = await installer.run(
         manifest,
         plans,
         activeSession,
         onProgress,
+        datasetId: datasetId,
       );
       await _backfillLegacyLinks();
       await _restoreAppSettings(manifest);
       await _adoptEncryptionSalt(manifest);
-      // Every row has a file now: the relink marker has done its job.  A
-      // partial import keeps it so the next launch can pick up the rest.
-      if (manifest.dataOnly && missingFiles == 0) {
-        await pending?.clear();
-      }
+      // A pending marker written by an older build has done its job: the rows
+      // (including the ones still missing a file) now live in the
+      // 「保险库数据管理」ledger, so nothing is re-imported at launch anymore.
+      if (manifest.dataOnly) await pending?.clear();
       return result;
     } on _VaultBackupCancelled {
+      await _discardEmptyDataset(datasetId);
       return const VaultBackupResult(
         itemCount: 0,
         totalBytes: 0,
@@ -109,8 +121,10 @@ final class _VaultBackupRestorer {
         status: VaultBackupResultStatus.cancelled,
       );
     } on VaultBackupException {
+      await _discardEmptyDataset(datasetId);
       rethrow;
     } catch (error, stackTrace) {
+      await _discardEmptyDataset(datasetId);
       AppLogger.e(
           'VaultBackupRestore', 'vault restore failed: $error\n$stackTrace');
       throw VaultBackupException(
@@ -119,6 +133,54 @@ final class _VaultBackupRestorer {
         cause: error,
       );
     }
+  }
+
+  /// 取消/失败的导入不该在「保险库数据管理」里留下 0 项的空条目。
+  Future<void> _discardEmptyDataset(String? datasetId) async {
+    if (datasetId == null) return;
+    try {
+      await datasets?.discardIfEmpty(datasetId);
+    } catch (e) {
+      AppLogger.w('VaultBackupRestore', 'could not discard empty data set: $e');
+    }
+  }
+
+  /// 把这次导入登记进「保险库数据管理」，返回数据集中 id。
+  ///
+  /// 数据集 id 由「目录 + 数据文件名 + 导出时间」派生：同一个归档重复导入
+  /// （包括旧版本留下的 pending 重连）只会更新同一条台账。
+  Future<String?> _recordDataset(
+    _BackupManifest manifest,
+    String sourceDirectory,
+    List<_RestoreMediaPlan> plans,
+  ) async {
+    final service = datasets;
+    if (service == null || !manifest.dataOnly) return null;
+    final archive = await manifests.findBackupFile(sourceDirectory);
+    final archiveFile = archive == null ? null : p.basename(archive.path);
+    final normalized = p.normalize(sourceDirectory.replaceAll('\\', '/'));
+    final id = VaultDatasetService.datasetIdFor(
+      archivePath: normalized,
+      archiveFile: archiveFile,
+      exportedAt: manifest.exportedAt,
+    );
+    final name = archiveFile != null && archiveFile.isNotEmpty
+        ? p.basenameWithoutExtension(archiveFile)
+        : p.basename(normalized);
+    await service.recordDataset(
+      id: id,
+      name: name,
+      archivePath: normalized,
+      archiveFile: archiveFile,
+      importedAt: DateTime.now(),
+    );
+    AppLogger.i(
+      'VaultBackupRestore',
+      'recorded data set $id ($name): '
+          '${plans.where((plan) => plan.localPath != null).length}/'
+          '${plans.length} row(s) already located on this phone',
+    );
+    return id;
   }
 
   /// A v1..v5 backup carries no `encryption_key_id`, so the rows just restored
@@ -163,32 +225,6 @@ final class _VaultBackupRestorer {
       'registered $registered/${manifest.encryptionKeys.length} encryption '
           'key(s) from backup; default key unchanged',
     );
-  }
-
-  /// Records (or clears) the "media files not copied yet" marker.
-  ///
-  /// A v6 import that cannot see its media files yet must not lose the
-  /// metadata: the marker lets the very same manifest be imported again once
-  /// the folder has been copied — which is exactly the order a phone migration
-  /// follows when the user copies the directory afterwards.
-  ///
-  /// Returns how many rows are still without a file.  The marker is removed by
-  /// [run] only after the whole restore succeeded, so a failed run can retry.
-  Future<int> _syncPendingRestore(
-    _BackupManifest manifest,
-    List<_RestoreMediaPlan> plans,
-    String sourceDirectory,
-  ) async {
-    final store = pending;
-    if (store == null || !manifest.dataOnly) return 0;
-    final missing = plans.where((plan) => plan.missingLocalFile).length;
-    if (missing == 0) return 0;
-    await store.remember(
-      sourceDirectory,
-      missing: missing,
-      total: plans.length,
-    );
-    return missing;
   }
 
   Future<void> _restoreAppSettings(_BackupManifest manifest) async {

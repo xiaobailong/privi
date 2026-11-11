@@ -40,6 +40,7 @@ import '../data/services/native_crypto_service.dart';
 import '../data/services/security_service.dart';
 import '../data/services/thumbnail_cache.dart';
 import '../data/services/vault_backup_service.dart';
+import '../data/services/vault_dataset_service.dart';
 import '../data/services/vault_library_registry.dart';
 import '../data/services/vault_storage_service.dart';
 import '../domain/enums.dart';
@@ -273,6 +274,15 @@ final albumRepositoryProvider = Provider<AlbumRepository>((ref) {
   return AlbumRepository(ref.watch(databaseProvider));
 });
 
+/// 「保险库数据管理」：导入台账（每份保险库数据 / 每条记录是否已定位）+ 手动
+/// 关联目录后的文件重连。见 `lib/data/services/vault_dataset_service.dart`。
+final vaultDatasetServiceProvider = Provider<VaultDatasetService>((ref) {
+  return VaultDatasetService(
+    db: ref.watch(databaseProvider),
+    media: ref.watch(mediaRepositoryProvider),
+  );
+});
+
 final vaultWorkflowProvider = Provider<VaultWorkflow>((ref) {
   final storage = ref.watch(vaultStorageProvider);
   final media = ref.watch(mediaRepositoryProvider);
@@ -308,6 +318,7 @@ final vaultBackupServiceProvider = Provider<VaultBackupOperations>((ref) {
     preferences: ref.watch(sharedPreferencesProvider),
     keyBackup: ref.watch(keyBackupServiceProvider),
     backfill: ref.watch(encryptionKeyLinkBackfillProvider),
+    datasets: ref.watch(vaultDatasetServiceProvider),
     usePrivateMediaStorage: false,
   );
 });

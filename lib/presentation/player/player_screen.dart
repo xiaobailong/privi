@@ -770,6 +770,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   void _toggleChrome() => setState(() => _chrome = !_chrome);
 
+  /// 双击播放区：暂停 ⇄ 继续（三个视频界面统一行为）。
+  ///
+  /// 播放状态以 `PlayerController` 为准，原生播放器的 play/pause 由 `build()`
+  /// 里的同步逻辑跟随 `ui.playing`，不在这里直接操作，避免两处状态打架。
+  void _togglePlayPause() {
+    final playing = ref.read(playerControllerProvider).playing;
+    AppLogger.d(
+      'PlayerScreen',
+      'Double tap: ${playing ? 'pause' : 'resume'} '
+          '(item=${_nVideoItemId ?? '-'})',
+    );
+    ref.read(playerControllerProvider.notifier).togglePlayPause();
+  }
+
+  /// 竖向滑动调音量后让静音开关跟随（音量降到 0 即视为静音）。
+  void _onGestureVolume(double volume) {
+    final muted = volume <= 0;
+    if (_muted == muted) return;
+    setState(() => _muted = muted);
+  }
+
   void _hideChrome() {
     if (_chrome) setState(() => _chrome = false);
   }
@@ -1103,11 +1124,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
     return GestureDetector(
       onTap: _toggleChrome,
+      // 双击播放区：暂停 ⇄ 继续（三个视频界面统一行为）。
+      onDoubleTap: _togglePlayPause,
       // 播放区横向滑动：右滑快进 / 左滑快退（与查看器、可见库预览共用同一实现）。
       child: VideoSwipeSeekLayer(
         controller: c,
         itemId: _nVideoItemId,
         onSeek: _seekTo,
+        onVolumeChanged: _onGestureVolume,
         child: NativeVideoViewport(controller: c, fitMode: _fitMode),
       ),
     );

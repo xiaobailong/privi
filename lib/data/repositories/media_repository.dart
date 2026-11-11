@@ -146,7 +146,9 @@ class MediaRepository {
       _db.resetMediaPlayCounts(ids: ids);
 
   Future<List<MediaItem>> listActive() async {
-    final rows = await _db.listActiveMediaRows();
+    // `watchActiveMedia()` 已经排除「导入后还没定位到文件」的记录（ADR-054），
+    // 缩略图/加密/改名这些按文件操作的功能不能拿到不存在的路径。
+    final rows = await _db.watchActiveMedia().first;
     return rows.map(_map).toList(growable: false);
   }
 

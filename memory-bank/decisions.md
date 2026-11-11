@@ -1337,6 +1337,10 @@
   `lib/presentation/settings/vault_libraries_screen.dart`、`lib/core/constants.dart`
 - 相关条目: `ISSUE-050`、`ADR-049`、`ADR-050`、`ADR-051`
 - 首次记录: 2026-11-10
+- 2026-11-11 更新: ①②③（pending 标记 + 启动重导）**已由 `ADR-054` 取代** —— 导入不再跳过缺文件的行，
+  行本身保留并靠 `vault_dataset_media.present = 0` 隐藏，用户在「保险库数据管理」里手动关联目录后
+  按文件名重连；`_PendingRestoreStore` 现在只保留「读/清旧标记」两条路径（`remember()` 已删除）。
+  ④⑤（设备相关设置只合并不覆盖）**仍然有效**。
 
 - 相关文件: `lib/data/services/vault_backup_service.dart` 及 `vault_backup_*.dart`、
   `lib/application/backup/vault_backup_controller.dart`、`lib/l10n/app_localizations.dart`
@@ -1432,4 +1436,83 @@
   `vault_pending_restore.dart`、`lib/l10n/app_localizations.dart`
 - 相关条目: `ADR-047`、`ADR-049`、`ADR-052`、`ISSUE-049`、`PIT-078`
 - 首次记录: 2026-11-10
+
+
+## ADR-054 「保险库数据管理」：导入不校验文件 + 手动关联路径，台账控制私密相册可见性
+- 日期: 2026-11-11 | 状态: 已采纳（静态验证通过；真机待验证）
+- 背景: v6「保险库数据」只带记录。迁移时常见顺序是「先导入数据、后拷媒体」，导入时看不到文件。
+  旧实现（`ADR-052`）把缺文件的行**跳过**，再靠 `pending_restore.json` 在启动时整批重导；用户没有
+  任何入口能自己指定「这批数据对应哪个目录」，也没法知道哪些文件已经找到、哪些还缺。
+- 决策:
+  ① **导入不再因为文件缺失而丢行**：每行照常写进 `media_items`（DEK / `encryption_key_id` /
+     相册关系全保留），同时在原生 SQL 台账 `vault_dataset_media` 记 `present = 0`；找到文件的记 1。
+  ② **私密相册只显示「确认存在」的行**：所有列表 / 计数 / 封面 / 存储占用 / 批量加解密的查询都加上
+     `NOT EXISTS (SELECT 1 FROM vault_dataset_media vdm WHERE vdm.media_id = media_items.id AND vdm.present = 0)`
+     （`AppDatabase._fileLocated`），用子查询而不是 `NOT IN (上千个 id)`，避免 SQLite 绑定变量上限。
+  ③ 新增设置入口「存储 → 保险库数据管理」：每次导入一条数据集（名称 / 导入时间 / 数据文件 /
+     总数·已确认·缺失 / 已关联路径），操作为「关联保险库路径…」→ 选目录后**递归按 basename** 扫描，
+     只处理 `present = 0` 的记录，命中即改 `private_path` + 翻 `present = 1`、清掉旧手机缩略图；
+     「重新扫描」遍历该数据集关联过的所有目录；「移除导入数据」只删待关联行，已确认的媒体与磁盘文件都保留。
+  ④ 关联目录同时登记为保险库（复用 `VaultLibraryRegistry` + `validateLibraryPath` + `prepareLibraryDirectory`），
+     使加密/缩略图/还原逻辑把它当正常保险库根。
+  ⑤ 被孤儿扫描抢先建的无 DEK 行，由带 DEK 的导入行**接管**（删旧行、改指向），避免「重复且打不开」的条目
+     （与 `ISSUE-050` 同型问题）。
+  ⑥ 台账两张表在 `beforeOpen` 用 `customStatement` 建（幂等）：**不进 drift schema**（`schemaVersion` 仍是 10），
+     因此不触发 codegen / 迁移；也**不进导出容器**（本机状态，新手机重新导入时按当时文件重新判定）。
+- 理由: 数据文件很小、用户不会重新导出 ⇒ 记录绝不能丢；把「文件在哪」交给用户显式指定，比启动时反复
+  猜目录更可控；台账 + SQL 过滤能保证「只有确定存在的才显示」，同时不影响导出（导出仍读全量行）。
+- 备选与为何不选:
+  - **给 `media_items` 加 `dataset_id` / `file_present` 列**：要 schema v11 + 重新跑 drift codegen，
+    而本机 `dart run` / `build_runner` 静默挂死（`PIT-079`），不可用；
+  - **待关联行放旁路 JSON/SQLite，找到文件后再插入 `media_items`**：导出只读 drift 表 ⇒ 待关联记录
+    会从下一份「保险库数据」里消失（等于二次丢数据）；
+  - **旧行为：缺文件就删行**：`ISSUE-050` 的原始事故；
+  - **启动时自动重导（`ADR-052`）**：依赖归档目录一直存在，且每次都扫全部保险库根，用户也无法选择目录。
+- 影响 / 约束（后续改动必须注意）:
+  - `media_items` 里允许存在 `private_path` 指向**旧手机**的「待关联」行；新代码不要假设路径一定存在，
+    列表类查询已过滤，直接按 id 取行的代码（导出、purge、修复）要自己判断。
+  - `listAllMediaRows()` / `listActiveMediaRows()` / `listRecycleBinRows()` **不过滤**（导出需要全量）；
+    `watchActiveMedia/watchFavorites/watchRecycleBin/watchInUserAlbum`、计数、封面、`sumMediaBytes`、
+    `listUnencrypted/listEncrypted/**listActiveMedia**` 均已过滤。
+  - `MaintenanceService._purgeMissingFiles` / 回收站清理走已过滤的 watch 流 ⇒ 不会误删台账行；
+    新增「清理缺失文件」逻辑时必须同样跳过 `vault_dataset_media` 里 `present = 0` 的行。
+  - 数据集 SQL 只能用 `customSelect / customInsert / customUpdate`（`customStatement` 不接受命名 `variables:`）；
+    手写 SQL 改动按 `PIT-078` 的方式用 Python sqlite3 复刻验证。
+  - 导出的「保险库数据」**不含台账**；在另一台手机重新导入时，`present` 由导入当下的文件情况重新决定。
+- 相关文件: `lib/data/services/vault_dataset_service.dart`（新）、`lib/data/db/database.dart`、
+  `lib/data/services/vault_backup_restore_install.dart`、`vault_backup_restore.dart`、
+  `vault_backup_service.dart`、`lib/application/providers.dart`、
+  `lib/presentation/settings/vault_data_screen.dart`（新）、`settings_screen.dart`、
+  `lib/l10n/app_localizations.dart`
+- 相关条目: `ADR-049`、`ADR-052`（①②③ 被本条取代）、`ADR-053`、`ISSUE-050`、`PIT-078`、`PIT-079`
+- 验证: `dart analyze lib` 无 error；Python sqlite3 复刻三张表 + 可见性 / 汇总 / 待关联 JOIN / UPSERT 四条 SQL，
+  断言全绿；真机待验证（导入缺文件数据 → 相册不显示 → 关联目录后出现）。
+- 首次记录: 2026-11-11
+
+## ADR-055 视频手势：双击暂停/继续 + 上下滑调音量并入 `VideoSwipeSeekLayer`
+- 日期: 2026-11-11 | 状态: 已采纳（`dart analyze` 通过；真机待验证）
+- 背景: 三个视频界面（`PlayerScreen` / `ViewerScreen` / `GalleryPreviewScreen`）共用
+  `VideoSwipeSeekLayer`（原始指针事件，`ISSUE-021` / `ADR-028`），此前只处理横向快进/快退。
+  需要：双击播放区暂停/继续；上滑增大音量、下滑减小音量。
+- 决策:
+  ① 双击：三个界面的播放区 `GestureDetector` 加 `onDoubleTap`。`PlayerScreen` 走
+     `PlayerController.togglePlayPause()`（原生播放器由 build 里的同步逻辑跟随 `ui.playing`）；
+     另两个界面走各自的 `_togglePlayPause()`（已含「播完后重建播放器」分支，`ISSUE-022`）。
+     单击仍切控制条，因同时存在 `onDoubleTap`，单击生效会延迟约 300ms（可接受）。
+  ② 音量：在同一层加「竖滑锁」——`|dy| ≥ 8` 且 `|dy| > 2*|dx|` 时锁定竖向，
+     音量 = `起点音量 - dy / (屏高 * 0.45)`，改的是**播放器音量**（`NativeVideoController.setVolume`，
+     与静音开关同口径），只在百分比变化时下发原生调用；提示为居中 `VideoVolumeIndicator`。
+  ③ 方向锁互斥：横滑判定保持原样（`|dx| ≥ 2` 且 `|dx|*5 ≥ |dy|`），两者不会同时生效。
+  ④ 音量降到 0 时回调 `onVolumeChanged`，三个界面把静音开关状态同步过去（避免"看起来静音其实有声"）。
+- 理由: 复用已验证的原始指针层（既解决命中测试问题，又不改 UI 结构）；播放器音量不依赖系统音量通道，
+  也不需要额外权限；与现有静音开关共用同一状态（`controller.value.volume`）。
+- 备选与为何不选: 调**系统媒体音量**（`PlaybackDisplayService.setVolume`）——与静音开关状态不同步，
+  还要额外把界面和播放器音量对齐；用 `onVerticalDragEnd` ——会被 `PageView`/`Slider` 抢手势（`ISSUE-021`）。
+- 影响 / 约束: 手势类改动 `dart analyze` 覆盖不到，必须真机验证（`ADR-027`）；竖滑区域与上下控制条
+  重叠（`HitTestBehavior.opaque` 覆盖整个播放区），点到按钮仍由按钮优先（按钮在手势层上层）。
+- 相关文件: `lib/presentation/player/video_swipe_seek.dart`、`video_player_controls.dart`（`VideoVolumeIndicator`）、
+  `player_screen.dart`、`lib/presentation/viewer/viewer_screen.dart`、
+  `lib/presentation/visible/gallery_preview_screen.dart`
+- 相关条目: `ISSUE-021`、`ADR-028`、`ISSUE-022`、`ADR-027`
+- 首次记录: 2026-11-11
 

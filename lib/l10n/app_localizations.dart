@@ -540,7 +540,8 @@ class AppLocalizations {
 
   String get importVault => '导入保险库数据…';
 
-  String get importVaultSubtitle => '从数据文件恢复；媒体文件请先单独拷贝回保险库目录';
+  String get importVaultSubtitle =>
+      '从数据文件恢复记录；媒体可稍后拷贝，再到「保险库数据管理」关联路径';
 
   String get backupExportWarning => '导出会保存全部媒体记录、相册、加密密钥和应用设置，'
       '但不会包含媒体文件本体（它们已保存在手机存储里，请单独拷贝）。\n\n'
@@ -549,8 +550,8 @@ class AppLocalizations {
 
   String get backupImportWarning => '导入会恢复记录、相册、设置，并把其中的加密密钥'
       '登记为额外密钥，不会覆盖本机当前密钥。\n\n'
-      '媒体文件不在数据文件里：请先把它们（保持原文件名）单独拷贝到本应用的保险库目录，'
-      '导入时会按文件名自动匹配；找不到文件的条目会被跳过。\n\n继续导入？';
+      '媒体文件不在数据文件里：可以稍后再拷贝（保持原文件名），导入时会按文件名自动匹配；'
+      '暂时找不到文件的记录会先隐藏，到「设置 → 保险库数据管理」关联媒体目录后重新扫描即可。\n\n继续导入？';
 
   String get backupExportPickerTitle => '选择数据存放文件夹';
 
@@ -1199,4 +1200,48 @@ class AppLocalizations {
       '请选择一个具体的文件夹，而不是存储根目录';
 
   String get vaultLibraryOperationFailed => '操作失败，请重试';
+
+  // ── 保险库数据管理（导入的保险库数据 + 手动关联路径） ────────────────
+
+  String get vaultDataManagement => '保险库数据管理';
+
+  String get vaultDataManagementSubtitle =>
+      '管理导入过的保险库数据：先关联媒体所在目录，再扫描确认文件是否存在';
+
+  String get vaultDataEmpty => '还没有导入过保险库数据';
+
+  String get vaultDataEmptyHint =>
+      '在「存储 → 导入保险库数据」导入数据文件后，回到这里为它关联媒体所在的目录';
+
+  String get vaultDataLinkPath => '关联保险库路径…';
+
+  String get vaultDataRescan => '重新扫描';
+
+  String get vaultDataRemove => '移除导入数据';
+
+  String get vaultDataRemoveTitle => '移除这份导入数据？';
+
+  String get vaultDataRemoveBody =>
+      '还没找到文件的记录会被丢弃；已经确认存在的媒体仍留在私密相册里，磁盘上的文件不会被删除。';
+
+  String vaultDataRemoved(int count) => '已移除，丢弃 $count 条待关联记录';
+
+  String vaultDataScanDone(int linked, int missing) => missing == 0
+      ? '扫描完成：新关联 $linked 个文件，这份数据已全部找到'
+      : '扫描完成：新关联 $linked 个文件，还有 $missing 个文件未找到';
+
+  String vaultDataCounts(int total, int present, int missing) =>
+      '共 $total 项 · 已确认 $present 项 · 缺失 $missing 项';
+
+  String vaultDataImportedAt(String time) => '导入于 $time';
+
+  String get vaultDataLinkedPaths => '已关联路径';
+
+  String get vaultDataNoLinkedPath => '尚未关联路径';
+
+  String get vaultDataMissingHint => '只有确认存在的文件才会显示在私密相册里';
+
+  String get vaultDataScanHint => '扫描只处理还没找到文件的记录，已确认存在的不再参与判断';
+
+  String get vaultDataArchiveLocation => '数据文件';
 }

@@ -20,6 +20,7 @@ import 'encryption_key_manager.dart';
 import 'hide_naming.dart';
 import 'key_backup_service.dart';
 import 'security_service.dart';
+import 'vault_dataset_service.dart';
 import 'vault_library_registry.dart';
 import 'vault_storage_service.dart';
 import '../../core/utils/app_logger.dart';
@@ -64,6 +65,7 @@ class VaultBackupService implements VaultBackupOperations {
     SharedPreferences? preferences,
     KeyBackupService? keyBackup,
     EncryptionKeyLinkBackfill? backfill,
+    VaultDatasetService? datasets,
     bool usePrivateMediaStorage = false,
   })  : _db = db,
         _media = media,
@@ -75,6 +77,7 @@ class VaultBackupService implements VaultBackupOperations {
         _preferences = preferences,
         _keyBackup = keyBackup,
         _backfill = backfill,
+        _datasets = datasets,
         _usePrivateMediaStorage = usePrivateMediaStorage;
 
   /// Legacy container (v1..v6): the JSON manifest at the root of the folder.
@@ -117,6 +120,9 @@ class VaultBackupService implements VaultBackupOperations {
 
   /// Fills blank key links after restoring an older (v1..v5) backup.
   final EncryptionKeyLinkBackfill? _backfill;
+
+  /// 「保险库数据管理」台账：导入的数据集与「文件是否已定位」记录。
+  final VaultDatasetService? _datasets;
 
   final bool _usePrivateMediaStorage;
 
@@ -165,6 +171,7 @@ class VaultBackupService implements VaultBackupOperations {
       keyBackup: _keyBackup,
       backfill: _backfill,
       pending: _pending,
+      datasets: _datasets,
     ).run(
       sourceDirectory,
       session: session,

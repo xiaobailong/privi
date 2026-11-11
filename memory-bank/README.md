@@ -212,6 +212,10 @@
 | 用 editor 改完文件后 git 警告 `LF will be replaced by CRLF` / 状态一片 M | `PIT-077` |
 | 「保险库数据」导出的是 JSON 还是 SQLite / 数据文件叫什么 / 旧 `privi_manifest.json` 还能导入吗 | `ADR-053`、`ADR-049`、`ADR-052` |
 | 手写 SQL（`db.prepare` + `execute`）怎么在真机前静态校验 / `dart analyze` 通过但 SQL 是错的 | `PIT-078` |
+| 导入的保险库数据在媒体没拷齐时怎么办 / 只有确认存在的文件才显示在私密相册 | `ADR-054`、`ADR-052`、`ISSUE-050` |
+| 「保险库数据管理」入口 / 手动关联保险库路径 / 重新扫描 / 移除导入数据 / 缺失标记 | `ADR-054` |
+| 视频双击暂停/继续、上滑加音量下滑减音量怎么实现 / 调的是播放器音量 | `ADR-055`、`ISSUE-021` |
+| `dart run build_runner` / `dart pub deps` 挂死、输出 0 字节（codegen 不可用） | `PIT-079`、`ADR-054` |
 
 
 

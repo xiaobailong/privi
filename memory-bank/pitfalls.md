@@ -1440,3 +1440,22 @@
 - 自检: 输出形如 `prepares: 7 value-lists: 7` + 7 条 `[ok] INSERT ...` + 8 条 `[ok] SELECT ...` + `ERRORS=0`
 - 相关: `ADR-053`、`PIT-014`（`dart.exe` 全路径）、`PIT-002`（脚本编码）
 - 首次记录: 2026-11-10
+
+## PIT-079 本机 `dart run` / `dart pub` / `flutter pub` 静默挂死 ⇒ `build_runner`（drift codegen）不可用
+- 触发条件: 想重新生成 `lib/data/db/database.g.dart`（加表 / 加列 / 改 drift schema）时跑
+  `dart run build_runner build --delete-conflicting-outputs`；或只是跑 `dart pub deps` / `flutter pub deps`
+- 错误现象: 进程（`dart.exe`）常驻、CPU 约 3~4s 后归零、重定向的输出文件 **0 字节**，等 5 分钟无任何输出；
+  同时 `dart analyze` / `dart format` 正常，`scripts\tools\build_wmi_guard.ps1` 返回 `OK: WMI …`（不是 WMI 问题）；
+  用 `Get-CimInstance Win32_Process` 看进程命令行正常、没有子进程
+- 正确做法:
+  - **不要靠 build_runner 改 schema**：扩展数据库改用「原生 SQL 表 + 自定义查询」——
+    在 `beforeOpen` 里 `CREATE TABLE IF NOT EXISTS`，查询用 `CustomExpression` / `customSelect`
+    （本次实现见 `ADR-054` 的 `vault_datasets` / `vault_dataset_media`）；
+  - 静态校验只跑 `dart analyze <文件>`；手写 SQL 用 Python `sqlite3` 复刻表结构与语句做断言（同 `PIT-078`）；
+  - 先 `Stop-Process` 掉挂住的 `dart.exe`，别让下一次命令等锁。
+- 反例（别这么写）: 反复 `taskkill` + 重跑 build_runner（本次试了 3 次，全部挂在 0 字节）；
+  以为 WMI 又挂了去重启机器；把 `dart run` 放进 `start /min` 后台等"一会儿就好"
+- 自检: `(Get-Item tmp\codegen_probe.log).Length` 长时间为 0，且 `Get-Process dart | Select Id,CPU`
+  的 CPU 不再增长 ⇒ 命中本条，立刻换方案
+- 首次记录: 2026-11-11（本机 Dart 3.13.3 / drift_dev 2.31.0 / build_runner 2.15.1）
+

@@ -19,6 +19,7 @@ import '../../domain/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../lock/pattern_lock.dart';
 import 'vault_backup_progress_dialog.dart';
+import 'vault_data_screen.dart';
 import 'vault_libraries_screen.dart';
 import '../../core/utils/app_logger.dart';
 
@@ -320,6 +321,17 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => const VaultLibrariesScreen(),
+              ),
+            ),
+          ),
+          ListTile(
+            key: const ValueKey('settings-vault-data'),
+            leading: const Icon(Icons.dns_outlined),
+            title: Text(context.l10n.vaultDataManagement),
+            subtitle: Text(context.l10n.vaultDataManagementSubtitle),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const VaultDataScreen(),
               ),
             ),
           ),

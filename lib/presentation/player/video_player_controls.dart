@@ -180,6 +180,67 @@ class VideoSwipeSeekIndicator extends StatelessWidget {
   }
 }
 
+/// 播放区竖向滑动（上滑增大 / 下滑减小音量）时叠在画面中央的提示：
+/// 喇叭图标 + 百分比 + 音量条，与 [VideoSwipeSeekIndicator] 同一视觉风格。
+class VideoVolumeIndicator extends StatelessWidget {
+  const VideoVolumeIndicator({super.key, required this.volume});
+
+  /// 0.0 ~ 1.0 的播放器音量。
+  final double volume;
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = volume.clamp(0.0, 1.0);
+    final percent = (clamped * 100).round();
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(AppRadii.card),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.md,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              clamped <= 0
+                  ? Icons.volume_off
+                  : (clamped < 0.5 ? Icons.volume_down : Icons.volume_up),
+              color: Colors.white,
+              size: 30,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              '$percent%',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            SizedBox(
+              width: 96,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: clamped,
+                  minHeight: 4,
+                  color: Colors.white,
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class NativeVideoBottomControls extends StatefulWidget {
   const NativeVideoBottomControls({
     super.key,

@@ -20,6 +20,18 @@ class AppDatabase extends _$AppDatabase {
   @override
   int get schemaVersion => 10;
 
+  /// 只有「确认存在」的媒体行才出现在私密相册里。
+  ///
+  /// `vault_dataset_media` 是「保险库数据管理」的本地台账（原生 SQL 表，见
+  /// [ensureVaultDatasetTables]）：导入时没有在手机上找到文件的记录先记成
+  /// `present = 0`，用户在「保险库数据管理」里手动关联目录并扫描成功后才会
+  /// 翻成 1。用 `NOT EXISTS` 子查询（而不是 `NOT IN (上千个 id)`）既能走
+  /// `media_id` 索引，也不会撞到 SQLite 的绑定变量上限。
+  static const Expression<bool> _fileLocated = CustomExpression<bool>(
+    'NOT EXISTS (SELECT 1 FROM vault_dataset_media vdm '
+    'WHERE vdm.media_id = media_items.id AND vdm.present = 0)',
+  );
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
@@ -61,6 +73,11 @@ class AppDatabase extends _$AppDatabase {
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
 
+          // Local bookkeeping for「保险库数据管理」(ADR-054). A raw table, not a
+          // drift table: it must not take part in the exported data model, and
+          // creating it here keeps `schemaVersion` untouched.
+          await ensureVaultDatasetTables();
+
           // One-release safety net for installs whose schema version was
           // advanced by an older build without applying the ALTER TABLE.
           final repairedOriginalPath = await _ensureOriginalPathColumn();
@@ -94,6 +111,46 @@ class AppDatabase extends _$AppDatabase {
           await _createPerfIndexes();
         },
       );
+
+  /// 创建「保险库数据管理」的本地台账表（幂等，每次打开库都跑）。
+  ///
+  /// 两张表都是**原生 SQL 表**，不进 drift schema、不进导出容器：
+  /// - `vault_datasets`：一条记录 = 一次「导入保险库数据」，含归档目录、
+  ///   导入时间与用户手动关联过的保险库路径（JSON 数组）；
+  /// - `vault_dataset_media`：每条导入的媒体记录一行，`present = 0` 表示
+  ///   「文件还没在这台手机上找到」⇒ 该行不出现在私密相册里（[_fileLocated]）。
+  Future<void> ensureVaultDatasetTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS vault_datasets (
+        id TEXT NOT NULL PRIMARY KEY,
+        name TEXT NOT NULL,
+        archive_path TEXT NOT NULL,
+        archive_file TEXT NULL,
+        imported_at INTEGER NOT NULL,
+        linked_paths TEXT NOT NULL DEFAULT '[]'
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS vault_dataset_media (
+        dataset_id TEXT NOT NULL,
+        media_id TEXT NOT NULL,
+        archived_path TEXT NOT NULL,
+        is_video INTEGER NOT NULL DEFAULT 0,
+        rating INTEGER NOT NULL DEFAULT 0,
+        in_recycle INTEGER NOT NULL DEFAULT 0,
+        present INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (dataset_id, media_id)
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_vault_dataset_media_media '
+      'ON vault_dataset_media(media_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_vault_dataset_media_pending '
+      'ON vault_dataset_media(dataset_id, present)',
+    );
+  }
 
   Future<bool> _ensureOriginalPathColumn() async {
     final names = await _columnNames('media_items');
@@ -539,14 +596,22 @@ class AppDatabase extends _$AppDatabase {
   /// Active media rows that have not been encrypted yet (encryptedDek is null).
   Future<List<MediaItemRow>> listUnencryptedActiveMediaRows() {
     return (select(mediaItems)
-          ..where((t) => t.deletedAt.isNull() & t.encryptedDek.isNull()))
+          ..where(
+            (t) =>
+                t.deletedAt.isNull() & t.encryptedDek.isNull() & _fileLocated,
+          ))
         .get();
   }
 
   /// Active media rows whose encryptedDek is NOT null (already encrypted).
   Future<List<MediaItemRow>> listEncryptedActiveMediaRows() {
     return (select(mediaItems)
-          ..where((t) => t.deletedAt.isNull() & t.encryptedDek.isNotNull()))
+          ..where(
+            (t) =>
+                t.deletedAt.isNull() &
+                t.encryptedDek.isNotNull() &
+                _fileLocated,
+          ))
         .get();
   }
 
@@ -604,7 +669,7 @@ class AppDatabase extends _$AppDatabase {
 
   Stream<List<MediaItemRow>> watchActiveMedia() {
     return (select(mediaItems)
-          ..where((t) => t.deletedAt.isNull())
+          ..where((t) => t.deletedAt.isNull() & _fileLocated)
           ..orderBy([
             (_) => _originalMediaDateDesc,
             (_) => _originalMediaNameAsc,
@@ -615,7 +680,10 @@ class AppDatabase extends _$AppDatabase {
   Stream<List<MediaItemRow>> watchFavorites() {
     return (select(mediaItems)
           ..where(
-            (t) => t.deletedAt.isNull() & t.rating.isBiggerOrEqualValue(1),
+            (t) =>
+                t.deletedAt.isNull() &
+                t.rating.isBiggerOrEqualValue(1) &
+                _fileLocated,
           )
           ..orderBy([
             (_) => _originalMediaDateDesc,
@@ -626,7 +694,7 @@ class AppDatabase extends _$AppDatabase {
 
   Stream<List<MediaItemRow>> watchRecycleBin() {
     return (select(mediaItems)
-          ..where((t) => t.deletedAt.isNotNull())
+          ..where((t) => t.deletedAt.isNotNull() & _fileLocated)
           ..orderBy([(t) => OrderingTerm.desc(t.deletedAt)]))
         .watch();
   }
@@ -639,7 +707,9 @@ class AppDatabase extends _$AppDatabase {
       ),
     ])
       ..where(
-        albumMedia.albumId.equals(albumId) & mediaItems.deletedAt.isNull(),
+        albumMedia.albumId.equals(albumId) &
+            mediaItems.deletedAt.isNull() &
+            _fileLocated,
       )
       ..orderBy([
         _originalMediaDateDesc,
@@ -654,7 +724,7 @@ class AppDatabase extends _$AppDatabase {
   /// [isVideo] null = all kinds; true/false = photos XOR videos (home filter).
   Future<int> countActiveMedia({bool? isVideo}) async {
     final c = countAll();
-    var pred = mediaItems.deletedAt.isNull();
+    var pred = mediaItems.deletedAt.isNull() & _fileLocated;
     if (isVideo != null) {
       pred = pred & mediaItems.isVideo.equals(isVideo);
     }
@@ -669,7 +739,7 @@ class AppDatabase extends _$AppDatabase {
   Future<List<String>> listActivePrivatePaths() async {
     final q = selectOnly(mediaItems)
       ..addColumns([mediaItems.privatePath])
-      ..where(mediaItems.deletedAt.isNull());
+      ..where(mediaItems.deletedAt.isNull() & _fileLocated);
     final rows = await q.get();
     return [
       for (final r in rows) r.read(mediaItems.privatePath)!,
@@ -680,7 +750,9 @@ class AppDatabase extends _$AppDatabase {
     final query = selectOnly(mediaItems)
       ..addColumns([mediaItems.originalPath])
       ..where(
-        mediaItems.deletedAt.isNull() & mediaItems.originalPath.isNotNull(),
+        mediaItems.deletedAt.isNull() &
+            mediaItems.originalPath.isNotNull() &
+            _fileLocated,
       );
     final rows = await query.get();
     return [
@@ -692,7 +764,9 @@ class AppDatabase extends _$AppDatabase {
   /// Sum of sizeBytes for active + recycle (vault storage estimate).
   Future<int> sumMediaBytes() async {
     final total = mediaItems.sizeBytes.sum();
-    final q = selectOnly(mediaItems)..addColumns([total]);
+    final q = selectOnly(mediaItems)
+      ..addColumns([total])
+      ..where(_fileLocated);
     final row = await q.getSingle();
     return row.read(total) ?? 0;
   }
@@ -715,7 +789,8 @@ class AppDatabase extends _$AppDatabase {
   Future<int> countFavorites({bool? isVideo}) async {
     final c = countAll();
     var pred = mediaItems.deletedAt.isNull() &
-        mediaItems.rating.isBiggerOrEqualValue(1);
+        mediaItems.rating.isBiggerOrEqualValue(1) &
+        _fileLocated;
     if (isVideo != null) {
       pred = pred & mediaItems.isVideo.equals(isVideo);
     }
@@ -728,7 +803,7 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> countRecycle({bool? isVideo}) async {
     final c = countAll();
-    var pred = mediaItems.deletedAt.isNotNull();
+    var pred = mediaItems.deletedAt.isNotNull() & _fileLocated;
     if (isVideo != null) {
       pred = pred & mediaItems.isVideo.equals(isVideo);
     }
@@ -742,7 +817,7 @@ class AppDatabase extends _$AppDatabase {
   Future<MediaItemRow?> latestActiveMedia({bool? isVideo}) {
     return (select(mediaItems)
           ..where((t) {
-            var p = t.deletedAt.isNull();
+            var p = t.deletedAt.isNull() & _fileLocated;
             if (isVideo != null) p = p & t.isVideo.equals(isVideo);
             return p;
           })
@@ -757,7 +832,9 @@ class AppDatabase extends _$AppDatabase {
   Future<MediaItemRow?> latestFavorite({bool? isVideo}) {
     return (select(mediaItems)
           ..where((t) {
-            var p = t.deletedAt.isNull() & t.rating.isBiggerOrEqualValue(1);
+            var p = t.deletedAt.isNull() &
+                t.rating.isBiggerOrEqualValue(1) &
+                _fileLocated;
             if (isVideo != null) p = p & t.isVideo.equals(isVideo);
             return p;
           })
@@ -772,7 +849,7 @@ class AppDatabase extends _$AppDatabase {
   Future<MediaItemRow?> latestRecycle({bool? isVideo}) {
     return (select(mediaItems)
           ..where((t) {
-            var p = t.deletedAt.isNotNull();
+            var p = t.deletedAt.isNotNull() & _fileLocated;
             if (isVideo != null) p = p & t.isVideo.equals(isVideo);
             return p;
           })
@@ -854,8 +931,9 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> countMembership(String albumId, {bool? isVideo}) async {
     final c = countAll();
-    var pred =
-        albumMedia.albumId.equals(albumId) & mediaItems.deletedAt.isNull();
+    var pred = albumMedia.albumId.equals(albumId) &
+        mediaItems.deletedAt.isNull() &
+        _fileLocated;
     if (isVideo != null) {
       pred = pred & mediaItems.isVideo.equals(isVideo);
     }
@@ -875,8 +953,9 @@ class AppDatabase extends _$AppDatabase {
     String albumId, {
     bool? isVideo,
   }) async {
-    var pred =
-        albumMedia.albumId.equals(albumId) & mediaItems.deletedAt.isNull();
+    var pred = albumMedia.albumId.equals(albumId) &
+        mediaItems.deletedAt.isNull() &
+        _fileLocated;
     if (isVideo != null) {
       pred = pred & mediaItems.isVideo.equals(isVideo);
     }
@@ -1071,7 +1150,9 @@ class AppDatabase extends _$AppDatabase {
       ),
     ])
       ..where(
-        albumMedia.albumId.equals(albumId) & mediaItems.deletedAt.isNull(),
+        albumMedia.albumId.equals(albumId) &
+            mediaItems.deletedAt.isNull() &
+            _fileLocated,
       )
       ..orderBy([
         _originalMediaDateDesc,
@@ -1083,7 +1164,7 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<MediaItemRow>> listActiveMedia() {
     return (select(mediaItems)
-          ..where((t) => t.deletedAt.isNull())
+          ..where((t) => t.deletedAt.isNull() & _fileLocated)
           ..orderBy([
             (_) => _originalMediaDateDesc,
             (_) => _originalMediaNameAsc,
@@ -1094,7 +1175,10 @@ class AppDatabase extends _$AppDatabase {
   Future<List<MediaItemRow>> listFavorites() {
     return (select(mediaItems)
           ..where(
-            (t) => t.deletedAt.isNull() & t.rating.isBiggerOrEqualValue(1),
+            (t) =>
+                t.deletedAt.isNull() &
+                t.rating.isBiggerOrEqualValue(1) &
+                _fileLocated,
           )
           ..orderBy([
             (_) => _originalMediaDateDesc,

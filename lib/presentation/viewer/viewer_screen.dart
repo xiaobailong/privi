@@ -726,6 +726,13 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
 
   void _toggleChrome() => setState(() => _chrome = !_chrome);
 
+  /// 竖向滑动调音量后让静音开关跟随（音量降到 0 即视为静音）。
+  void _onGestureVolume(double volume) {
+    final muted = volume <= 0;
+    if (_muted == muted) return;
+    setState(() => _muted = muted);
+  }
+
   void _hideChrome() {
     if (_chrome) setState(() => _chrome = false);
   }
@@ -921,11 +928,14 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen>
           value.isInitialized ? child! : _videoPlaceholder(item, active),
       child: GestureDetector(
         onTap: _toggleChrome,
+        // 双击播放区：暂停 ⇄ 继续（三个视频界面统一行为）。
+        onDoubleTap: _togglePlayPause,
         // 播放区横向滑动：右滑快进 / 左滑快退（与播放列表页、可见库预览共用同一实现）。
         child: VideoSwipeSeekLayer(
           controller: video,
           itemId: item.id,
           onSeek: _seekTo,
+          onVolumeChanged: _onGestureVolume,
           child: NativeVideoViewport(controller: video, fitMode: _fitMode),
         ),
       ),

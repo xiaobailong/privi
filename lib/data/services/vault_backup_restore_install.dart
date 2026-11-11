@@ -10,6 +10,7 @@ final class _VaultBackupRestoreInstaller {
     required this.platformName,
     required this.usePrivateMediaStorage,
     required this.files,
+    this.datasets,
   });
 
   final AppDatabase db;
@@ -21,12 +22,16 @@ final class _VaultBackupRestoreInstaller {
   final bool usePrivateMediaStorage;
   final _VaultBackupFileOps files;
 
+  /// 「保险库数据管理」台账；为 null 时（单元测试/旧调用）只导入记录，不记账。
+  final VaultDatasetService? datasets;
+
   Future<VaultBackupResult> run(
     _BackupManifest manifest,
     List<_RestoreMediaPlan> plans,
     VaultBackupSession session,
-    VaultBackupProgressCallback? onProgress,
-  ) async {
+    VaultBackupProgressCallback? onProgress, {
+    String? datasetId,
+  }) async {
     final installed = <_InstalledMedia>[];
     var restoredCount = 0;
     try {
@@ -41,18 +46,19 @@ final class _VaultBackupRestoreInstaller {
           plan.originalName,
         );
         if (manifest.dataOnly) {
-          // v6: no payload to copy. Point the restored row at the media file
-          // the user already placed in phone storage.
+          // v6: no payload to copy. A row whose file was found in phone storage
+          // points at it directly; a row whose file has not been copied yet is
+          // imported too (metadata, DEK and key id are far more valuable than a
+          // dropped row) and stays invisible until the user links the directory
+          // that holds it in「保险库数据管理」(ADR-054).
           final localPath = plan.localPath;
-          if (!plan.skipExisting &&
-              !plan.missingLocalFile &&
-              localPath != null) {
-            final destination = File(localPath);
+          if (!plan.skipExisting) {
             installed.add(
               _InstalledMedia(
                 plan: plan,
-                destination: destination,
-                thumbnailPath: await _localThumbnailPath(plan),
+                destination: File(localPath ?? _archivedPathOf(plan)),
+                thumbnailPath:
+                    localPath == null ? null : await _localThumbnailPath(plan),
                 createdFiles: const [],
               ),
             );
@@ -123,6 +129,22 @@ final class _VaultBackupRestoreInstaller {
               .map((item) => _mediaEntry(item, manifest.version))
               .toList(growable: false),
         );
+        if (manifest.dataOnly && datasetId != null && datasets != null) {
+          // Ledger for「保险库数据管理」: which of these rows still wait for
+          // their file. `present` is only ever raised (see
+          // `VaultDatasetService.recordImportedRows`).
+          await datasets!.recordImportedRows(datasetId, [
+            for (final entry in installed)
+              VaultDatasetMediaRecord(
+                mediaId: entry.plan.id,
+                archivedPath: _archivedPathOf(entry.plan),
+                isVideo: entry.plan.media.isVideo ?? false,
+                rating: entry.plan.media.rating ?? 0,
+                inRecycle: entry.plan.media.deletedAt != null,
+                present: entry.plan.localPath != null,
+              ),
+          ]);
+        }
         if (manifest.version >= 2) {
           await _restoreMemberships(manifest.memberships, albumIdMap);
         } else {
@@ -178,6 +200,25 @@ final class _VaultBackupRestoreInstaller {
     return null;
   }
 
+  /// Data-only rows whose file is not on this phone yet have no length; a
+  /// missing file must not abort the whole import (`lengthSync` would throw).
+  static int _existingLength(File file) {
+    try {
+      return file.lengthSync();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 导出手机上的私密路径；老数据没有该字段时退回数据文件名。
+  ///
+  /// 「保险库数据管理」按 **basename** 匹配文件，所以两种取值都能用来重连。
+  String _archivedPathOf(_RestoreMediaPlan plan) {
+    final recorded = plan.media.privatePath;
+    if (recorded != null && recorded.isNotEmpty) return recorded;
+    return plan.media.fileName;
+  }
+
   ({MediaItem item, String? userAlbumId}) _mediaEntry(
     _InstalledMedia installed,
     int version,
@@ -201,7 +242,7 @@ final class _VaultBackupRestoreInstaller {
         dateAdded: item.dateAdded ?? DateTime.now().toUtc(),
         dateTaken: item.dateTaken,
         sizeBytes: dataOnly
-            ? (item.sizeBytes ?? installed.destination.lengthSync())
+            ? (item.sizeBytes ?? _existingLength(installed.destination))
             : installed.destination.lengthSync(),
         thumbnailPath: installed.thumbnailPath,
         deletedAt: item.deletedAt,

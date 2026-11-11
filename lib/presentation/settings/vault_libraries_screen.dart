@@ -9,6 +9,7 @@ import '../../application/providers.dart';
 import '../../core/l10n.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/vault_library_registry.dart';
+import 'vault_data_screen.dart';
 
 /// Settings → 保险库管理.
 ///
@@ -77,6 +78,19 @@ class _VaultLibrariesScreenState extends ConsumerState<VaultLibrariesScreen> {
                 title: Text(l10n.vaultLibraryAdd),
                 subtitle: Text(l10n.vaultLibraryAddHint),
                 onTap: _busy ? null : _addLibrary,
+              ),
+              ListTile(
+                key: const ValueKey('vault-library-data'),
+                leading: const Icon(Icons.dns_outlined),
+                title: Text(l10n.vaultDataManagement),
+                subtitle: Text(l10n.vaultDataManagementSubtitle),
+                onTap: _busy
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const VaultDataScreen(),
+                          ),
+                        ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),

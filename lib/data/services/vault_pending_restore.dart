@@ -20,7 +20,6 @@ final class _PendingRestoreStore {
   const _PendingRestoreStore();
 
   static const String fileName = 'pending_restore.json';
-  static const int formatVersion = 1;
 
   Future<Directory> _root() async {
     final docs = await getApplicationDocumentsDirectory();
@@ -60,34 +59,6 @@ final class _PendingRestoreStore {
   }
 
   Future<bool> get hasPending async => await sourceDirectory() != null;
-
-  /// Records that [missing] of [total] backup rows still wait for their file.
-  Future<void> remember(
-    String sourceDirectory, {
-    required int missing,
-    required int total,
-  }) async {
-    try {
-      final root = await _root();
-      await root.create(recursive: true);
-      await File(p.join(root.path, fileName)).writeAsString(
-        jsonEncode(<String, Object?>{
-          'version': formatVersion,
-          'directory': sourceDirectory,
-          'missing': missing,
-          'total': total,
-          'recordedAt': DateTime.now().toUtc().toIso8601String(),
-        }),
-        flush: true,
-      );
-      AppLogger.i(
-        'VaultPendingRestore',
-        '$missing/$total media row(s) wait for their files; archive=$sourceDirectory',
-      );
-    } catch (e) {
-      AppLogger.w('VaultPendingRestore', 'could not record marker: $e');
-    }
-  }
 
   Future<void> clear() async {
     try {
