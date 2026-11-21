@@ -5,6 +5,7 @@ import '../../application/providers.dart';
 import '../../core/constants.dart';
 import '../../core/media_thumbnail_spec.dart';
 import '../../core/theme/vault_colors.dart';
+import '../../core/utils/file_size_format.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
 import '../common/video_duration_badge.dart';
@@ -148,6 +149,14 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                       onRate: widget.onRate,
                     ),
                   ],
+                ),
+              ),
+              Text(
+                formatFileSize(item.sizeBytes),
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
               if (widget.selecting)

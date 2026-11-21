@@ -22,6 +22,7 @@ import 'vault_backup_progress_dialog.dart';
 import 'vault_data_screen.dart';
 import 'vault_libraries_screen.dart';
 import '../../core/utils/app_logger.dart';
+import '../../core/utils/file_size_format.dart';
 
 /// Full settings — security, display, playback, storage export/import.
 /// Guards the "Encrypt existing files" flow (ISSUE-030): the progress dialog is
@@ -339,7 +340,7 @@ class SettingsScreen extends ConsumerWidget {
             builder: (context, ref, _) {
               final sizeAsync = ref.watch(vaultSizeBytesProvider);
               final subtitle = sizeAsync.when(
-                data: (b) => _formatBytes(b),
+                data: (b) => formatFileSize(b),
                 loading: () => context.l10n.calculating,
                 error: (_, __) => '—',
               );
@@ -795,8 +796,7 @@ class SettingsScreen extends ConsumerWidget {
                     stats.failed > 0
                         ? context.l10n
                             .decryptResultPartial(stats.decrypted, stats.failed)
-                        : context.l10n
-                            .decryptResultSuccess(stats.decrypted),
+                        : context.l10n.decryptResultSuccess(stats.decrypted),
                   if (restoreFilenames)
                     context.l10n.filenameRestoreResult(restoreStats.restored),
                   if (restoreFilenames && restoreStats.failed > 0)
@@ -991,8 +991,7 @@ class SettingsScreen extends ConsumerWidget {
                     stats.failed > 0
                         ? context.l10n
                             .encryptResultPartial(stats.encrypted, stats.failed)
-                        : context.l10n
-                            .encryptResultSuccess(stats.encrypted),
+                        : context.l10n.encryptResultSuccess(stats.encrypted),
                   if (encryptContent && stats.missing > 0)
                     context.l10n.encryptMissingFiles(stats.missing),
                   if (encryptContent && stats.skippedNoKey > 0)
@@ -1000,8 +999,7 @@ class SettingsScreen extends ConsumerWidget {
                   if (encryptFilenames)
                     context.l10n.filenameEncryptResult(renameStats.renamed),
                   if (encryptFilenames && renameStats.failed > 0)
-                    context.l10n
-                        .filenameEncryptFailedCount(renameStats.failed),
+                    context.l10n.filenameEncryptFailedCount(renameStats.failed),
                 ];
                 if (lines.isNotEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -1563,16 +1561,6 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  static String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    final kb = bytes / 1024;
-    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
-    final mb = kb / 1024;
-    if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
-    final gb = mb / 1024;
-    return '${gb.toStringAsFixed(2)} GB';
-  }
-
   Future<void> _startBackup(
     BuildContext context,
     WidgetRef ref,
@@ -1680,7 +1668,7 @@ class SettingsScreen extends ConsumerWidget {
         VaultBackupStage.completed => l10n.backupStageComplete,
       },
       itemCount: l10n.backupItemCount,
-      totalSize: _formatBytes,
+      totalSize: (bytes) => formatFileSize(bytes),
       progressCount: l10n.backupProgressCount,
       errorMessage: (error) => _backupErrorMessage(
         context,
@@ -1945,7 +1933,6 @@ class _EncryptChoice {
   final bool renameFilenames;
 }
 
-
 /// Confirmation dialog for "Decrypt all files" — the mirror of
 /// [_EncryptOptionsDialog].
 ///
@@ -1969,8 +1956,7 @@ class _DecryptOptionsDialog extends StatefulWidget {
 
 class _DecryptOptionsDialogState extends State<_DecryptOptionsDialog> {
   late bool _content = widget.ciphertextCount > 0;
-  late bool _filenames =
-      widget.ciphertextCount == 0 && widget.renameCount > 0;
+  late bool _filenames = widget.ciphertextCount == 0 && widget.renameCount > 0;
 
   @override
   Widget build(BuildContext context) {
@@ -2064,4 +2050,3 @@ class _DecryptChoice {
   final bool decryptContent;
   final bool restoreFilenames;
 }
-

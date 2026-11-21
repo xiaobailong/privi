@@ -57,6 +57,7 @@ class GalleryAsset {
     required this.title,
     this.durationMs,
     this.createDateMs,
+    this.sizeBytes,
   });
 
   final String id;
@@ -66,6 +67,10 @@ class GalleryAsset {
 
   /// Epoch ms from MediaStore (for client-side sort in Visible grids).
   final int? createDateMs;
+
+  /// File size in bytes from MediaStore's `SIZE` column. Null when the lookup
+  /// failed (the list row then renders `—` instead of a size).
+  final int? sizeBytes;
 }
 
 sealed class VisibleMutation {
@@ -574,22 +579,54 @@ class GalleryService {
       page: page,
       size: size,
     );
-    final out = <GalleryAsset>[];
+    final visible = <AssetEntity>[];
     for (final a in assets) {
       if (_isExcluded(a)) continue;
-      final title = a.title ?? a.id;
-      out.add(
+      visible.add(a);
+      if (visible.length >= size) break;
+    }
+    final sizes = await _fileSizes(visible);
+    return [
+      for (var i = 0; i < visible.length; i++)
         GalleryAsset(
-          id: a.id,
-          isVideo: a.type == AssetType.video,
-          title: title,
-          durationMs: a.type == AssetType.video ? a.duration * 1000 : null,
-          createDateMs: (a.createDateSecond ?? 0) * 1000,
+          id: visible[i].id,
+          isVideo: visible[i].type == AssetType.video,
+          title: visible[i].title ?? visible[i].id,
+          durationMs: visible[i].type == AssetType.video
+              ? visible[i].duration * 1000
+              : null,
+          createDateMs: (visible[i].createDateSecond ?? 0) * 1000,
+          sizeBytes: sizes[i],
         ),
-      );
-      if (out.length >= size) break;
+    ];
+  }
+
+  /// Bounded-concurrency `AssetEntity.fileSize` lookup for a whole page.
+  ///
+  /// The platform call reads MediaStore's `SIZE` column (no file I/O), but each
+  /// asset costs one channel round trip — so fan out in small batches instead
+  /// of 120 at once, and keep null entries when a lookup fails.
+  static const _sizeLookupBatch = 16;
+
+  Future<List<int?>> _fileSizes(List<AssetEntity> assets) async {
+    final out = List<int?>.filled(assets.length, null);
+    for (var i = 0; i < assets.length; i += _sizeLookupBatch) {
+      final end = math.min(i + _sizeLookupBatch, assets.length);
+      await Future.wait([
+        for (var j = i; j < end; j++) _fileSizeOf(assets[j], out, j),
+      ]);
     }
     return out;
+  }
+
+  Future<void> _fileSizeOf(AssetEntity asset, List<int?> out, int index) async {
+    try {
+      final bytes = await asset.fileSize;
+      out[index] = bytes > 0 ? bytes : null;
+    } catch (e) {
+      AppLogger.w('GalleryService', 'fileSize(${asset.id}): $e');
+      out[index] = null;
+    }
   }
 
   /// Loops raw pages so [size] valid assets are always collected without

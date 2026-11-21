@@ -18,6 +18,7 @@ import '../../core/l10n.dart';
 import '../../core/media_thumbnail_spec.dart';
 import '../../core/theme/vault_colors.dart';
 import '../../core/utils/app_logger.dart';
+import '../../core/utils/file_size_format.dart';
 import '../../core/utils/media_chronology.dart';
 import '../../core/utils/media_query_utils.dart';
 import '../../data/services/import/import_models.dart';
@@ -249,8 +250,7 @@ class _VisibleMediaGridState extends ConsumerState<VisibleMediaGrid> {
     if (sources.isNotEmpty) {
       final ok = await external.open(
         filePath: sources.first.path,
-        mimeType:
-            sources.first.mimeType ?? (a.isVideo ? 'video/*' : 'image/*'),
+        mimeType: sources.first.mimeType ?? (a.isVideo ? 'video/*' : 'image/*'),
       );
       if (ok) return true;
     }
@@ -1136,12 +1136,20 @@ class _LazyThumbTileState extends ConsumerState<_LazyThumbTile> {
               Expanded(
                 child: Text(
                   asset.title,
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w600,
                   ),
+                ),
+              ),
+              Text(
+                formatFileSize(asset.sizeBytes),
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
               if (widget.selectMode)

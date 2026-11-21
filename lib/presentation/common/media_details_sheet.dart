@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../core/l10n.dart';
+import '../../core/utils/file_size_format.dart';
 import '../../domain/models/media_item.dart';
 
 Future<void> showMediaDetailsSheet(BuildContext context, MediaItem item) {
@@ -10,7 +11,6 @@ Future<void> showMediaDetailsSheet(BuildContext context, MediaItem item) {
     showDragHandle: true,
     builder: (ctx) {
       final exists = File(item.privatePath).existsSync();
-      final sizeMb = (item.sizeBytes / (1024 * 1024)).toStringAsFixed(2);
       final fmt = DateFormat.yMMMd().add_jm();
       return SafeArea(
         child: Padding(
@@ -30,7 +30,7 @@ Future<void> showMediaDetailsSheet(BuildContext context, MediaItem item) {
                 item.isVideo ? context.l10n.typeVideo : context.l10n.typeImage,
               ),
               _row('MIME', item.mimeType),
-              _row(context.l10n.sizeLabel, '$sizeMb MB'),
+              _row(context.l10n.sizeLabel, formatFileSize(item.sizeBytes)),
               if (item.width != null && item.height != null)
                 _row('Dimensions', '${item.width} × ${item.height}'),
               _row(context.l10n.ratingLabel, '${item.rating} / 3 hearts'),

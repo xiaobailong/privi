@@ -1516,3 +1516,29 @@
 - 相关条目: `ISSUE-021`、`ADR-028`、`ISSUE-022`、`ADR-027`
 - 首次记录: 2026-11-11
 
+## ADR-056 相册列表模式显示文件大小：行尾右侧、等宽小字，网格不加
+- 日期: 2026-11-21 | 状态: 已采纳（IDE 静态分析通过；真机待验证）
+- 背景: 两个相册页（私密库 `ThumbnailTile` / 可见库 `_LazyThumbTile`）的列表模式只有
+  缩略图 + 名称（私密库多一行心形评分），用户希望列表能直接看到文件大小。
+- 决策:
+  ① 只改 `AlbumViewMode.list` 的行组件，网格模式保持不变。
+  ② 布局 A：行高仍 76，大小文本放在行尾右侧、与选中图标并排、垂直居中；
+     字体 `12 / Colors.white54 / FontFeature.tabularFigures()`，名称 `Expanded` 保持省略号。
+  ③ 私密库直接读 `MediaItem.sizeBytes`（DB 已有，零成本）。
+  ④ 可见库 `GalleryAsset` 新增 `sizeBytes`，`listAssets` 用 `AssetEntity.fileSize`
+     （原生查 MediaStore `SIZE` 列，不读文件内容）按 16 并发分批填充；失败置 null，
+     行内显示 `—`。可见库行名称由 2 行改为 1 行，与私密库观感统一。
+  ⑤ 格式化收敛到 `lib/core/utils/file_size_format.dart` 的 `formatFileSize(int?)`，
+     设置页存储合计与媒体详情面板统一改用它（详情面板不再固定两位小数 MB）。
+- 理由: 行尾右侧不增加行高、不与评分控件抢交互区域；等宽数字避免滚动时宽度抖动；
+  私密库零 IO 成本；可见库走 MediaStore 元数据而非读文件，避免列表滚动触发文件 IO。
+- 备选与为何不选: 大小放第二行（要加行高或与心形挤在一行）；缩略图角标（与视频时长徽标混淆）；
+  可见库新增原生批量 `querySizes(ids)`（省 channel 调用但要改 Kotlin 并重新构建，先不做）。
+- 影响 / 约束: 可见库分页每页最多新增 8 批 channel 往返（120 项 / 16），首次加载略慢；
+  若实测明显卡顿再升级为原生批量查询。`GalleryAsset.sizeBytes` 允许 null，新增消费点须按 `—` 处理。
+- 相关文件: `lib/core/utils/file_size_format.dart`、`lib/presentation/grid/thumbnail_tile.dart`、
+  `lib/presentation/visible/visible_media_grid.dart`、`lib/data/services/gallery_service.dart`、
+  `lib/presentation/common/media_details_sheet.dart`、`lib/presentation/settings/settings_screen.dart`
+- 相关条目: `ADR-027`
+- 首次记录: 2026-11-21
+
