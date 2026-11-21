@@ -8,6 +8,7 @@ import '../../core/theme/vault_colors.dart';
 import '../../core/utils/file_size_format.dart';
 import '../../domain/models/media_item.dart';
 import '../common/heart_rating_bar.dart';
+import '../common/middle_ellipsis_text.dart';
 import '../common/video_duration_badge.dart';
 
 /// Dense media cell + 0–3 heart bar.
@@ -130,14 +131,27 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      item.originalName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: MiddleEllipsisText(
+                            item.originalName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          formatFileSize(item.sizeBytes),
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 12,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     HeartRatingBar(
@@ -149,14 +163,6 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                       onRate: widget.onRate,
                     ),
                   ],
-                ),
-              ),
-              Text(
-                formatFileSize(item.sizeBytes),
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
               if (widget.selecting)

@@ -1516,27 +1516,39 @@
 - 相关条目: `ISSUE-021`、`ADR-028`、`ISSUE-022`、`ADR-027`
 - 首次记录: 2026-11-11
 
-## ADR-056 相册列表模式显示文件大小：行尾右侧、等宽小字，网格不加
+## ADR-056 相册列表模式显示文件大小：名称同行、中间省略，网格不加
 - 日期: 2026-11-21 | 状态: 已采纳（IDE 静态分析通过；真机待验证）
 - 背景: 两个相册页（私密库 `ThumbnailTile` / 可见库 `_LazyThumbTile`）的列表模式只有
-  缩略图 + 名称（私密库多一行心形评分），用户希望列表能直接看到文件大小。
+  缩略图 + 名称（私密库多一行心形评分），用户希望列表能直接看到文件大小；同时长文件名
+  尾部省略会把扩展名和尾部序号切掉。
 - 决策:
   ① 只改 `AlbumViewMode.list` 的行组件，网格模式保持不变。
-  ② 布局 A：行高仍 76，大小文本放在行尾右侧、与选中图标并排、垂直居中；
-     字体 `12 / Colors.white54 / FontFeature.tabularFigures()`，名称 `Expanded` 保持省略号。
-  ③ 私密库直接读 `MediaItem.sizeBytes`（DB 已有，零成本）。
-  ④ 可见库 `GalleryAsset` 新增 `sizeBytes`，`listAssets` 用 `AssetEntity.fileSize`
+  ② 布局：行高仍 76。私密库第一行 `Row[Expanded(名称), sm, 大小]`，第二行心形（左对齐）；
+     可见库无评分，只有 `名称 + 大小` 一行，垂直居中。大小字体
+     `12 / Colors.white54 / FontFeature.tabularFigures()`，固定不弹性。
+  ③ 文件名中间省略：新增 `MiddleEllipsisText`（`lib/presentation/common/`），
+     `TextPainter` 二分拟合保头 60% / 保尾 40%，按 `(text, style, maxWidth, textScale)`
+     缓存测量结果；surrogate pair 不切断；宽度无限或极窄时降级。
+  ④ 私密库直接读 `MediaItem.sizeBytes`（DB 已有，零成本）。
+  ⑤ 可见库 `GalleryAsset` 新增 `sizeBytes`，`listAssets` 用 `AssetEntity.fileSize`
      （原生查 MediaStore `SIZE` 列，不读文件内容）按 16 并发分批填充；失败置 null，
      行内显示 `—`。可见库行名称由 2 行改为 1 行，与私密库观感统一。
-  ⑤ 格式化收敛到 `lib/core/utils/file_size_format.dart` 的 `formatFileSize(int?)`，
+  ⑥ 格式化收敛到 `lib/core/utils/file_size_format.dart` 的 `formatFileSize(int?)`，
      设置页存储合计与媒体详情面板统一改用它（详情面板不再固定两位小数 MB）。
-- 理由: 行尾右侧不增加行高、不与评分控件抢交互区域；等宽数字避免滚动时宽度抖动；
-  私密库零 IO 成本；可见库走 MediaStore 元数据而非读文件，避免列表滚动触发文件 IO。
-- 备选与为何不选: 大小放第二行（要加行高或与心形挤在一行）；缩略图角标（与视频时长徽标混淆）；
-  可见库新增原生批量 `querySizes(ids)`（省 channel 调用但要改 Kotlin 并重新构建，先不做）。
-- 影响 / 约束: 可见库分页每页最多新增 8 批 channel 往返（120 项 / 16），首次加载略慢；
-  若实测明显卡顿再升级为原生批量查询。`GalleryAsset.sizeBytes` 允许 null，新增消费点须按 `—` 处理。
-- 相关文件: `lib/core/utils/file_size_format.dart`、`lib/presentation/grid/thumbnail_tile.dart`、
+- 理由: 名称与大小同行（用户明确要求）比"大小贴行尾、名称被压到第二行"信息密度高；
+  中间省略同时保留文件名前缀（识别用途）与扩展名/序号（识别格式与重名）；等宽数字避免
+  滚动时宽度抖动；私密库零 IO 成本；可见库走 MediaStore 元数据而非读文件。
+- 备选与为何不选: 大小单独占行尾（用户否掉）；尾部省略（丢扩展名）；扩展名保底
+  （`basename…` + 固定 `.jpg`，实现更简单但中间信息仍全丢）；名称 2 行（行高要涨到 ~96）；
+  缩略图角标（与视频时长徽标混淆）；可见库新增原生批量 `querySizes(ids)`（要改 Kotlin
+  并重新构建，先不做）。
+- 影响 / 约束: `MiddleEllipsisText` 只能用于**宽度有限**的父级（`Row` + `Expanded` 内），
+  `LayoutBuilder` 拿不到约束时会原样输出；每项首帧有 1 次 `TextPainter` 测量（约 log2(n)
+  次 layout），已缓存，滚动不重测。可见库分页每页最多新增 8 批 channel 往返
+  （120 项 / 16），首次加载略慢；若实测明显卡顿再升级为原生批量查询。
+  `GalleryAsset.sizeBytes` 允许 null，新增消费点须按 `—` 处理。
+- 相关文件: `lib/presentation/common/middle_ellipsis_text.dart`、
+  `lib/core/utils/file_size_format.dart`、`lib/presentation/grid/thumbnail_tile.dart`、
   `lib/presentation/visible/visible_media_grid.dart`、`lib/data/services/gallery_service.dart`、
   `lib/presentation/common/media_details_sheet.dart`、`lib/presentation/settings/settings_screen.dart`
 - 相关条目: `ADR-027`

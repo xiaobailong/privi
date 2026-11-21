@@ -27,6 +27,7 @@ import '../common/crypto_repair_action.dart';
 import '../common/floating_action_capsule.dart';
 import '../common/grid_app_menu.dart';
 import '../common/media_grid_scaffold.dart';
+import '../common/middle_ellipsis_text.dart';
 import '../common/swipe_action_cell.dart';
 import '../common/vault_sheet.dart';
 import '../common/video_duration_badge.dart';
@@ -1134,22 +1135,27 @@ class _LazyThumbTileState extends ConsumerState<_LazyThumbTile> {
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
-                child: Text(
-                  asset.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Text(
-                formatFileSize(asset.sizeBytes),
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                  fontFeatures: [FontFeature.tabularFigures()],
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: MiddleEllipsisText(
+                        asset.title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Text(
+                      formatFileSize(asset.sizeBytes),
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
                 ),
               ),
               if (widget.selectMode)
